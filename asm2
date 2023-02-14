@@ -1,0 +1,31 @@
+	.text
+	.def	@feat.00;
+	.scl	3;
+	.type	0;
+	.endef
+	.globl	@feat.00
+.set @feat.00, 0
+	.file	"rust_out.7f80e3a4-cgu.0"
+	.def	_ZN8rust_out3add17h4230cb203812714aE;
+	.scl	2;
+	.type	32;
+	.endef
+	.globl	_ZN8rust_out3add17h4230cb203812714aE
+	.p2align	4, 0x90
+_ZN8rust_out3add17h4230cb203812714aE:
+.seh_proc _ZN8rust_out3add17h4230cb203812714aE
+	pushq	%rax
+	.seh_stackalloc 8
+	.seh_endprologue
+	movl	$0, (%rsp)
+	movl	$0, 4(%rsp)
+	addss	%xmm2, %xmm0
+	movss	%xmm0, (%rsp)
+	addss	%xmm3, %xmm1
+	movss	%xmm1, 4(%rsp)
+	movss	(%rsp), %xmm0
+	movss	4(%rsp), %xmm1
+	popq	%rax
+	retq
+	.seh_endproc
+

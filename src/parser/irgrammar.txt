@@ -1,0 +1,173 @@
+number: TOKEN
+%[0-9]+\.[0-9]+([eE]([+-])?[0-9]+)?%
+%[0-9]+\.([eE]([+-])?[0-9]+)?%
+%\.[0-9]+([eE]([+-])?[0-9]+)?%
+%[0-9]+([eE]([+-])?[0-9]+)?%
+
+name: TOKEN
+%[a-zA-Z_][0-9a-zA-Z_]*%
+
+capsname: TOKEN
+%[A-Z][0-9a-zA-Z_]*%
+
+parenexpr: HIDELITERALS
+( $expr$ )
+
+rvar:
+$rhunexpr$
+
+lvar:
+$lval_rhunexpr$
+$name$
+
+supersimplexpr: SIMPLIFY
+$parenexpr$
+$number$
+$name$
+
+simplexpr: SIMPLIFY
+$rvar$
+$parenexpr$
+$number$
+$name$
+
+expr: SIMPLIFY
+$binexpr_0$
+
+binexpr_0: SIMPLIFY LEFTBINEXPR 0
+$binexpr_1$ >>? $binop_0$ $binexpr_0$
+
+binexpr_1: SIMPLIFY LEFTBINEXPR 1
+$binexpr_2$ >>? $binop_1$ $binexpr_1$
+
+binexpr_2: SIMPLIFY LEFTBINEXPR 2
+$binexpr_3$ >>? $binop_2$ $binexpr_2$
+
+binexpr_3: SIMPLIFY LEFTBINEXPR 3
+$lhunop$ >>? $binop_3$ $binexpr_3$
+
+unary:
+$unop$ $lhunop$
+
+lhunop: SIMPLIFY
+$unary$
+$simplexpr$
+
+
+unop:
+!
+-
++
+
+binop_0:
+and
+or
+&&
+||
+
+binop_1:
+==
+!=
+>=
+<=
+>
+<
+
+binop_2:
++
+-
+
+binop_3:
+*
+/
+%
+
+
+arglist:
+$expr$...,
+
+funcargs: HIDELITERALS
+( $arglist$? )
+
+arrayindex: HIDELITERALS
+[ $expr$ ]
+
+indirection: HIDELITERALS
+. $name$
+
+rhunexpr_right:
+$funcargs$
+$arrayindex$
+$indirection$
+
+rhunexpr:
+$supersimplexpr$ $rhunexpr_right$+
+
+lval_rhunexpr:
+$supersimplexpr$ $rhunexpr_right$+
+
+statementlist: HIDELITERALS
+{ $statement$* }
+
+binstateop:
+=
+
+binstate:
+$lvar$ $binstateop$ $expr$
+
+ifcondition: HIDELITERALS
+if $parenexpr$ $statementlist$ >>? else $statementlist$
+
+condition:
+$ifcondition$
+
+funcarg:
+$name$ $name$
+
+funcdefargs:
+>>? $funcarg$...,
+
+funcdef: HIDELITERALS
+$name$ $name$ ( $funcdefargs$ ) $statementlist$
+
+structparts:
+$declaration$*
+
+structdef: HIDELITERALS
+struct $name$ { $structparts$ } ;
+
+goto: HIDELITERALS
+goto $name$ ;
+
+return: HIDELITERALS
+return $expr$ ;
+return ;
+
+instruction: HIDELITERALS
+$goto$
+$return$
+
+label: HIDELITERALS
+$name$ :
+
+declname:
+$name$ >>? = $expr$
+
+declaration: HIDELITERALS
+$name$ $declname$ ;
+
+statement: HIDELITERALS
+$statementlist$
+$declaration$
+$condition$
+$binstate$
+$instruction$
+$label$
+$expr$ ;
+
+rootstatement: EMBED
+$structdef$
+$funcdef$
+
+program:
+$rootstatement$*
