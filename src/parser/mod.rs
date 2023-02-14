@@ -3,10 +3,10 @@
 use std::collections::{HashMap, HashSet, BTreeSet};
 use std::time::Instant;
 
-mod ast;
-mod grammar;
-mod strings;
-mod regexholder;
+pub (crate) mod ast;
+pub (crate) mod grammar;
+pub (crate) mod strings;
+pub (crate) mod regexholder;
 
 use {ast::*, grammar::*, strings::*};
 use regexholder::RegexHolder;
@@ -482,7 +482,7 @@ impl Parser {
                     {
                         if token.text == *text
                         {
-                            nodes.push(ASTNode{text : token.text.to_string(), line : token.line, position : token.position, isparent: false, children : Vec::new(), precedence : None});
+                            nodes.push(ASTNode{text : token.text.to_string(), line : token.line, position : token.position, children : None});
                             totalconsumed += 1;
                             continue;
                         }
@@ -496,7 +496,7 @@ impl Parser {
                     {
                         if self.internal_regexes.is_exact_immut(text, &token.text)?
                         {
-                            nodes.push(ASTNode{text : token.text.to_string(), line : token.line, position : token.position, isparent: false, children : Vec::new(), precedence : None});
+                            nodes.push(ASTNode{text : token.text.to_string(), line : token.line, position : token.position, children : None});
                             totalconsumed += 1;
                             continue;
                         }
@@ -519,7 +519,7 @@ impl Parser {
     {
         if tokens.len() == 0
         {
-            return Ok((Some(ASTNode{text : "program".to_string(), line : 0, position : 0, isparent : true, children : Vec::new(), precedence : None }), 0, None));
+            return Ok((Some(ASTNode{text : "program".to_string(), line : 0, position : 0, children : Some(Vec::new()) }), 0, None));
         }
         
         let mut latesterror : Option<ParseError> = None;
@@ -541,7 +541,7 @@ impl Parser {
             {
                 if let Some(nodes) = nodes
                 {
-                    return Ok((Some(ASTNode{text : nodetype.name.clone(), line : token.line, position : token.position, isparent : true, children : nodes, precedence : nodetype.precedence}), consumed, latesterror));
+                    return Ok((Some(ASTNode{text : nodetype.name.clone(), line : token.line, position : token.position, children : Some(nodes) }), consumed, latesterror));
                 }
             }
         }
@@ -549,7 +549,7 @@ impl Parser {
     }
     fn rotate(ast : &mut ASTNode) -> Result<(), String>
     {
-        if !(ast.isparent && ast.children.len() == 3 && ast.child(2)?.isparent && ast.child(2)?.children.len() >= 1)
+        if !(ast.is_parent() && ast.child_count().unwrap() == 3 && ast.child(2)?.is_parent() && ast.child(2)?.child_count().unwrap() >= 1)
         {
             return plainerr("internal error: attempted to rotate AST node for which the conditions of AST rotation were not satisfied");
         }
@@ -563,15 +563,18 @@ impl Parser {
     }
     fn parse_rotate_associativity_binexpr(&self, ast : &mut ASTNode) -> Result<bool, String>
     {
-        fn is_rotatable_binexpr(a : &ASTNode) -> bool
+        let is_rotatable_binexpr = |a : &ASTNode| -> Result<bool, String>
         {
-            a.isparent && a.children.len() == 3 && a.precedence.is_some()
-        }
-        fn compatible_associativity(a : &ASTNode, b : &ASTNode) -> Result<bool, String>
+            let rule = self.nodetypemap.get(&a.text);
+            Ok(a.is_parent() && a.child_count().unwrap() == 3 && rule.ok_or("Internal error")?.precedence.is_some())
+        };
+        let compatible_associativity = |a : &ASTNode, b : &ASTNode| -> Result<bool, String>
         {
-            Ok(a.isparent && b.isparent && a.child(0)?.precedence == b.child(0)?.precedence)
-        }
-        if is_rotatable_binexpr(ast) && is_rotatable_binexpr(ast.child(2)?) && compatible_associativity(ast, ast.child(2)?)?
+            let rule_a = self.nodetypemap.get(&a.child(0)?.text);
+            let rule_b = self.nodetypemap.get(&b.child(0)?.text);
+            Ok(a.is_parent() && b.is_parent() && rule_a.ok_or("Internal error")?.precedence == rule_b.ok_or("Internal error")?.precedence)
+        };
+        if is_rotatable_binexpr(ast)? && is_rotatable_binexpr(ast.child(2)?)? && compatible_associativity(ast, ast.child(2)?)?
         {
             Parser::rotate(ast)?;
             Ok(true)
@@ -583,15 +586,15 @@ impl Parser {
     }
     fn parse_fix_associativity(&self, ast : &mut ASTNode) -> Result<(), String>
     {
-        if ast.isparent
+        if ast.is_parent()
         {
             if self.parse_rotate_associativity_binexpr(ast)?
             {
                 self.parse_fix_associativity(ast)?;
             }
-            else
+            else if let Some(children) = &mut ast.children
             {
-                for mut child in &mut ast.children
+                for mut child in children
                 {
                     self.parse_fix_associativity(&mut child)?;
                 }
@@ -601,74 +604,95 @@ impl Parser {
     }
     fn parse_tweak_ast(&self, ast : &mut ASTNode) -> Result<(), String>
     {
-        if ast.isparent
+        if ast.is_parent()
         {
             let mut rule = self.nodetypemap.get(&ast.text).unwrap();
-            while rule.simplify && ast.children.len() == 1
+            while rule.simplify && ast.is_parent() && ast.child_count() == Ok(1)
             {
-                let mut temp = Vec::new();
-                std::mem::swap(&mut temp, &mut ast.children);
-                let dummy = temp.get_mut(0).ok_or_else(|| minierr("internal error: could not access child that was supposed to be there in expression summarization"))?;
-                std::mem::swap(ast, dummy);
-                rule = self.nodetypemap.get(&ast.text).unwrap()
+                if let Some(children) = &mut ast.children
+                {
+                    let mut temp = Vec::new();
+                    std::mem::swap(&mut temp, children);
+                    let dummy = temp.get_mut(0).ok_or_else(|| minierr("internal error: could not access child that was supposed to be there in expression summarization"))?;
+                    std::mem::swap(ast, dummy);
+                    rule = self.nodetypemap.get(&ast.text).unwrap()
+                }
             }
             
-            ast.children.retain(|child| !child.isparent || !self.nodetypemap.get(&child.text).unwrap().hidden);
-            if rule.hide_literals
+            if let Some(children) = &mut ast.children
             {
-                ast.children.retain(|child| child.isparent);
-            }
+                children.retain(|child| !child.is_parent() || !self.nodetypemap.get(&child.text).unwrap().hidden);
+                if rule.hide_literals
+                {
+                    children.retain(|child| child.is_parent());
+                }
             
-            for mut child in &mut ast.children
-            {
-                self.parse_tweak_ast(&mut child)?;
+                for mut child in children
+                {
+                    self.parse_tweak_ast(&mut child)?;
+                }
             }
         }
         Ok(())
     }
     fn parse_tweak_ast_pass_2(&self, mut ast : &mut ASTNode) -> Result<(), String>
     {
-        if ast.isparent
+        if ast.is_parent()
         {
+            let line = ast.line;
+            let position = ast.position;
             if ast.text == "rhunexpr" || ast.text == "funccall" || ast.text == "lvrhunexpr"
             {
-                if ast.children.len() <= 1
+                if let Some(children) = &mut ast.children
                 {
-                    let mut temp = Vec::new();
-                    std::mem::swap(&mut temp, &mut ast.children);
-                    let dummy = temp.get_mut(0).ok_or_else(|| minierr("internal error: could not access child that was supposed to be there in expression summarization"))?;
-                    std::mem::swap(ast, dummy);
-                }
-                else
-                {
-                    for child in &mut ast.children
+                    if children.len() <= 1
                     {
-                        if child.text == "rhunexpr_right" || child.text == "rhunexpr_rightlv"
-                        {
-                            let mut temp = Vec::new();
-                            std::mem::swap(&mut temp, &mut child.children);
-                            let dummy = temp.get_mut(0).ok_or_else(|| minierr("internal error: could not access child that was supposed to be there in expression summarization"))?;
-                            std::mem::swap(child, dummy);
-                        }
+                        let mut temp = Vec::new();
+                        std::mem::swap(&mut temp, children);
+                        let dummy = temp.get_mut(0).ok_or_else(|| minierr("internal error: could not access child that was supposed to be there in expression summarization"))?;
+                        drop(children);
+                        std::mem::swap(ast, dummy);
                     }
-                    let ast_right = ast.children.pop().ok_or_else(|| minierr("internal error: failed to access last element of right-hand unary expansion expression"))?;
-                    let mut ast_left = ASTNode
+                    else
                     {
-                        text: format!("{}_head", ast_right.text),
-                        line: ast.line,
-                        position: ast.position,
-                        isparent: true,
-                        children: Vec::new(),
-                        precedence: None
-                    };
-                    std::mem::swap(&mut ast_left, ast);
-                    ast.children = vec!(ast_left, ast_right);
+                        for child in children.iter_mut()
+                        {
+                            if child.text == "rhunexpr_right" || child.text == "rhunexpr_rightlv"
+                            {
+                                let mut temp = None;
+                                std::mem::swap(&mut temp, &mut child.children);
+                                if let Some(mut dummy) = temp
+                                {
+                                    let dummy = dummy.get_mut(0).ok_or_else(|| minierr("internal error: could not access child that was supposed to be there in expression summarization"))?;
+                                    std::mem::swap(child, dummy);
+                                }
+                                else
+                                {
+                                    return Err(minierr("internal error: could not access child that was supposed to be there in expression summarization"));
+                                }
+                            }
+                        }
+                        let ast_right = children.pop().ok_or_else(|| minierr("internal error: failed to access last element of right-hand unary expansion expression"))?;
+                        drop(children);
+                        let mut ast_left = ASTNode
+                        {
+                            text: format!("{}_head", ast_right.text),
+                            line,
+                            position,
+                            children: Some(Vec::new()),
+                        };
+                        std::mem::swap(&mut ast_left, ast);
+                        ast.children = Some(vec!(ast_left, ast_right));
+                    }
                 }
             }
             
-            for mut child in &mut ast.children
+            if let Some(children) = &mut ast.children
             {
-                self.parse_tweak_ast_pass_2(&mut child)?;
+                for mut child in children
+                {
+                    self.parse_tweak_ast_pass_2(&mut child)?;
+                }
             }
         }
         Ok(())
