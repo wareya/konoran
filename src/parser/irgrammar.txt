@@ -10,7 +10,7 @@ name: TOKEN
 embedname: EMBED
 %[a-zA-Z_][0-9a-zA-Z_]*%
 
-rvariable:
+rvarname:
 $embedname$
 
 capsname: TOKEN
@@ -19,9 +19,6 @@ capsname: TOKEN
 parenexpr: HIDELITERALS
 ( $expr$ )
 
-rvar:
-$rhunexpr$
-
 lvar:
 $lval_rhunexpr$
 $name$
@@ -29,13 +26,13 @@ $name$
 supersimplexpr: SIMPLIFY
 $parenexpr$
 $number$
-$rvariable$
+$rvarname$
 
 simplexpr: SIMPLIFY
-$rvar$
+$rhunexpr$
 $parenexpr$
 $number$
-$rvariable$
+$rvarname$
 
 expr: SIMPLIFY
 $binexpr_0$
@@ -89,7 +86,7 @@ binop_3:
 %
 
 
-arglist:
+arglist: EMBED
 $expr$...,
 
 funcargs: HIDELITERALS

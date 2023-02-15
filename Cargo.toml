@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 cranelift = "0.92.0"
-cranelift-codegen = "0.92.0"
 cranelift-jit = "0.92.0"
 cranelift-module = "0.92.0"
 regex = "1.7.1"
