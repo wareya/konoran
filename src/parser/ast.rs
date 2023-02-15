@@ -29,7 +29,7 @@ impl ASTNode {
         }
         else
         {
-            Err(format!("internal error: tried access mutable child of non-parent AST node"))
+            Err(format!("internal error: tried access child of non-parent AST node"))
         }
     }
     pub (crate) fn child_mut(&'_ mut self, n : usize) -> Result<&'_ mut ASTNode, String>
@@ -49,8 +49,8 @@ impl ASTNode {
         if let Some(children) = &self.children
         {
             let count = children.len();
-            let u_start = if start <  0 {count - (-start as usize)} else {start as usize};
-            let u_end   = if end   <= 0 {count - (-end   as usize)} else {end   as usize};
+            let u_start = if start <  0 {count - (-start as usize)    } else {start as usize};
+            let u_end   = if end   <= 0 {count - (-end   as usize) + 1} else {end   as usize};
             
             children.get(u_start..u_end).ok_or_else(|| format!("internal error: tried to access child range {} to {} (zero-indexed) of ast node that only has {} children", u_start, u_end, count))
         }
@@ -58,6 +58,10 @@ impl ASTNode {
         {
             Err(format!("internal error: tried slice children of non-parent AST node"))
         }
+    }
+    pub (crate) fn get_children(&'_ self) -> Result<&'_[ASTNode], String>
+    {
+        self.child_slice(0, -1)
     }
     pub (crate) fn child_count(&'_ self) -> Result<usize, String>
     {
@@ -70,6 +74,17 @@ impl ASTNode {
     pub (crate) fn is_parent(&'_ self) -> bool
     {
         self.children.is_some()
+    }
+        
+    pub (crate) fn visit(&self, mut f : &mut dyn FnMut(&ASTNode) -> bool)
+    {
+        if !f(self) && self.is_parent()
+        {
+            for child in self.get_children().unwrap()
+            {
+                child.visit(f);
+            }
+        }
     }
 }
 

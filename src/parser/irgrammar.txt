@@ -7,6 +7,12 @@ number: TOKEN
 name: TOKEN
 %[a-zA-Z_][0-9a-zA-Z_]*%
 
+embedname: EMBED
+%[a-zA-Z_][0-9a-zA-Z_]*%
+
+rvariable:
+$embedname$
+
 capsname: TOKEN
 %[A-Z][0-9a-zA-Z_]*%
 
@@ -23,13 +29,13 @@ $name$
 supersimplexpr: SIMPLIFY
 $parenexpr$
 $number$
-$name$
+$rvariable$
 
 simplexpr: SIMPLIFY
 $rvar$
 $parenexpr$
 $number$
-$name$
+$rvariable$
 
 expr: SIMPLIFY
 $binexpr_0$
@@ -134,7 +140,7 @@ structparts:
 $declaration$*
 
 structdef: HIDELITERALS
-struct $name$ { $structparts$ } ;
+struct $name$ { $structparts$ }
 
 goto: HIDELITERALS
 goto $name$ ;
@@ -150,11 +156,8 @@ $return$
 label: HIDELITERALS
 $name$ :
 
-declname:
-$name$ >>? = $expr$
-
 declaration: HIDELITERALS
-$name$ $declname$ ;
+$name$ $name$ ;
 
 statement: HIDELITERALS
 $statementlist$
@@ -165,7 +168,7 @@ $instruction$
 $label$
 $expr$ ;
 
-rootstatement: EMBED
+rootstatement: SIMPLIFY
 $structdef$
 $funcdef$
 

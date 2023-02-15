@@ -632,6 +632,25 @@ impl Parser {
                     self.parse_tweak_ast(&mut child)?;
                 }
             }
+            
+            if let Some(children) = &mut ast.children
+            {
+                let mut i = 0;
+                while i < children.len()
+                {
+                    if children[i].is_parent()
+                    {
+                        let rule = self.nodetypemap.get(&children[i].text).unwrap();
+                        if rule.embed
+                        {
+                            let child = children.remove(i);
+                            children.splice(i..i, child.children.unwrap());
+                            continue;
+                        }
+                    }
+                    i += 1;
+                }
+            }
         }
         Ok(())
     }
