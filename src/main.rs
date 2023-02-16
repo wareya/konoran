@@ -38,8 +38,8 @@ impl ToString for Type
         match &self.data
         {
             TypeData::Primitive => self.name.clone(),
-            TypeData::Pointer(inner) => format!("{} ptr", inner.to_string()),
-            TypeData::Array(inner, size) => format!("{} [{}]", inner.to_string(), size),
+            TypeData::Pointer(inner) => format!("ptr({})", inner.to_string()),
+            TypeData::Array(inner, size) => format!("array({}, {})", inner.to_string(), size),
             TypeData::Struct(_) => self.name.clone(),
             TypeData::FuncPointer(sig) => sig.to_string(),
         }
@@ -84,25 +84,14 @@ impl Type
     }
 }
     
-fn parse_type(types : &BTreeMap<String, Type>, parts : &[String]) -> Result<Type, String>
+fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, String>
 {
-    if let Some(mut type_) = types.get(&parts[0]).cloned()
+    match (node.is_parent(), node.text.as_str())
     {
-        for substr in &parts[1..]
-        {
-            if *substr == "ptr"
-            {
-                // FIXME: system-dependent pointer size
-                type_ = Type { name : "ptr".to_string(), size : 8, data : TypeData::Pointer(Box::new(type_.clone())) };
-            }
-            else
-            {
-                return Err(format!("unsupported type modifier {}", substr));
-            }
-        }
-        return Ok(type_);
+        (true, "type") => parse_type(types, node.child(0).unwrap()),
+        (true, "fundamental_type") => Ok(types.get(&node.child(0).unwrap().text).unwrap().clone()),
+        (_, name) => Err(format!("error: non-fundemental types not yet supported (culprit: `{}`)", name)),
     }
-    Err(format!("unknown type {}", parts[0]))
 }
 
 #[derive(Debug, Clone)]
@@ -172,7 +161,7 @@ impl Program
                 let mut vars = Vec::new();
                 for prop in child.child(1)?.get_children()?
                 {
-                    let prop_type = parse_type(&types, &prop.child(0)?.get_tokens()).unwrap();
+                    let prop_type = parse_type(&types, prop.child(0)?).unwrap();
                     let prop_name = prop.child(1)?.child(0)?.text.clone();
                     vars.push((prop_type, prop_name));
                 }
@@ -185,13 +174,13 @@ impl Program
         {
             if child.is_parent() && child.text == "funcdef"
             {
-                let return_type = parse_type(&types, &child.child(0)?.get_tokens()).unwrap();
+                let return_type = parse_type(&types, child.child(0)?).unwrap();
                 let name = child.child(1)?.child(0)?.text.clone();
                 
                 let mut args = Vec::new();
                 for arg in child.child(2)?.get_children()?
                 {
-                    let arg_type = parse_type(&types, &arg.child(0)?.get_tokens()).unwrap();
+                    let arg_type = parse_type(&types, arg.child(0)?).unwrap();
                     let arg_name = arg.child(1)?.child(0)?.text.clone();
                     
                     args.push((arg_type, arg_name));
@@ -340,7 +329,7 @@ fn main()
             let mut i = 0;
             if node.is_parent() && node.text == "declaration"
             {
-                let var_type = parse_type(&types, &node.child(0).unwrap().get_tokens()).unwrap();
+                let var_type = parse_type(&types, &node.child(0).unwrap()).unwrap();
                 let var_name = node.child(1).unwrap().child(0).unwrap().text.clone();
                 let var = Variable::new(i);
                 
