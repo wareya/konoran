@@ -90,6 +90,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
     {
         (true, "type") => parse_type(types, node.child(0).unwrap()),
         (true, "fundamental_type") => Ok(types.get(&node.child(0).unwrap().text).unwrap().clone()),
+        // FIXME
         (_, name) => Err(format!("error: non-fundemental types not yet supported (culprit: `{}`)", name)),
     }
 }
@@ -268,7 +269,7 @@ fn main()
                 if var_abi.is_none()
                 {
                     let name = var_type.name;
-                    panic!("error: type {} can't be used in function arguments or return types. use a `{} ptr` instead", name, name);
+                    panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
                 }
                 signature.params.push(var_abi.unwrap().clone());
                 
@@ -283,7 +284,7 @@ fn main()
         if return_abi.is_none()
         {
             let name = &function.return_type.name;
-            panic!("error: type {} can't be used in function arguments or return types. use a `{} ptr` instead", name, name);
+            panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
         }
         signature.returns.push(return_abi.unwrap().clone());
         
@@ -342,7 +343,7 @@ fn main()
                 {
                     // FIXME: support structs and arrays
                     let name = var_type.name;
-                    panic!("error: non-intrinsic types not yet supported");
+                    panic!("error: non-primitive types not yet supported");
                 }
                 
                 if variables.contains_key(&var_name)
