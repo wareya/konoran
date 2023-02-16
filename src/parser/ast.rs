@@ -75,6 +75,19 @@ impl ASTNode {
     {
         self.children.is_some()
     }
+    pub (crate) fn get_tokens(&self) -> Vec<String>
+    {
+        let mut ret = Vec::new();
+        self.visit(&mut |node : &ASTNode| -> bool
+        {
+            if !node.is_parent()
+            {
+                ret.push(node.text.clone());
+            }
+            false
+        });
+        ret
+    }
         
     pub (crate) fn visit(&self, mut f : &mut dyn FnMut(&ASTNode) -> bool)
     {
