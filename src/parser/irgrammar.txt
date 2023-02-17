@@ -27,9 +27,9 @@ funcptr_args:
 >>? $type$...,
 
 funcptr_type: HIDELITERALS
-funcptr ( $type$ , ( $funcptr_args$* ) )
+funcptr ( $type$ , ( $funcptr_args$ ) )
 
-array_type:
+array_type: HIDELITERALS
 array ( $type$ , $integer_token$ )
 
 fundamental_type: TOKEN

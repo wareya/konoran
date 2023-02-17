@@ -48,9 +48,13 @@ impl ToString for Type
 
 impl Type
 {
+    fn from_functionsig(funcsig : &FunctionSig) -> Type
+    {
+        Type { name : "funcptr".to_string(), size : 8, data : TypeData::FuncPointer(Box::new(funcsig.clone())) }
+    }
     fn to_cranetype(&self) -> Option<cranelift::prelude::Type>
     {
-        if matches!(self.data, TypeData::Primitive | TypeData::Pointer(_))
+        if matches!(self.data, TypeData::Primitive | TypeData::Pointer(_) | TypeData::FuncPointer(_))
         {
             match self.name.as_str()
             {
@@ -69,6 +73,7 @@ impl Type
                 
                 // FIXME: target-specific pointer size
                 "ptr" => Some(types::I64),
+                "funcptr" => Some(types::I64),
                 
                 _ => None,
             }
@@ -90,6 +95,31 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
     {
         (true, "type") => parse_type(types, node.child(0).unwrap()),
         (true, "fundamental_type") => Ok(types.get(&node.child(0).unwrap().text).unwrap().clone()),
+        (true, "funcptr_type") =>
+        {
+            let return_node = node.child(0).unwrap();
+            if let Ok(return_type) = parse_type(types, return_node)
+            {
+                let mut args = Vec::new();
+                for arg in node.child(1).unwrap().get_children().unwrap()
+                {
+                    if let Ok(r) = parse_type(types, arg)
+                    {
+                        args.push(r);
+                    }
+                    else
+                    {
+                        return Err(format!("error: failed to parse type (culprit: `{}`)", arg.text));
+                    }
+                }
+                let sig = FunctionSig { return_type, args };
+                Ok(Type::from_functionsig(&sig))
+            }
+            else
+            {
+                Err(format!("error: failed to parse type (culprit: `{}`)", return_node.text))
+            }
+        }
         // FIXME
         (_, name) => Err(format!("error: non-fundemental types not yet supported (culprit: `{}`)", name)),
     }
@@ -376,11 +406,15 @@ fn main()
             return false;
         });
         
+        enum Meta
+        {
+            None,
+            Func(FunctionSig, SigRef),
+        }
         
         struct Environment<'a, 'b, 'c, 'd>
         {
-            stack      : &'a mut Vec<(Type, Value)>,
-            funcstack  : &'a mut Vec<(FunctionSig, FuncRef, SigRef)>,
+            stack      : &'a mut Vec<(Type, Value, Meta)>,
             variables  : &'a BTreeMap<String, (Type, Variable)>,
             builder    : &'b mut FunctionBuilder<'c>,
             program    : &'d Program,
@@ -398,16 +432,15 @@ fn main()
         }
         
         let mut stack = Vec::new(); // 0: type, 1: variable handle
-        let mut funcstack = Vec::new(); // 0: type, 1: variable handle
         
-        let mut env = Environment { stack : &mut stack, funcstack : &mut funcstack, variables : &variables, builder : &mut builder, program : &program, root_block : &block, func_decs : &func_decs, funcrefs : &funcrefs, types : &types };
+        let mut env = Environment { stack : &mut stack, variables : &variables, builder : &mut builder, program : &program, root_block : &block, func_decs : &func_decs, funcrefs : &funcrefs, types : &types };
         fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode)
         {
             if node.is_parent()
             {
                 match node.text.as_str()
                 {
-                    "statementlist" | "statement" | "instruction" =>
+                    "statementlist" | "statement" | "instruction" | "parenexpr" =>
                     {
                         for child in node.get_children().unwrap()
                         {
@@ -433,16 +466,19 @@ fn main()
                     {
                         let name = &node.child(0).unwrap().text;
                         println!("{}", name);
+                        // FIXME: make these use the same stack
                         if env.variables.contains_key(name)
                         {
                             let var = &env.variables[name];
                             println!("{:?}", var);
-                            env.stack.push((var.0.clone(), env.builder.use_var(var.1)));
+                            env.stack.push((var.0.clone(), env.builder.use_var(var.1), Meta::None));
                         }
                         else if env.funcrefs.contains_key(name)
                         {
-                            let (func_sig, funcref, sigref) = env.funcrefs.get(name).unwrap();
-                            env.funcstack.push((func_sig.clone(), *funcref, *sigref));
+                            let (funcsig, funcref, sigref) = env.funcrefs.get(name).unwrap();
+                            let funcaddr = env.builder.ins().func_addr(types::I64, *funcref);
+                            env.stack.push((Type::from_functionsig(funcsig), funcaddr, Meta::Func(funcsig.clone(), *sigref)));
+                            //env.funcstack.push((funcsig.clone(), funcaddr, *sigref));
                         }
                         else
                         {
@@ -452,29 +488,34 @@ fn main()
                     "funcargs_head" =>
                     {
                         compile(env, node.child(0).unwrap());
-                        let (func_sig, funcref, sigref) = env.funcstack.pop().unwrap();
-                        
-                        compile(env, node.child(1).unwrap());
-                        let num_args = node.child(1).unwrap().child_count().unwrap();
-                        
-                        let mut args = Vec::new();
-                        for (i, arg_type) in func_sig.args.iter().enumerate()
+                        let (type_, funcaddr, meta) = env.stack.pop().unwrap();
+                        match meta
                         {
-                            let (type_, val) = env.stack.pop().unwrap();
-                            if type_ != *arg_type
+                            Meta::Func(funcsig, sigref) =>
                             {
-                                panic!("mismatched types in call to function: expected `{}`, got `{}`", arg_type.to_string(), type_.to_string());
+                                compile(env, node.child(1).unwrap());
+                                let num_args = node.child(1).unwrap().child_count().unwrap();
+                                
+                                let mut args = Vec::new();
+                                for (i, arg_type) in funcsig.args.iter().enumerate()
+                                {
+                                    let (type_, val, _) = env.stack.pop().unwrap();
+                                    if type_ != *arg_type
+                                    {
+                                        panic!("mismatched types in call to function: expected `{}`, got `{}`", arg_type.to_string(), type_.to_string());
+                                    }
+                                    args.push(val);
+                                }
+                                
+                                let inst = env.builder.ins().call_indirect(sigref, funcaddr, &args);
+                                let results = env.builder.inst_results(inst);
+                                for (result, type_) in results.iter().zip([funcsig.return_type])
+                                {
+                                    // FIXME: figure out if this is a function pointer
+                                    env.stack.push((type_.clone(), *result, Meta::None));
+                                }
                             }
-                            args.push(val);
-                        }
-                        
-                        let funcaddr = env.builder.ins().func_addr(types::I64, funcref);
-                        
-                        let inst = env.builder.ins().call_indirect(sigref, funcaddr, &args);
-                        let results = env.builder.inst_results(inst);
-                        for (result, type_) in results.iter().zip([func_sig.return_type])
-                        {
-                            env.stack.push((type_.clone(), *result));
+                            _ => panic!("tried to fall non-function expression as a function")
                         }
                     }
                     "funcargs" =>
@@ -496,13 +537,13 @@ fn main()
                             {
                                 let val : f32 = text.parse().unwrap();
                                 let res = env.builder.ins().f32const(val);
-                                env.stack.push((env.types.get("f32").unwrap().clone(), res));
+                                env.stack.push((env.types.get("f32").unwrap().clone(), res, Meta::None));
                             }
                             "f64" =>
                             {
                                 let val : f64 = text.parse().unwrap();
                                 let res = env.builder.ins().f64const(val);
-                                env.stack.push((env.types.get("f64").unwrap().clone(), res));
+                                env.stack.push((env.types.get("f64").unwrap().clone(), res, Meta::None));
                             }
                             _ => panic!("unknown float suffix pattern {}", parts.1)
                         }
@@ -523,7 +564,7 @@ fn main()
                                 "+" => env.builder.ins().fadd(left.1, right.1),
                                 _ => panic!("unhandled binary operator {}", op)
                             };
-                            env.stack.push((env.types.get("f32").unwrap().clone(), res));
+                            env.stack.push((env.types.get("f32").unwrap().clone(), res, Meta::None));
                         }
                         else
                         {
