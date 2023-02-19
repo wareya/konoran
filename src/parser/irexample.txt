@@ -1,4 +1,5 @@
-// types: ptr, u8, i8, u16, i16, u32, i32, u64, i64, f32, f64
+// types: ptr(...), funcptr(...), u8, i8, u16, i16, u32, i32, u64, i64, f32, f64
+// composite types: structs, arrays
 
 struct Vec2
 {
@@ -21,5 +22,8 @@ f32 add(f32 a, f32 b)
 {
     //u8[16] array1;
     //Vec2 vec;
-    return r_add_one()(a + b);
+    funcptr(f32, (f32)) f;
+    //f = r_add_one();
+    //return f(a + b);
+    return (r_add_one())(a + b);
 }

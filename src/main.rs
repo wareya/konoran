@@ -14,7 +14,7 @@ use parser::ast::ASTNode;
 mod parser;
 
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum TypeData
 {
     Primitive,
@@ -23,7 +23,7 @@ enum TypeData
     FuncPointer(Box<FunctionSig>),
     Array(Box<Type>, usize),
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Type
 {
     name : String,
@@ -48,6 +48,39 @@ impl ToString for Type
 
 impl Type
 {
+    pub (crate) fn visit(&self, mut f : &mut dyn FnMut(&Type) -> bool)
+    {
+        if !f(self)
+        {
+            match &self.data
+            {
+                TypeData::Primitive => {}
+                TypeData::Pointer(inner) =>
+                {
+                    inner.visit(f);
+                }
+                TypeData::Array(inner, _) =>
+                {
+                    inner.visit(f);
+                }
+                TypeData::Struct(subs) =>
+                {
+                    for (_, sub, _) in subs
+                    {
+                        sub.visit(f);
+                    }
+                }
+                TypeData::FuncPointer(sig) =>
+                {
+                    sig.return_type.visit(f);
+                    for arg in &sig.args
+                    {
+                        arg.visit(f);
+                    }
+                }
+            }
+        }
+    }
     fn from_functionsig(funcsig : &FunctionSig) -> Type
     {
         Type { name : "funcptr".to_string(), size : 8, data : TypeData::FuncPointer(Box::new(funcsig.clone())) }
@@ -133,7 +166,7 @@ struct Function
     args : Vec<(Type, String)>,
     body : ASTNode,
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct FunctionSig
 {
     return_type : Type,
@@ -280,55 +313,79 @@ fn main()
     
     types.insert("f64".to_string(), Type { name : "f64".to_string(), size : 8, data : TypeData::Primitive });
     
-    for f in &program.funcs
+    fn build_signature<T : Module>(module : &T, funcsig : &FunctionSig) -> Signature
     {
-        let f_name = f.0;
-        let function = f.1;
-        
         let mut signature = module.make_signature();
         
-        let mut variables = BTreeMap::new();
-        let mut parameters = BTreeMap::new();
+        for var_type in &funcsig.args
         {
-            for arg in &function.args
+            let var_abi = var_type.to_abi();
+            if var_abi.is_none()
             {
-                let var_type = arg.0.clone();
-                let var_name = arg.1.clone();
-                
-                let var_abi = var_type.to_abi();
-                if var_abi.is_none()
-                {
-                    let name = var_type.name;
-                    panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
-                }
-                signature.params.push(var_abi.unwrap().clone());
-                
-                if parameters.contains_key(&var_name)
-                {
-                    panic!("error: variable {} redeclared", var_name);
-                }
-                parameters.insert(var_name, var_type);
+                let name = &var_type.name;
+                panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
             }
+            signature.params.push(var_abi.unwrap().clone());
         }
-        let return_abi = function.return_type.to_abi();
+        
+        let return_abi = funcsig.return_type.to_abi();
         if return_abi.is_none()
         {
-            let name = &function.return_type.name;
-            panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
+            let name = &funcsig.return_type.name;
+            panic!("error: funcsig-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
         }
         signature.returns.push(return_abi.unwrap().clone());
-        
-        let id = module.declare_function(&f_name, Linkage::Export, &signature).unwrap();
-        
-        func_decs.insert(f_name.clone(), (id, signature, function.to_sig(), variables, parameters, function.return_type.clone()));
+        println!("made func sig {:?}", signature);
+        signature
     }
+    
+    let mut funcsig_to_sig = BTreeMap::new();
     
     for f in &program.funcs
     {
         let f_name = f.0;
         let function = f.1;
         
-        let (id, signature, func_sig, mut variables, parameters, _) = func_decs.get(f_name).unwrap().clone();
+        let funcsig = function.to_sig();
+        
+        let signature = if !funcsig_to_sig.contains_key(&funcsig)
+        {
+            let sig = build_signature(&module, &funcsig);
+            funcsig_to_sig.insert(funcsig.clone(), sig.clone());
+            sig
+        }
+        else
+        {
+            funcsig_to_sig.get(&funcsig).cloned().unwrap()
+        };
+        
+        let mut variables = BTreeMap::new();
+        let mut parameters = BTreeMap::new();
+        
+        for arg in &function.args
+        {
+            let var_type = arg.0.clone();
+            let var_name = arg.1.clone();
+            
+            if parameters.contains_key(&var_name)
+            {
+                panic!("error: variable {} redeclared", var_name);
+            }
+            parameters.insert(var_name, var_type);
+        }
+        
+        let id = module.declare_function(&f_name, Linkage::Export, &signature).unwrap();
+        
+        func_decs.insert(f_name.clone(), (id, signature, funcsig, variables, parameters, function.return_type.clone()));
+    }
+    
+    for f in &program.funcs
+    {
+        
+        let f_name = f.0;
+        let function = f.1;
+        
+        let (id, signature, _, mut variables, parameters, _) = func_decs.get(f_name).unwrap().clone();
         
         let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_context);
         builder.func.signature = signature.clone();
@@ -337,14 +394,15 @@ fn main()
         builder.switch_to_block(block);
         
         // declare arguments
-        for (i, param) in parameters.iter().enumerate()
+        let mut i = variables.len();
+        for (j, param) in parameters.iter().enumerate()
         {
             let var_type = param.1.clone();
             let var_name = param.0.clone();
             let var = Variable::new(i);
             builder.declare_var(var, var_type.to_cranetype().unwrap());
             
-            let tmp = builder.block_params(block)[i];
+            let tmp = builder.block_params(block)[j];
             builder.def_var(var, tmp);
             println!("inserting {} into vars with type {}", var_name, var_type.name);
             if variables.contains_key(&var_name)
@@ -352,12 +410,13 @@ fn main()
                 panic!("error: variable {} redeclared", var_name);
             }
             variables.insert(var_name, (var_type, var));
+            
+            i += 1;
         }
         
         // declare variables
         function.body.visit(&mut |node : &ASTNode|
         {
-            let mut i = 0;
             if node.is_parent() && node.text == "declaration"
             {
                 let var_type = parse_type(&types, &node.child(0).unwrap()).unwrap();
@@ -372,8 +431,8 @@ fn main()
                 else
                 {
                     // FIXME: support structs and arrays
-                    let name = var_type.name;
-                    panic!("error: non-primitive types not yet supported");
+                    let name = &var_type.name;
+                    panic!("error: non-primitive types not yet supported (triggered by `{}`)", name);
                 }
                 
                 if variables.contains_key(&var_name)
@@ -383,10 +442,11 @@ fn main()
                 variables.insert(var_name, (var_type, var));
                 i += 1;
             }
-            return false;
+            false
         });
         
         // collect referred function signatures
+        let mut sigrefs = BTreeMap::new();
         let mut funcrefs = BTreeMap::new();
         function.body.visit(&mut |node : &ASTNode|
         {
@@ -399,22 +459,57 @@ fn main()
                     let (id, signature, funcsig, _, _, _) = func_decs.get(name).unwrap();
                     let funcref = module.declare_func_in_func(*id, builder.func);
                     // FIXME: need a better way to get a SigRef
-                    let sigref = builder.import_signature(signature.clone());
+                    let sigref = if !sigrefs.contains_key(funcsig)
+                    {
+                        println!("built sigref for {}", funcsig.to_string());
+                        let sigref = builder.import_signature(signature.clone());
+                        sigrefs.insert(funcsig.clone(), sigref.clone());
+                        sigref
+                    }
+                    else
+                    {
+                        sigrefs.get(funcsig).cloned().unwrap()
+                    };
                     funcrefs.insert(name.clone(), (funcsig.clone(), funcref, sigref));
+                    
+                    let functype = Type::from_functionsig(&funcsig);
+                    functype.visit(&mut |subtype : &Type| // also runs for root type
+                    {
+                        println!("visiting subtype `{}`", subtype.to_string());
+                        match &subtype.data
+                        {
+                            TypeData::FuncPointer(funcsig) =>
+                            {
+                                if !sigrefs.contains_key(funcsig)
+                                {
+                                    println!("built sigref for {}", funcsig.to_string());
+                                    let sig = build_signature(&module, &funcsig);
+                                    let sigref = builder.import_signature(signature.clone());
+                                    sigrefs.insert(*funcsig.clone(), sigref.clone());
+                                }
+                                else
+                                {
+                                    println!("sigref for `{}` exists", funcsig.to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                        false
+                    });
                 }
             }
-            return false;
+            false
         });
         
-        enum Meta
+        enum LeftMeta
         {
-            None,
-            Func(FunctionSig, SigRef),
+            Var(Variable),
         }
         
         struct Environment<'a, 'b, 'c, 'd>
         {
-            stack      : &'a mut Vec<(Type, Value, Meta)>,
+            stack      : &'a mut Vec<(Type, Value)>,
+            leftstack  : &'a mut Vec<(Type, LeftMeta)>,
             variables  : &'a BTreeMap<String, (Type, Variable)>,
             builder    : &'b mut FunctionBuilder<'c>,
             program    : &'d Program,
@@ -428,12 +523,14 @@ fn main()
                 Type, // return info
                 )>,
             funcrefs   : &'a BTreeMap<String, (FunctionSig, FuncRef, SigRef)>,
+            sigrefs    : &'a BTreeMap<FunctionSig, SigRef>,
             types      : &'a BTreeMap<String, Type>,
         }
         
-        let mut stack = Vec::new(); // 0: type, 1: variable handle
+        let mut stack = Vec::new();
+        let mut leftstack = Vec::new();
         
-        let mut env = Environment { stack : &mut stack, variables : &variables, builder : &mut builder, program : &program, root_block : &block, func_decs : &func_decs, funcrefs : &funcrefs, types : &types };
+        let mut env = Environment { stack : &mut stack, leftstack : &mut leftstack, variables : &variables, builder : &mut builder, program : &program, root_block : &block, func_decs : &func_decs, funcrefs : &funcrefs, sigrefs : &sigrefs, types : &types };
         fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode)
         {
             if node.is_parent()
@@ -462,6 +559,49 @@ fn main()
                     {
                         return;
                     }
+                    "lvar" =>
+                    {
+                        if node.child(0).unwrap().text == "name"
+                        {
+                            let name = &node.child(0).unwrap().child(0).unwrap().text;
+                            if env.variables.contains_key(name)
+                            {
+                                let (type_, var) = &env.variables[name];
+                                //compile(env, node.child(2).unwrap());
+                                //let (type_, val, meta) = env.stack.pop().unwrap();
+                                //env.builder.def_var(var.1, val);
+                                
+                                // mut Vec<(Type, Value, Meta)>,
+                                
+                                env.leftstack.push((type_.clone(), LeftMeta::Var(*var)));
+                            }
+                            else
+                            {
+                                panic!("unrecognized variable `{}`", name);
+                            }
+                        }
+                        else
+                        {
+                            panic!("error: lvars other than variable names are not yet implemented");
+                        }
+                    }
+                    "binstate" =>
+                    {
+                        compile(env, node.child(0).unwrap());
+                        compile(env, node.child(2).unwrap());
+                        let op = &node.child(1).unwrap().child(0).unwrap().text;
+                        let (type_val, val) = env.stack.pop().unwrap();
+                        let (type_left, left) = env.leftstack.pop().unwrap();
+                        assert!(type_val == type_left);
+                        match left
+                        {
+                            LeftMeta::Var(var) =>
+                            {
+                                env.builder.def_var(var, val);
+                            }
+                            _ => panic!("error: can't assign to expression"),
+                        }
+                    }
                     "rvarname" =>
                     {
                         let name = &node.child(0).unwrap().text;
@@ -471,14 +611,13 @@ fn main()
                         {
                             let var = &env.variables[name];
                             println!("{:?}", var);
-                            env.stack.push((var.0.clone(), env.builder.use_var(var.1), Meta::None));
+                            env.stack.push((var.0.clone(), env.builder.use_var(var.1)));
                         }
                         else if env.funcrefs.contains_key(name)
                         {
                             let (funcsig, funcref, sigref) = env.funcrefs.get(name).unwrap();
                             let funcaddr = env.builder.ins().func_addr(types::I64, *funcref);
-                            env.stack.push((Type::from_functionsig(funcsig), funcaddr, Meta::Func(funcsig.clone(), *sigref)));
-                            //env.funcstack.push((funcsig.clone(), funcaddr, *sigref));
+                            env.stack.push((Type::from_functionsig(funcsig), funcaddr));
                         }
                         else
                         {
@@ -487,19 +626,22 @@ fn main()
                     }
                     "funcargs_head" =>
                     {
+                        println!("compiling func call");
                         compile(env, node.child(0).unwrap());
-                        let (type_, funcaddr, meta) = env.stack.pop().unwrap();
-                        match meta
+                        let (type_, funcaddr) = env.stack.pop().unwrap();
+                        match type_.data
                         {
-                            Meta::Func(funcsig, sigref) =>
+                            TypeData::FuncPointer(funcsig) =>
                             {
+                                let sigref = env.sigrefs.get(&funcsig).unwrap();
+                                
                                 compile(env, node.child(1).unwrap());
                                 let num_args = node.child(1).unwrap().child_count().unwrap();
                                 
                                 let mut args = Vec::new();
                                 for (i, arg_type) in funcsig.args.iter().enumerate()
                                 {
-                                    let (type_, val, _) = env.stack.pop().unwrap();
+                                    let (type_, val) = env.stack.pop().unwrap();
                                     if type_ != *arg_type
                                     {
                                         panic!("mismatched types in call to function: expected `{}`, got `{}`", arg_type.to_string(), type_.to_string());
@@ -507,16 +649,17 @@ fn main()
                                     args.push(val);
                                 }
                                 
-                                let inst = env.builder.ins().call_indirect(sigref, funcaddr, &args);
+                                let inst = env.builder.ins().call_indirect(*sigref, funcaddr, &args);
                                 let results = env.builder.inst_results(inst);
+                                println!("number of results {}", results.len());
                                 for (result, type_) in results.iter().zip([funcsig.return_type])
                                 {
-                                    // FIXME: figure out if this is a function pointer
-                                    env.stack.push((type_.clone(), *result, Meta::None));
+                                    env.stack.push((type_.clone(), *result));
                                 }
                             }
                             _ => panic!("tried to fall non-function expression as a function")
                         }
+                        println!("done compiling func call");
                     }
                     "funcargs" =>
                     {
@@ -537,13 +680,13 @@ fn main()
                             {
                                 let val : f32 = text.parse().unwrap();
                                 let res = env.builder.ins().f32const(val);
-                                env.stack.push((env.types.get("f32").unwrap().clone(), res, Meta::None));
+                                env.stack.push((env.types.get("f32").unwrap().clone(), res));
                             }
                             "f64" =>
                             {
                                 let val : f64 = text.parse().unwrap();
                                 let res = env.builder.ins().f64const(val);
-                                env.stack.push((env.types.get("f64").unwrap().clone(), res, Meta::None));
+                                env.stack.push((env.types.get("f64").unwrap().clone(), res));
                             }
                             _ => panic!("unknown float suffix pattern {}", parts.1)
                         }
@@ -564,7 +707,7 @@ fn main()
                                 "+" => env.builder.ins().fadd(left.1, right.1),
                                 _ => panic!("unhandled binary operator {}", op)
                             };
-                            env.stack.push((env.types.get("f32").unwrap().clone(), res, Meta::None));
+                            env.stack.push((env.types.get("f32").unwrap().clone(), res));
                         }
                         else
                         {

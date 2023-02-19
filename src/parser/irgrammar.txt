@@ -101,6 +101,7 @@ unop:
 !
 -
 +
+*
 
 binop_0:
 and
@@ -155,7 +156,7 @@ binstateop:
 =
 
 binstate:
-$lvar$ $binstateop$ $expr$
+$lvar$ $binstateop$ $expr$ ;
 
 funcarg:
 $type$ $name$
