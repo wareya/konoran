@@ -20,10 +20,5 @@ funcptr(f32, (f32)) r_add_one()
 
 f32 add(f32 a, f32 b)
 {
-    //u8[16] array1;
-    //Vec2 vec;
-    funcptr(f32, (f32)) f;
-    //f = r_add_one();
-    //return f(a + b);
-    return (r_add_one())(a + b);
+    return r_add_one()(a + b);
 }

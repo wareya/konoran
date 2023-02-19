@@ -339,8 +339,6 @@ fn main()
         signature
     }
     
-    let mut funcsig_to_sig = BTreeMap::new();
-    
     for f in &program.funcs
     {
         let f_name = f.0;
@@ -348,16 +346,7 @@ fn main()
         
         let funcsig = function.to_sig();
         
-        let signature = if !funcsig_to_sig.contains_key(&funcsig)
-        {
-            let sig = build_signature(&module, &funcsig);
-            funcsig_to_sig.insert(funcsig.clone(), sig.clone());
-            sig
-        }
-        else
-        {
-            funcsig_to_sig.get(&funcsig).cloned().unwrap()
-        };
+        let signature = build_signature(&module, &funcsig);
         
         let mut variables = BTreeMap::new();
         let mut parameters = BTreeMap::new();
@@ -459,43 +448,7 @@ fn main()
                     let (id, signature, funcsig, _, _, _) = func_decs.get(name).unwrap();
                     let funcref = module.declare_func_in_func(*id, builder.func);
                     // FIXME: need a better way to get a SigRef
-                    let sigref = if !sigrefs.contains_key(funcsig)
-                    {
-                        println!("built sigref for {}", funcsig.to_string());
-                        let sigref = builder.import_signature(signature.clone());
-                        sigrefs.insert(funcsig.clone(), sigref.clone());
-                        sigref
-                    }
-                    else
-                    {
-                        sigrefs.get(funcsig).cloned().unwrap()
-                    };
-                    funcrefs.insert(name.clone(), (funcsig.clone(), funcref, sigref));
-                    
-                    let functype = Type::from_functionsig(&funcsig);
-                    functype.visit(&mut |subtype : &Type| // also runs for root type
-                    {
-                        println!("visiting subtype `{}`", subtype.to_string());
-                        match &subtype.data
-                        {
-                            TypeData::FuncPointer(funcsig) =>
-                            {
-                                if !sigrefs.contains_key(funcsig)
-                                {
-                                    println!("built sigref for {}", funcsig.to_string());
-                                    let sig = build_signature(&module, &funcsig);
-                                    let sigref = builder.import_signature(signature.clone());
-                                    sigrefs.insert(*funcsig.clone(), sigref.clone());
-                                }
-                                else
-                                {
-                                    println!("sigref for `{}` exists", funcsig.to_string());
-                                }
-                            }
-                            _ => {}
-                        }
-                        false
-                    });
+                    funcrefs.insert(name.clone(), (funcsig.clone(), funcref));
                 }
             }
             false
@@ -506,13 +459,14 @@ fn main()
             Var(Variable),
         }
         
-        struct Environment<'a, 'b, 'c, 'd>
+        struct Environment<'a, 'b, 'c, 'd, 'e>
         {
             stack      : &'a mut Vec<(Type, Value)>,
             leftstack  : &'a mut Vec<(Type, LeftMeta)>,
             variables  : &'a BTreeMap<String, (Type, Variable)>,
             builder    : &'b mut FunctionBuilder<'c>,
             program    : &'d Program,
+            module     : &'e mut JITModule,
             root_block : &'a Block,
             func_decs  : &'a BTreeMap<String,
                 (FuncId,
@@ -522,7 +476,7 @@ fn main()
                 BTreeMap<String, Type>, // parameter
                 Type, // return info
                 )>,
-            funcrefs   : &'a BTreeMap<String, (FunctionSig, FuncRef, SigRef)>,
+            funcrefs   : &'a BTreeMap<String, (FunctionSig, FuncRef)>,
             sigrefs    : &'a BTreeMap<FunctionSig, SigRef>,
             types      : &'a BTreeMap<String, Type>,
         }
@@ -530,7 +484,7 @@ fn main()
         let mut stack = Vec::new();
         let mut leftstack = Vec::new();
         
-        let mut env = Environment { stack : &mut stack, leftstack : &mut leftstack, variables : &variables, builder : &mut builder, program : &program, root_block : &block, func_decs : &func_decs, funcrefs : &funcrefs, sigrefs : &sigrefs, types : &types };
+        let mut env = Environment { stack : &mut stack, leftstack : &mut leftstack, variables : &variables, builder : &mut builder, program : &program, module : &mut module, root_block : &block, func_decs : &func_decs, funcrefs : &funcrefs, sigrefs : &sigrefs, types : &types };
         fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode)
         {
             if node.is_parent()
@@ -615,7 +569,7 @@ fn main()
                         }
                         else if env.funcrefs.contains_key(name)
                         {
-                            let (funcsig, funcref, sigref) = env.funcrefs.get(name).unwrap();
+                            let (funcsig, funcref) = env.funcrefs.get(name).unwrap();
                             let funcaddr = env.builder.ins().func_addr(types::I64, *funcref);
                             env.stack.push((Type::from_functionsig(funcsig), funcaddr));
                         }
@@ -633,7 +587,8 @@ fn main()
                         {
                             TypeData::FuncPointer(funcsig) =>
                             {
-                                let sigref = env.sigrefs.get(&funcsig).unwrap();
+                                let sig = build_signature(&env.module, &funcsig);
+                                let sigref = env.builder.import_signature(sig);
                                 
                                 compile(env, node.child(1).unwrap());
                                 let num_args = node.child(1).unwrap().child_count().unwrap();
@@ -649,7 +604,8 @@ fn main()
                                     args.push(val);
                                 }
                                 
-                                let inst = env.builder.ins().call_indirect(*sigref, funcaddr, &args);
+                                println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
+                                let inst = env.builder.ins().call_indirect(sigref, funcaddr, &args);
                                 let results = env.builder.inst_results(inst);
                                 println!("number of results {}", results.len());
                                 for (result, type_) in results.iter().zip([funcsig.return_type])
@@ -734,11 +690,13 @@ fn main()
         builder.seal_all_blocks();
         builder.finalize();
         
+        println!("{}", ctx.func.display());
+        
         module.define_function(id, &mut ctx).unwrap();
         
         let flags = settings::Flags::new(settings::builder());
         let res = verify_function(&ctx.func, &flags);
-        println!("{}", ctx.func.display());
+        
         if let Err(errors) = res
         {
             panic!("{}", errors);
