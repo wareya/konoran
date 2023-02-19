@@ -184,10 +184,38 @@ impl ToString for FunctionSig
             args += &arg.to_string();
             if i+1 < arg_count
             {
-                args == ", ";
+                args += ", ";
             }
         }
         format!("fnptr({}, ({}))", return_type, args)
+    }
+}
+impl FunctionSig
+{
+    fn to_signature<T : Module>(&self, module : &T) -> Signature
+    {
+        let mut signature = module.make_signature();
+        
+        for var_type in &self.args
+        {
+            let var_abi = var_type.to_abi();
+            if var_abi.is_none()
+            {
+                let name = &var_type.name;
+                panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
+            }
+            signature.params.push(var_abi.unwrap().clone());
+        }
+        
+        let return_abi = self.return_type.to_abi();
+        if return_abi.is_none()
+        {
+            let name = &self.return_type.name;
+            panic!("error: funcsig-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
+        }
+        signature.returns.push(return_abi.unwrap().clone());
+        println!("made func sig {:?}", signature);
+        signature
     }
 }
 impl Function
@@ -313,32 +341,6 @@ fn main()
     
     types.insert("f64".to_string(), Type { name : "f64".to_string(), size : 8, data : TypeData::Primitive });
     
-    fn build_signature<T : Module>(module : &T, funcsig : &FunctionSig) -> Signature
-    {
-        let mut signature = module.make_signature();
-        
-        for var_type in &funcsig.args
-        {
-            let var_abi = var_type.to_abi();
-            if var_abi.is_none()
-            {
-                let name = &var_type.name;
-                panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
-            }
-            signature.params.push(var_abi.unwrap().clone());
-        }
-        
-        let return_abi = funcsig.return_type.to_abi();
-        if return_abi.is_none()
-        {
-            let name = &funcsig.return_type.name;
-            panic!("error: funcsig-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
-        }
-        signature.returns.push(return_abi.unwrap().clone());
-        println!("made func sig {:?}", signature);
-        signature
-    }
-    
     for f in &program.funcs
     {
         let f_name = f.0;
@@ -346,7 +348,7 @@ fn main()
         
         let funcsig = function.to_sig();
         
-        let signature = build_signature(&module, &funcsig);
+        let signature = funcsig.to_signature(&module);
         
         let mut variables = BTreeMap::new();
         let mut parameters = BTreeMap::new();
@@ -375,7 +377,7 @@ fn main()
         let function = f.1;
         
         let (id, funcsig, mut variables, parameters, _) = func_decs.get(f_name).unwrap().clone();
-        let signature = build_signature(&mut module, &funcsig);
+        let signature = funcsig.to_signature(&module);
         
         let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_context);
         builder.func.signature = signature.clone();
@@ -570,7 +572,7 @@ fn main()
                         {
                             TypeData::FuncPointer(funcsig) =>
                             {
-                                let sig = build_signature(&env.module, &funcsig);
+                                let sig = funcsig.to_signature(&env.module);
                                 let sigref = env.builder.import_signature(sig);
                                 
                                 compile(env, node.child(1).unwrap());
