@@ -365,7 +365,7 @@ fn main()
         
         let id = module.declare_function(&f_name, Linkage::Export, &signature).unwrap();
         
-        func_decs.insert(f_name.clone(), (id, signature, funcsig, variables, parameters, function.return_type.clone()));
+        func_decs.insert(f_name.clone(), (id, funcsig, variables, parameters, function.return_type.clone()));
     }
     
     for f in &program.funcs
@@ -374,7 +374,8 @@ fn main()
         let f_name = f.0;
         let function = f.1;
         
-        let (id, signature, _, mut variables, parameters, _) = func_decs.get(f_name).unwrap().clone();
+        let (id, funcsig, mut variables, parameters, _) = func_decs.get(f_name).unwrap().clone();
+        let signature = build_signature(&mut module, &funcsig);
         
         let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_context);
         builder.func.signature = signature.clone();
@@ -435,7 +436,6 @@ fn main()
         });
         
         // collect referred function signatures
-        let mut sigrefs = BTreeMap::new();
         let mut funcrefs = BTreeMap::new();
         function.body.visit(&mut |node : &ASTNode|
         {
@@ -445,7 +445,7 @@ fn main()
                 let name = &node.child(0).unwrap().text;
                 if !variables.contains_key(name) && func_decs.contains_key(name)
                 {
-                    let (id, signature, funcsig, _, _, _) = func_decs.get(name).unwrap();
+                    let (id, funcsig, _, _, _) = func_decs.get(name).unwrap();
                     let funcref = module.declare_func_in_func(*id, builder.func);
                     // FIXME: need a better way to get a SigRef
                     funcrefs.insert(name.clone(), (funcsig.clone(), funcref));
@@ -459,32 +459,21 @@ fn main()
             Var(Variable),
         }
         
-        struct Environment<'a, 'b, 'c, 'd, 'e>
+        struct Environment<'a, 'b, 'c, 'e>
         {
             stack      : &'a mut Vec<(Type, Value)>,
             leftstack  : &'a mut Vec<(Type, LeftMeta)>,
             variables  : &'a BTreeMap<String, (Type, Variable)>,
             builder    : &'b mut FunctionBuilder<'c>,
-            program    : &'d Program,
             module     : &'e mut JITModule,
-            root_block : &'a Block,
-            func_decs  : &'a BTreeMap<String,
-                (FuncId,
-                Signature,
-                FunctionSig,
-                BTreeMap<String, (Type, Variable)>, // variables
-                BTreeMap<String, Type>, // parameter
-                Type, // return info
-                )>,
             funcrefs   : &'a BTreeMap<String, (FunctionSig, FuncRef)>,
-            sigrefs    : &'a BTreeMap<FunctionSig, SigRef>,
             types      : &'a BTreeMap<String, Type>,
         }
         
         let mut stack = Vec::new();
         let mut leftstack = Vec::new();
         
-        let mut env = Environment { stack : &mut stack, leftstack : &mut leftstack, variables : &variables, builder : &mut builder, program : &program, module : &mut module, root_block : &block, func_decs : &func_decs, funcrefs : &funcrefs, sigrefs : &sigrefs, types : &types };
+        let mut env = Environment { stack : &mut stack, leftstack : &mut leftstack, variables : &variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types };
         fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode)
         {
             if node.is_parent()
@@ -521,12 +510,6 @@ fn main()
                             if env.variables.contains_key(name)
                             {
                                 let (type_, var) = &env.variables[name];
-                                //compile(env, node.child(2).unwrap());
-                                //let (type_, val, meta) = env.stack.pop().unwrap();
-                                //env.builder.def_var(var.1, val);
-                                
-                                // mut Vec<(Type, Value, Meta)>,
-                                
                                 env.leftstack.push((type_.clone(), LeftMeta::Var(*var)));
                             }
                             else
@@ -716,7 +699,7 @@ fn main()
     }
     */
     
-    for (f_name, (id, signature, _, _, _, _)) in func_decs.iter()
+    for (f_name, (id, _, _, _, _)) in func_decs.iter()
     {
         let code = module.get_finalized_function(*id);
         // FIXME: SAFETY: use actual function signature
