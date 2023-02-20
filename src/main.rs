@@ -82,6 +82,22 @@ impl Type
             }
         }
     }
+    fn to_ptr(&self) -> Type
+    {
+        Type { name : "ptr".to_string(), data : TypeData::Pointer(Box::new(self.clone())) }
+    }
+    fn deref_ptr(&self) -> Type
+    {
+        match &self.data
+        {
+            TypeData::Pointer(inner) =>
+            {
+                return *inner.clone();
+            }
+            _ => {}
+        }
+        panic!("error: attempted to dereference non-pointer type");
+    }
     fn from_functionsig(funcsig : &FunctionSig) -> Type
     {
         Type { name : "funcptr".to_string(), data : TypeData::FuncPointer(Box::new(funcsig.clone())) }
@@ -183,7 +199,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
                     }
                     else
                     {
-                        return Err(format!("error: failed to parse type (culprit: `{}`)", arg.text));
+                        return Err(format!("error: failed to parse function pointer type signature (culprit: `{}`)", arg.text));
                     }
                 }
                 let sig = FunctionSig { return_type, args };
@@ -191,8 +207,20 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
             }
             else
             {
-                Err(format!("error: failed to parse type (culprit: `{}`)", return_node.text))
+                Err(format!("error: failed to parse function pointer type signature (culprit: `{}`)", return_node.text))
             }
+        }
+        (true, "struct_type") =>
+        {
+            let name = &node.child(0).unwrap().text;
+            if let Some(named_type) = types.get(name)
+            {
+                if let TypeData::Struct(struct_data) = &named_type.data
+                {
+                    return Ok(named_type.clone());
+                }
+            }
+            Err(format!("error: unknown type `{}`", name))
         }
         // FIXME
         (_, name) => Err(format!("error: non-fundemental types not yet supported (culprit: `{}`)", name)),
@@ -267,23 +295,15 @@ impl Function
     }
 }
 #[derive(Debug, Clone)]
-struct Struct
-{
-    name : String,
-    vars : Vec<(Type, String)>,
-}
-#[derive(Debug, Clone)]
 struct Program
 {
-    structs : BTreeMap<String, Struct>,
     funcs : BTreeMap<String, Function>,
 }
 
 impl Program
 {
-    fn new(types: &BTreeMap<String, Type>, ast : &ASTNode) -> Result<Program, String>
+    fn new(types: &mut BTreeMap<String, Type>, ast : &ASTNode) -> Result<Program, String>
     {
-        let mut structs = BTreeMap::new();
         let mut funcs = BTreeMap::new();
         
         for child in ast.get_children()?
@@ -291,15 +311,20 @@ impl Program
             if child.is_parent() && child.text == "structdef"
             {
                 let name = child.child(0)?.child(0)?.text.clone();
-                let mut vars = Vec::new();
+                let mut struct_data = Vec::new();
+                let mut offset : usize = 0;
                 for prop in child.child(1)?.get_children()?
                 {
                     let prop_type = parse_type(&types, prop.child(0)?).unwrap();
                     let prop_name = prop.child(1)?.child(0)?.text.clone();
-                    vars.push((prop_type, prop_name));
+                    struct_data.push((prop_name, prop_type.clone(), offset));
+                    offset += prop_type.size() as usize;
                 }
                 
-                structs.insert(name.clone(), Struct { name, vars });
+                //Struct(Vec<(String, Type, usize)>), // property name, property type, location within struct
+                let struct_type = Type { name : name.clone(), data : TypeData::Struct(struct_data) };
+                
+                types.insert(name.clone(), struct_type);
             }
         }
         
@@ -324,7 +349,7 @@ impl Program
                 funcs.insert(name.clone(), Function { name, return_type, args, body });
             }
         }
-        Ok(Program { structs, funcs })
+        Ok(Program { funcs })
     }
 }
 
@@ -354,7 +379,7 @@ fn main()
     let tokens = parser.tokenize(&program_lines, false).unwrap();
     let ast = parser.parse_program(&tokens, &program_lines, false).unwrap().unwrap();
     
-    let program = Program::new(&types, &ast).unwrap();
+    let program = Program::new(&mut types, &ast).unwrap();
     
     let mut ast_debug = format!("{:#?}", program);
     ast_debug = ast_debug.replace("    ", " ");
@@ -492,7 +517,6 @@ fn main()
         struct Environment<'a, 'b, 'c, 'e>
         {
             stack      : &'a mut Vec<(Type, Value)>,
-            leftstack  : &'a mut Vec<(Type, LeftMeta)>,
             variables  : &'a BTreeMap<String, (Type, StackSlot)>,
             builder    : &'b mut FunctionBuilder<'c>,
             module     : &'e mut JITModule,
@@ -501,16 +525,15 @@ fn main()
         }
         
         let mut stack = Vec::new();
-        let mut leftstack = Vec::new();
         
-        let mut env = Environment { stack : &mut stack, leftstack : &mut leftstack, variables : &variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types };
+        let mut env = Environment { stack : &mut stack, variables : &variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types };
         fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode)
         {
             if node.is_parent()
             {
                 match node.text.as_str()
                 {
-                    "statementlist" | "statement" | "instruction" | "parenexpr" =>
+                    "statementlist" | "statement" | "instruction" | "parenexpr" | "lvar" =>
                     {
                         for child in node.get_children().unwrap()
                         {
@@ -532,27 +555,38 @@ fn main()
                     {
                         return;
                     }
-                    "lvar" =>
+                    "lvar_name" =>
                     {
-                        if node.child(0).unwrap().text == "name"
+                        let name = &node.child(0).unwrap().child(0).unwrap().text;
+                        if env.variables.contains_key(name)
                         {
-                            let name = &node.child(0).unwrap().child(0).unwrap().text;
-                            if env.variables.contains_key(name)
-                            {
-                                let (type_, slot) = &env.variables[name];
-                                let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
-                                env.leftstack.push((type_.clone(), LeftMeta::DerefPointer(addr)));
-                            }
-                            else
-                            {
-                                panic!("unrecognized variable `{}`", name);
-                            }
+                            let (type_, slot) = &env.variables[name];
+                            let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
+                            env.stack.push((type_.to_ptr(), addr));
                         }
                         else
                         {
-                            panic!("error: lvars other than variable names are not yet implemented");
+                            panic!("unrecognized variable `{}`", name);
                         }
-                    }
+                    }/*
+                    "indirection_head" =>
+                    {
+                        compile(env, node.child(0).unwrap());
+                        let right_name = &node.child(1).unwrap().child(0).unwrap().text;
+                        
+                        let (struct_type, struct_addr) = env.stack.pop().unwrap();
+                        
+                        if env.variables.contains_key(name)
+                        {
+                            let (type_, slot) = &env.variables[name];
+                            let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
+                            env.stack.push((type_.clone(), LeftMeta::DerefPointer(addr)));
+                        }
+                        else
+                        {
+                            panic!("unrecognized variable `{}`", name);
+                        }
+                    }*/
                     "binstate" =>
                     {
                         compile(env, node.child(0).unwrap());
@@ -562,17 +596,10 @@ fn main()
                         //let op = &node.child(1).unwrap().child(0).unwrap().text;
                         
                         let (type_val, val) = env.stack.pop().unwrap();
-                        let (type_left, left) = env.leftstack.pop().unwrap();
+                        let (type_left_ptr, left_addr) = env.stack.pop().unwrap();
+                        let type_left = type_left_ptr.deref_ptr();
                         assert!(type_val == type_left);
-                        match left
-                        {
-                            LeftMeta::DerefPointer(addr) =>
-                            {
-                                env.builder.ins().store(MemFlags::trusted(), val, addr, 0);
-                                //env.builder.def_var(var, val);
-                            }
-                            //_ => panic!("error: can't assign to expression"),
-                        }
+                        env.builder.ins().store(MemFlags::trusted(), val, left_addr, 0);
                     }
                     "rvarname" =>
                     {

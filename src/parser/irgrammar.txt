@@ -44,12 +44,15 @@ i64
 f32
 f64
 
+struct_type:
+$embedname$
 
 type:
 $ptr_type$
 $funcptr_type$
 $array_type$
 $fundamental_type$
+$struct_type$
 
 capsname: TOKEN
 %[A-Z][0-9a-zA-Z_]*%
@@ -57,9 +60,12 @@ capsname: TOKEN
 parenexpr: HIDELITERALS
 ( $expr$ )
 
-lvar:
-$lval_rhunexpr$
+lvar_name:
 $name$
+
+lvar:
+$rhunexpr$
+$lvar_name$
 
 supersimplexpr: SIMPLIFY
 $parenexpr$
@@ -136,7 +142,7 @@ arrayindex: HIDELITERALS
 [ $expr$ ]
 
 indirection: HIDELITERALS
-. $name$
+. $embedname$
 
 rhunexpr_right:
 $funcargs$
@@ -194,11 +200,11 @@ declaration: HIDELITERALS
 $type$ $name$ ;
 
 statement: HIDELITERALS
+$instruction$
 $statementlist$
 $declaration$
 $ifcondition$
 $binstate$
-$instruction$
 $label$
 $expr$ ;
 
