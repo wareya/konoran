@@ -4,17 +4,19 @@ use alloc::collections::BTreeMap;
 
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{DataContext, Linkage, Module, FuncId};
+use cranelift_module::{Linkage, Module};
 
-use cranelift::codegen::ir::{FuncRef, SigRef};
+use cranelift::codegen::ir::FuncRef;
 use cranelift::codegen::verifier::verify_function;
+
+use crate::codegen::ir::StackSlot;
 
 use parser::ast::ASTNode;
 
 mod parser;
 
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeData
 {
     Primitive,
@@ -23,11 +25,10 @@ enum TypeData
     FuncPointer(Box<FunctionSig>),
     Array(Box<Type>, usize),
 }
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Type
 {
     name : String,
-    size : usize,
     data : TypeData,
 }
 
@@ -48,7 +49,7 @@ impl ToString for Type
 
 impl Type
 {
-    pub (crate) fn visit(&self, mut f : &mut dyn FnMut(&Type) -> bool)
+    pub (crate) fn visit(&self, f : &mut dyn FnMut(&Type) -> bool)
     {
         if !f(self)
         {
@@ -83,7 +84,47 @@ impl Type
     }
     fn from_functionsig(funcsig : &FunctionSig) -> Type
     {
-        Type { name : "funcptr".to_string(), size : 8, data : TypeData::FuncPointer(Box::new(funcsig.clone())) }
+        Type { name : "funcptr".to_string(), data : TypeData::FuncPointer(Box::new(funcsig.clone())) }
+    }
+    fn size(&self) -> u32
+    {
+        match self.name.as_str()
+        {
+            "u8"  => 1,
+            "u16" => 2,
+            "u32" => 4,
+            "u64" => 8,
+            
+            "i8"  => 1,
+            "i16" => 2,
+            "i32" => 4,
+            "i64" => 8,
+            
+            "f32" => 4,
+            "f64" => 8,
+            
+            // FIXME: target-specific pointer size
+            "ptr" => 8,
+            "funcptr" => 8,
+            
+            _ => match &self.data
+            {
+                TypeData::Array(inner, count) =>
+                {
+                    inner.size() * *count as u32
+                }
+                TypeData::Struct(subs) =>
+                {
+                    let mut r = 0;
+                    for (_, sub, _) in subs
+                    {
+                        r += sub.size();
+                    }
+                    r
+                }
+                _ => panic!("internal error: failed to cover type when getting size"),
+            }
+        }
     }
     fn to_cranetype(&self) -> Option<cranelift::prelude::Type>
     {
@@ -166,7 +207,7 @@ struct Function
     args : Vec<(Type, String)>,
     body : ASTNode,
 }
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct FunctionSig
 {
     return_type : Type,
@@ -292,17 +333,18 @@ fn main()
     // only holds primitives and structs, not pointers or arrays, those are constructed dynamically
     let mut types = BTreeMap::new();
     
-    types.insert("u8" .to_string(), Type { name : "u8" .to_string(), size : 1, data : TypeData::Primitive });
-    types.insert("u16".to_string(), Type { name : "u16".to_string(), size : 2, data : TypeData::Primitive });
-    types.insert("u32".to_string(), Type { name : "u32".to_string(), size : 4, data : TypeData::Primitive });
-    types.insert("u64".to_string(), Type { name : "u64".to_string(), size : 8, data : TypeData::Primitive });
+    types.insert("u8" .to_string(), Type { name : "u8" .to_string(), data : TypeData::Primitive });
+    types.insert("u16".to_string(), Type { name : "u16".to_string(), data : TypeData::Primitive });
+    types.insert("u32".to_string(), Type { name : "u32".to_string(), data : TypeData::Primitive });
+    types.insert("u64".to_string(), Type { name : "u64".to_string(), data : TypeData::Primitive });
     
-    types.insert("i8" .to_string(), Type { name : "i8" .to_string(), size : 1, data : TypeData::Primitive });
-    types.insert("i16".to_string(), Type { name : "i16".to_string(), size : 2, data : TypeData::Primitive });
-    types.insert("i32".to_string(), Type { name : "i32".to_string(), size : 4, data : TypeData::Primitive });
-    types.insert("i64".to_string(), Type { name : "i64".to_string(), size : 8, data : TypeData::Primitive });
+    types.insert("i8" .to_string(), Type { name : "i8" .to_string(), data : TypeData::Primitive });
+    types.insert("i16".to_string(), Type { name : "i16".to_string(), data : TypeData::Primitive });
+    types.insert("i32".to_string(), Type { name : "i32".to_string(), data : TypeData::Primitive });
+    types.insert("i64".to_string(), Type { name : "i64".to_string(), data : TypeData::Primitive });
     
-    types.insert("f32".to_string(), Type { name : "f32".to_string(), size : 4, data : TypeData::Primitive });
+    types.insert("f32".to_string(), Type { name : "f32".to_string(), data : TypeData::Primitive });
+    types.insert("f64".to_string(), Type { name : "f64".to_string(), data : TypeData::Primitive });
     
     
     let ir_grammar = include_str!("parser/irgrammar.txt");
@@ -338,8 +380,6 @@ fn main()
     let mut ctx = module.make_context();
     
     let mut func_decs = BTreeMap::new();
-    
-    types.insert("f64".to_string(), Type { name : "f64".to_string(), size : 8, data : TypeData::Primitive });
     
     for f in &program.funcs
     {
@@ -391,17 +431,16 @@ fn main()
         {
             let var_type = param.1.clone();
             let var_name = param.0.clone();
-            let var = Variable::new(i);
-            builder.declare_var(var, var_type.to_cranetype().unwrap());
+            let slot = builder.create_sized_stack_slot(StackSlotData { kind : StackSlotKind::ExplicitSlot, size : var_type.size() });
             
             let tmp = builder.block_params(block)[j];
-            builder.def_var(var, tmp);
+            builder.ins().stack_store(tmp, slot, 0);
             println!("inserting {} into vars with type {}", var_name, var_type.name);
             if variables.contains_key(&var_name)
             {
                 panic!("error: variable {} redeclared", var_name);
             }
-            variables.insert(var_name, (var_type, var));
+            variables.insert(var_name, (var_type, slot));
             
             i += 1;
         }
@@ -413,25 +452,13 @@ fn main()
             {
                 let var_type = parse_type(&types, &node.child(0).unwrap()).unwrap();
                 let var_name = node.child(1).unwrap().child(0).unwrap().text.clone();
-                let var = Variable::new(i);
-                
-                let var_cranetype = var_type.to_cranetype();
-                if var_cranetype.is_some()
-                {
-                    builder.declare_var(var, var_cranetype.unwrap());
-                }
-                else
-                {
-                    // FIXME: support structs and arrays
-                    let name = &var_type.name;
-                    panic!("error: non-primitive types not yet supported (triggered by `{}`)", name);
-                }
+                let slot = builder.create_sized_stack_slot(StackSlotData { kind : StackSlotKind::ExplicitSlot, size : var_type.size() });
                 
                 if variables.contains_key(&var_name)
                 {
                     panic!("error: variable {} redeclared", var_name);
                 }
-                variables.insert(var_name, (var_type, var));
+                variables.insert(var_name, (var_type, slot));
                 i += 1;
             }
             false
@@ -458,14 +485,15 @@ fn main()
         
         enum LeftMeta
         {
-            Var(Variable),
+            //Var(Variable),
+            DerefPointer(Value),
         }
         
         struct Environment<'a, 'b, 'c, 'e>
         {
             stack      : &'a mut Vec<(Type, Value)>,
             leftstack  : &'a mut Vec<(Type, LeftMeta)>,
-            variables  : &'a BTreeMap<String, (Type, Variable)>,
+            variables  : &'a BTreeMap<String, (Type, StackSlot)>,
             builder    : &'b mut FunctionBuilder<'c>,
             module     : &'e mut JITModule,
             funcrefs   : &'a BTreeMap<String, (FunctionSig, FuncRef)>,
@@ -511,8 +539,9 @@ fn main()
                             let name = &node.child(0).unwrap().child(0).unwrap().text;
                             if env.variables.contains_key(name)
                             {
-                                let (type_, var) = &env.variables[name];
-                                env.leftstack.push((type_.clone(), LeftMeta::Var(*var)));
+                                let (type_, slot) = &env.variables[name];
+                                let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
+                                env.leftstack.push((type_.clone(), LeftMeta::DerefPointer(addr)));
                             }
                             else
                             {
@@ -528,17 +557,21 @@ fn main()
                     {
                         compile(env, node.child(0).unwrap());
                         compile(env, node.child(2).unwrap());
-                        let op = &node.child(1).unwrap().child(0).unwrap().text;
+                        
+                        // always =
+                        //let op = &node.child(1).unwrap().child(0).unwrap().text;
+                        
                         let (type_val, val) = env.stack.pop().unwrap();
                         let (type_left, left) = env.leftstack.pop().unwrap();
                         assert!(type_val == type_left);
                         match left
                         {
-                            LeftMeta::Var(var) =>
+                            LeftMeta::DerefPointer(addr) =>
                             {
-                                env.builder.def_var(var, val);
+                                env.builder.ins().store(MemFlags::trusted(), val, addr, 0);
+                                //env.builder.def_var(var, val);
                             }
-                            _ => panic!("error: can't assign to expression"),
+                            //_ => panic!("error: can't assign to expression"),
                         }
                     }
                     "rvarname" =>
@@ -548,9 +581,11 @@ fn main()
                         // FIXME: make these use the same stack
                         if env.variables.contains_key(name)
                         {
-                            let var = &env.variables[name];
-                            println!("{:?}", var);
-                            env.stack.push((var.0.clone(), env.builder.use_var(var.1)));
+                            let (type_, slot) = &env.variables[name];
+                            println!("{:?}", (type_, slot));
+                            let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
+                            let val = env.builder.ins().load(type_.to_cranetype().unwrap(), MemFlags::trusted(), addr, 0);
+                            env.stack.push((type_.clone(), val));
                         }
                         else if env.funcrefs.contains_key(name)
                         {
@@ -579,7 +614,7 @@ fn main()
                                 let num_args = node.child(1).unwrap().child_count().unwrap();
                                 
                                 let mut args = Vec::new();
-                                for (i, arg_type) in funcsig.args.iter().enumerate()
+                                for arg_type in &funcsig.args
                                 {
                                     let (type_, val) = env.stack.pop().unwrap();
                                     if type_ != *arg_type
@@ -690,7 +725,7 @@ fn main()
         
         module.clear_context(&mut ctx);
     }
-    module.finalize_definitions();
+    module.finalize_definitions().unwrap();
     
     /*
     macro_rules! do_call {

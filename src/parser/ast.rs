@@ -89,7 +89,7 @@ impl ASTNode {
         ret
     }
         
-    pub (crate) fn visit(&self, mut f : &mut dyn FnMut(&ASTNode) -> bool)
+    pub (crate) fn visit(&self, f : &mut dyn FnMut(&ASTNode) -> bool)
     {
         if !f(self) && self.is_parent()
         {
