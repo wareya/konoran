@@ -20,12 +20,10 @@ funcptr(f32, (f32)) r_add_one()
 
 f32 add(f32 a, f32 b)
 {
-    /*
     Vec2 vec;
     vec.x = a;
     vec.y = b;
     a = vec.x + vec.y - 1.0f32;
     return r_add_one()(a);
-    */
-    return r_add_one()(a + b);
+    //return r_add_one()(a + b);
 }

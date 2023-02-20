@@ -96,7 +96,11 @@ impl Type
             }
             _ => {}
         }
-        panic!("error: attempted to dereference non-pointer type");
+        panic!("error: attempted to dereference non-pointer type `{}`", self.to_string());
+    }
+    fn is_struct(&self) -> bool
+    {
+        matches!(self.data, TypeData::Struct(_))
     }
     fn from_functionsig(funcsig : &FunctionSig) -> Type
     {
@@ -165,12 +169,13 @@ impl Type
                 "ptr" => Some(types::I64),
                 "funcptr" => Some(types::I64),
                 
+                // unknown/broken types
                 _ => None,
             }
         }
         else
         {
-            None
+            Some(types::I64) // arrays and structs are pointers
         }
     }
     fn to_abi(&self) -> Option<AbiParam>
@@ -508,12 +513,6 @@ fn main()
             false
         });
         
-        enum LeftMeta
-        {
-            //Var(Variable),
-            DerefPointer(Value),
-        }
-        
         struct Environment<'a, 'b, 'c, 'e>
         {
             stack      : &'a mut Vec<(Type, Value)>,
@@ -527,17 +526,17 @@ fn main()
         let mut stack = Vec::new();
         
         let mut env = Environment { stack : &mut stack, variables : &variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types };
-        fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode)
+        fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : bool)
         {
             if node.is_parent()
             {
                 match node.text.as_str()
                 {
-                    "statementlist" | "statement" | "instruction" | "parenexpr" | "lvar" =>
+                    "statementlist" | "statement" | "instruction" | "parenexpr" =>
                     {
                         for child in node.get_children().unwrap()
                         {
-                            compile(env, child);
+                            compile(env, child, want_pointer);
                         }
                     }
                     "return" =>
@@ -546,7 +545,7 @@ fn main()
                         // FIXME: check types
                         for child in node.get_children().unwrap()
                         {
-                            compile(env, child);
+                            compile(env, child, false);
                             returns.push(env.stack.pop().unwrap().1);
                         }
                         env.builder.ins().return_(&returns);
@@ -554,6 +553,13 @@ fn main()
                     "declaration" =>
                     {
                         return;
+                    }
+                    "lvar" =>
+                    {
+                        for child in node.get_children().unwrap()
+                        {
+                            compile(env, child, true);
+                        }
                     }
                     "lvar_name" =>
                     {
@@ -566,37 +572,62 @@ fn main()
                         }
                         else
                         {
-                            panic!("unrecognized variable `{}`", name);
+                            panic!("error: unrecognized variable `{}`", name);
                         }
-                    }/*
+                    }
                     "indirection_head" =>
                     {
-                        compile(env, node.child(0).unwrap());
+                        compile(env, node.child(0).unwrap(), true);
                         let right_name = &node.child(1).unwrap().child(0).unwrap().text;
                         
                         let (struct_type, struct_addr) = env.stack.pop().unwrap();
                         
-                        if env.variables.contains_key(name)
+                        if let Some(found) = match &struct_type.data
                         {
-                            let (type_, slot) = &env.variables[name];
-                            let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
-                            env.stack.push((type_.clone(), LeftMeta::DerefPointer(addr)));
+                            TypeData::Struct(ref props) =>
+                            {
+                                props.iter().find(|x| x.0 == *right_name)
+                            }
+                            _ => panic!("error: tried to use indirection (.) operator on non-struct"),
+                        }
+                        {
+                            // FIXME double check that nested structs work properly
+                            let inner_type = &found.1;
+                            if want_pointer || inner_type.is_struct()
+                            {
+                                let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
+                                let inner_addr = env.builder.ins().iadd(struct_addr, offset);
+                                if inner_type.is_struct()
+                                {
+                                    env.stack.push((inner_type.clone(), inner_addr));
+                                }
+                                else
+                                {
+                                    env.stack.push((inner_type.to_ptr(), inner_addr));
+                                }
+                            }
+                            else
+                            {
+                                let val = env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), struct_addr, found.2 as i32);
+                                env.stack.push((inner_type.clone(), val));
+                            }
                         }
                         else
                         {
-                            panic!("unrecognized variable `{}`", name);
+                            panic!("error: no such property {} in struct type {}", right_name, struct_type.name);
                         }
-                    }*/
+                    }
                     "binstate" =>
                     {
-                        compile(env, node.child(0).unwrap());
-                        compile(env, node.child(2).unwrap());
+                        compile(env, node.child(0).unwrap(), true);
+                        compile(env, node.child(2).unwrap(), false);
                         
                         // always =
                         //let op = &node.child(1).unwrap().child(0).unwrap().text;
                         
                         let (type_val, val) = env.stack.pop().unwrap();
                         let (type_left_ptr, left_addr) = env.stack.pop().unwrap();
+                        println!("binstate in {:?}", node);
                         let type_left = type_left_ptr.deref_ptr();
                         assert!(type_val == type_left);
                         env.builder.ins().store(MemFlags::trusted(), val, left_addr, 0);
@@ -628,7 +659,7 @@ fn main()
                     "funcargs_head" =>
                     {
                         println!("compiling func call");
-                        compile(env, node.child(0).unwrap());
+                        compile(env, node.child(0).unwrap(), false);
                         let (type_, funcaddr) = env.stack.pop().unwrap();
                         match type_.data
                         {
@@ -637,7 +668,7 @@ fn main()
                                 let sig = funcsig.to_signature(&env.module);
                                 let sigref = env.builder.import_signature(sig);
                                 
-                                compile(env, node.child(1).unwrap());
+                                compile(env, node.child(1).unwrap(), false);
                                 let num_args = node.child(1).unwrap().child_count().unwrap();
                                 
                                 let mut args = Vec::new();
@@ -668,7 +699,7 @@ fn main()
                     {
                         for child in node.get_children().unwrap()
                         {
-                            compile(env, child);
+                            compile(env, child, false);
                         }
                     }
                     "float" =>
@@ -699,8 +730,8 @@ fn main()
                         println!("compiling {} ...", text);
                         if text.starts_with("binexpr")
                         {
-                            compile(env, node.child(0).unwrap());
-                            compile(env, node.child(2).unwrap());
+                            compile(env, node.child(0).unwrap(), false);
+                            compile(env, node.child(2).unwrap(), false);
                             let op = &node.child(1).unwrap().child(0).unwrap().text;
                             let right = env.stack.pop().unwrap();
                             let left  = env.stack.pop().unwrap();
@@ -708,6 +739,7 @@ fn main()
                             let res = match op.as_str()
                             {
                                 "+" => env.builder.ins().fadd(left.1, right.1),
+                                "-" => env.builder.ins().fsub(left.1, right.1),
                                 _ => panic!("unhandled binary operator {}", op)
                             };
                             env.stack.push((env.types.get("f32").unwrap().clone(), res));
@@ -732,7 +764,7 @@ fn main()
                 }*/
             }
         }
-        compile(&mut env, &function.body);
+        compile(&mut env, &function.body, false);
         
         builder.seal_all_blocks();
         builder.finalize();
