@@ -24,9 +24,14 @@ f32 add(f32 a, f32 b)
     //vec.x = a;
     //vec.y = b;
     //a = vec.x + vec.y - 1.0f32;
+    f32 z;
+    
+    z = b;
+    
     array(f32, 2) list;
     list[0i64] = a;
-    list[1i64] = b;
+    *(&(list[1i64])) = b;
+    
     return r_add_one()(list[0i64] + list[1i64]);
     //return r_add_one()(a + b);
 }

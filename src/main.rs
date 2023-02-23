@@ -22,6 +22,7 @@ enum TypeData
     Primitive,
     Struct(Vec<(String, Type, usize)>), // property name, property type, location within struct
     Pointer(Box<Type>),
+    VirtualPointer(Box<Type>),
     FuncPointer(Box<FunctionSig>),
     Array(Box<Type>, usize),
 }
@@ -40,6 +41,7 @@ impl ToString for Type
         {
             TypeData::Primitive => self.name.clone(),
             TypeData::Pointer(inner) => format!("ptr({})", inner.to_string()),
+            TypeData::VirtualPointer(inner) => format!("vptr({})", inner.to_string()),
             TypeData::Array(inner, size) => format!("array({}, {})", inner.to_string(), size),
             TypeData::Struct(_) => self.name.clone(),
             TypeData::FuncPointer(sig) => sig.to_string(),
@@ -57,6 +59,10 @@ impl Type
             {
                 TypeData::Primitive => {}
                 TypeData::Pointer(inner) =>
+                {
+                    inner.visit(f);
+                }
+                TypeData::VirtualPointer(inner) =>
                 {
                     inner.visit(f);
                 }
@@ -86,11 +92,27 @@ impl Type
     {
         Type { name : "ptr".to_string(), data : TypeData::Pointer(Box::new(self.clone())) }
     }
+    fn to_vptr(&self) -> Type
+    {
+        Type { name : "vptr".to_string(), data : TypeData::VirtualPointer(Box::new(self.clone())) }
+    }
     fn deref_ptr(&self) -> Type
     {
         match &self.data
         {
             TypeData::Pointer(inner) =>
+            {
+                return *inner.clone();
+            }
+            _ => {}
+        }
+        panic!("error: attempted to dereference non-pointer type `{}`", self.to_string());
+    }
+    fn deref_vptr(&self) -> Type
+    {
+        match &self.data
+        {
+            TypeData::VirtualPointer(inner) =>
             {
                 return *inner.clone();
             }
@@ -117,6 +139,14 @@ impl Type
     fn is_array(&self) -> bool
     {
         matches!(self.data, TypeData::Array(_, _))
+    }
+    fn is_pointer(&self) -> bool
+    {
+        matches!(self.data, TypeData::Pointer(_))
+    }
+    fn is_virtual_pointer(&self) -> bool
+    {
+        matches!(self.data, TypeData::VirtualPointer(_))
     }
     fn from_functionsig(funcsig : &FunctionSig) -> Type
     {
@@ -555,10 +585,17 @@ fn main()
             types      : &'a BTreeMap<String, Type>,
         }
         
+        #[derive(Clone, Debug, Copy, PartialEq)]
+        enum WantPointer {
+            None,
+            Real,
+            Virtual,
+        }
+        
         let mut stack = Vec::new();
         
         let mut env = Environment { stack : &mut stack, variables : &variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types };
-        fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : bool)
+        fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : WantPointer)
         {
             if node.is_parent()
             {
@@ -577,7 +614,7 @@ fn main()
                         // FIXME: check types
                         for child in node.get_children().unwrap()
                         {
-                            compile(env, child, false);
+                            compile(env, child, WantPointer::None);
                             returns.push(env.stack.pop().unwrap().1);
                         }
                         env.builder.ins().return_(&returns);
@@ -590,7 +627,7 @@ fn main()
                     {
                         for child in node.get_children().unwrap()
                         {
-                            compile(env, child, true);
+                            compile(env, child, WantPointer::Virtual);
                         }
                     }
                     "lvar_name" =>
@@ -600,7 +637,18 @@ fn main()
                         {
                             let (type_, slot) = &env.variables[name];
                             let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
-                            env.stack.push((type_.to_ptr(), addr));
+                            if want_pointer == WantPointer::Real
+                            {
+                                env.stack.push((type_.to_ptr(), addr));
+                            }
+                            else if want_pointer == WantPointer::Virtual
+                            {
+                                env.stack.push((type_.to_vptr(), addr));
+                            }
+                            else
+                            {
+                                panic!("internal error: lvar expression tried to return fully-evaluated form");
+                            }
                         }
                         else
                         {
@@ -609,8 +657,8 @@ fn main()
                     }
                     "arrayindex_head" =>
                     {
-                        compile(env, node.child(0).unwrap(), true);
-                        compile(env, node.child(1).unwrap(), false);
+                        compile(env, node.child(0).unwrap(), WantPointer::None);
+                        compile(env, node.child(1).unwrap(), WantPointer::None);
                         let (offset_type, offset_val) = env.stack.pop().unwrap();
                         let (base_type, base_addr) = env.stack.pop().unwrap();
                         
@@ -624,16 +672,17 @@ fn main()
                             let inner_addr = env.builder.ins().iadd(base_addr, inner_offset);
                             
                             // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
-                            if want_pointer
+                            if want_pointer == WantPointer::Real
                             {
-                                if inner_type.is_struct() || inner_type.is_array()
-                                {
-                                    env.stack.push((inner_type.clone(), inner_addr));
-                                }
-                                else
-                                {
-                                    env.stack.push((inner_type.to_ptr(), inner_addr));
-                                }
+                                env.stack.push((inner_type.to_ptr(), inner_addr));
+                            }
+                            else if want_pointer == WantPointer::Virtual
+                            {
+                                env.stack.push((inner_type.to_vptr(), inner_addr));
+                            }
+                            else if inner_type.is_struct() || inner_type.is_array()
+                            {
+                                env.stack.push((inner_type.clone(), inner_addr));
                             }
                             else
                             {
@@ -648,7 +697,7 @@ fn main()
                     }
                     "indirection_head" =>
                     {
-                        compile(env, node.child(0).unwrap(), true);
+                        compile(env, node.child(0).unwrap(), WantPointer::None);
                         let (struct_type, struct_addr) = env.stack.pop().unwrap();
                         
                         let right_name = &node.child(1).unwrap().child(0).unwrap().text;
@@ -665,18 +714,23 @@ fn main()
                             // TODO: do multi-level struct accesses (e.g. mat.x_vec.x) in a single load operation instead of several
                             // FIXME: double check that nested structs work properly
                             let inner_type = &found.1;
-                            if want_pointer || inner_type.is_struct() || inner_type.is_array()
+                            if want_pointer == WantPointer::Real
                             {
                                 let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
                                 let inner_addr = env.builder.ins().iadd(struct_addr, offset);
-                                if inner_type.is_struct() || inner_type.is_array()
-                                {
-                                    env.stack.push((inner_type.clone(), inner_addr));
-                                }
-                                else
-                                {
-                                    env.stack.push((inner_type.to_ptr(), inner_addr));
-                                }
+                                env.stack.push((inner_type.to_ptr(), inner_addr));
+                            }
+                            else if want_pointer == WantPointer::Virtual
+                            {
+                                let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
+                                let inner_addr = env.builder.ins().iadd(struct_addr, offset);
+                                env.stack.push((inner_type.to_vptr(), inner_addr));
+                            }
+                            else if inner_type.is_struct() || inner_type.is_array()
+                            {
+                                let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
+                                let inner_addr = env.builder.ins().iadd(struct_addr, offset);
+                                env.stack.push((inner_type.clone(), inner_addr));
                             }
                             else
                             {
@@ -691,16 +745,19 @@ fn main()
                     }
                     "binstate" =>
                     {
-                        compile(env, node.child(0).unwrap(), true);
-                        compile(env, node.child(2).unwrap(), false);
-                        
-                        // always =
-                        //let op = &node.child(1).unwrap().child(0).unwrap().text;
+                        compile(env, node.child(0).unwrap(), WantPointer::Virtual);
+                        compile(env, node.child(2).unwrap(), WantPointer::None);
                         
                         let (type_val, val) = env.stack.pop().unwrap();
                         let (type_left_ptr, left_addr) = env.stack.pop().unwrap();
-                        println!("binstate in {:?}", node);
-                        let type_left = type_left_ptr.deref_ptr();
+                        
+                        println!("{:?}", (&type_val, &val, &type_left_ptr, &left_addr));
+                        
+                        if !type_left_ptr.is_virtual_pointer()
+                        {
+                            panic!("tried to assign to fully evaluated expression (not a variable or pointer)");
+                        }
+                        let type_left = type_left_ptr.deref_vptr();
                         assert!(type_val == type_left);
                         env.builder.ins().store(MemFlags::trusted(), val, left_addr, 0);
                     }
@@ -714,13 +771,17 @@ fn main()
                             println!("{:?}", (type_, slot));
                             let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
                             // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
-                            if type_.is_struct() || type_.is_array()
-                            {
-                                env.stack.push((type_.clone(), addr));
-                            }
-                            else if want_pointer
+                            if want_pointer == WantPointer::Real
                             {
                                 env.stack.push((type_.to_ptr(), addr));
+                            }
+                            else if want_pointer == WantPointer::Virtual
+                            {
+                                env.stack.push((type_.to_vptr(), addr));
+                            }
+                            else if type_.is_struct() || type_.is_array()
+                            {
+                                env.stack.push((type_.clone(), addr));
                             }
                             else
                             {
@@ -742,7 +803,7 @@ fn main()
                     "funcargs_head" =>
                     {
                         println!("compiling func call");
-                        compile(env, node.child(0).unwrap(), false);
+                        compile(env, node.child(0).unwrap(), WantPointer::None);
                         let (type_, funcaddr) = env.stack.pop().unwrap();
                         match type_.data
                         {
@@ -751,7 +812,7 @@ fn main()
                                 let sig = funcsig.to_signature(&env.module);
                                 let sigref = env.builder.import_signature(sig);
                                 
-                                compile(env, node.child(1).unwrap(), false);
+                                compile(env, node.child(1).unwrap(), WantPointer::None);
                                 let num_args = node.child(1).unwrap().child_count().unwrap();
                                 
                                 let mut args = Vec::new();
@@ -782,7 +843,7 @@ fn main()
                     {
                         for child in node.get_children().unwrap()
                         {
-                            compile(env, child, false);
+                            compile(env, child, WantPointer::None);
                         }
                     }
                     "float" =>
@@ -838,13 +899,69 @@ fn main()
                         };
                         env.stack.push((env.types.get(parts.1).unwrap().clone(), res));
                     }
+                    "unary" =>
+                    {
+                        let op = &node.child(0).unwrap().child(0).unwrap().text;
+                        println!("---- compiling unary operator `{}`", op);
+                        if op.as_str() == "&"
+                        {
+                            compile(env, node.child(1).unwrap(), WantPointer::Real);
+                            let (type_, val) = env.stack.pop().unwrap();
+                            if !type_.is_pointer()
+                            {
+                                panic!("error: tried to get address of non-variable");
+                            }
+                            env.stack.push((type_, val));
+                        }
+                        else
+                        {
+                            compile(env, node.child(1).unwrap(), WantPointer::None);
+                            let (type_, val) = env.stack.pop().unwrap();
+                            match type_.name.as_str()
+                            {
+                                "ptr" =>
+                                {
+                                    if want_pointer == WantPointer::Virtual
+                                    {
+                                        if op.as_str() != "*"
+                                        {
+                                            panic!("error: can't use operator `{}` on type `{}`", op, type_.name);
+                                        }
+                                        env.stack.push((type_.deref_ptr().to_vptr(), val));
+                                        println!("---- * operator is virtual");
+                                    }
+                                    else
+                                    {
+                                        println!("---- * operator is real");
+                                        let inner_type = type_.deref_ptr();
+                                        let res = match op.as_str()
+                                        {
+                                            "*" => env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), val, 0),
+                                            _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                                        };
+                                        env.stack.push((inner_type, res));
+                                    }
+                                }
+                                "f32" | "f64" =>
+                                {
+                                    let res = match op.as_str()
+                                    {
+                                        "+" => val,
+                                        "-" => env.builder.ins().fneg(val),
+                                        _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                                    };
+                                    env.stack.push((type_.clone(), res));
+                                }
+                                _ => panic!("error: type `{}` is not supported by unary operators", type_.name)
+                            }
+                        }
+                    }
                     text => 
                     {
-                        println!("compiling {} ...", text);
                         if text.starts_with("binexpr")
                         {
-                            compile(env, node.child(0).unwrap(), false);
-                            compile(env, node.child(2).unwrap(), false);
+                            compile(env, node.child(0).unwrap(), WantPointer::None);
+                            compile(env, node.child(2).unwrap(), WantPointer::None);
                             let op = &node.child(1).unwrap().child(0).unwrap().text;
                             let (right_type, right_val)  = env.stack.pop().unwrap();
                             let (left_type , left_val )  = env.stack.pop().unwrap();
@@ -908,7 +1025,7 @@ fn main()
                 }*/
             }
         }
-        compile(&mut env, &function.body, false);
+        compile(&mut env, &function.body, WantPointer::None);
         
         builder.seal_all_blocks();
         builder.finalize();

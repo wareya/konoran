@@ -65,6 +65,7 @@ $name$
 
 lvar:
 $rhunexpr$
+$unary$
 $lvar_name$
 
 cast: HIDELITERALS
@@ -98,7 +99,10 @@ binexpr_2: SIMPLIFY LEFTBINEXPR 2
 $binexpr_3$ >>? $binop_2$ $binexpr_2$
 
 binexpr_3: SIMPLIFY LEFTBINEXPR 3
-$lhunop$ >>? $binop_3$ $binexpr_3$
+$binexpr_4$ >>? $binop_3$ $binexpr_3$
+
+binexpr_4: SIMPLIFY LEFTBINEXPR 4
+$lhunop$ >>? $binop_4$ $binexpr_4$
 
 unary:
 $unop$ $lhunop$
@@ -113,6 +117,8 @@ unop:
 -
 +
 *
+~
+&
 
 binop_0:
 and
@@ -121,6 +127,11 @@ or
 ||
 
 binop_1:
+|
+&
+^
+
+binop_2:
 ==
 !=
 >=
@@ -128,11 +139,11 @@ binop_1:
 >
 <
 
-binop_2:
+binop_3:
 +
 -
 
-binop_3:
+binop_4:
 *
 /
 %
@@ -166,7 +177,7 @@ statementlist: HIDELITERALS
 binstateop:
 =
 
-binstate:
+binstate: HIDELITERALS
 $lvar$ $binstateop$ $expr$ ;
 
 funcarg:
