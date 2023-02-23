@@ -67,11 +67,15 @@ lvar:
 $rhunexpr$
 $lvar_name$
 
+cast: HIDELITERALS
+( $expr$ as $type$ )
+
 supersimplexpr: SIMPLIFY
 $parenexpr$
 $float$
 $integer$
 $rvarname$
+$cast$
 
 simplexpr: SIMPLIFY
 $rhunexpr$
@@ -79,6 +83,7 @@ $parenexpr$
 $float$
 $integer$
 $rvarname$
+$cast$
 
 expr: SIMPLIFY
 $binexpr_0$

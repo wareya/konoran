@@ -98,9 +98,25 @@ impl Type
         }
         panic!("error: attempted to dereference non-pointer type `{}`", self.to_string());
     }
+    fn array_to_inner(&self) -> Type
+    {
+        match &self.data
+        {
+            TypeData::Array(inner, _size) =>
+            {
+                return *inner.clone();
+            }
+            _ => {}
+        }
+        panic!("error: attempted to get dereference array type `{}`", self.to_string());
+    }
     fn is_struct(&self) -> bool
     {
         matches!(self.data, TypeData::Struct(_))
+    }
+    fn is_array(&self) -> bool
+    {
+        matches!(self.data, TypeData::Array(_, _))
     }
     fn from_functionsig(funcsig : &FunctionSig) -> Type
     {
@@ -227,6 +243,20 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
             }
             Err(format!("error: unknown type `{}`", name))
         }
+        (true, "array_type") =>
+        {
+            let res = parse_type(types, node.child(0).unwrap());
+            if let Ok(type_) = res
+            {
+                let count_text = &node.child(1).unwrap().child(0).unwrap().text;
+                let count : u64 = count_text.parse().unwrap();
+                Ok(Type { name : "array".to_string(), data : TypeData::Array(Box::new(type_.clone()), count as usize) })
+            }
+            else
+            {
+                res
+            }
+        }
         // FIXME
         (_, name) => Err(format!("error: non-fundemental types not yet supported (culprit: `{}`)", name)),
     }
@@ -322,6 +352,8 @@ impl Program
                 {
                     let prop_type = parse_type(&types, prop.child(0)?).unwrap();
                     let prop_name = prop.child(1)?.child(0)?.text.clone();
+                    // FIXME: don't add fields with the name "_" (for padding)
+                    // FIXME: throw an error on misaligned fields
                     struct_data.push((prop_name, prop_type.clone(), offset));
                     offset += prop_type.size() as usize;
                 }
@@ -532,7 +564,7 @@ fn main()
             {
                 match node.text.as_str()
                 {
-                    "statementlist" | "statement" | "instruction" | "parenexpr" =>
+                    "statementlist" | "statement" | "instruction" | "parenexpr" | "arrayindex" =>
                     {
                         for child in node.get_children().unwrap()
                         {
@@ -575,12 +607,49 @@ fn main()
                             panic!("error: unrecognized variable `{}`", name);
                         }
                     }
+                    "arrayindex_head" =>
+                    {
+                        compile(env, node.child(0).unwrap(), true);
+                        compile(env, node.child(1).unwrap(), false);
+                        let (offset_type, offset_val) = env.stack.pop().unwrap();
+                        let (base_type, base_addr) = env.stack.pop().unwrap();
+                        
+                        if offset_type.name == "i64"
+                        {
+                            // TODO: do multi-level accesses in a single load operation instead of several
+                            // FIXME: double check that nested types work properly
+                            let inner_type = base_type.array_to_inner();
+                            let inner_size = inner_type.size();
+                            let inner_offset = env.builder.ins().imul_imm(offset_val, inner_size as i64);
+                            let inner_addr = env.builder.ins().iadd(base_addr, inner_offset);
+                            if want_pointer
+                            {
+                                if inner_type.is_struct()
+                                {
+                                    env.stack.push((inner_type.clone(), inner_addr));
+                                }
+                                else
+                                {
+                                    env.stack.push((inner_type.to_ptr(), inner_addr));
+                                }
+                            }
+                            else
+                            {
+                                let val = env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), inner_addr, 0);
+                                env.stack.push((inner_type.clone(), val));
+                            }
+                        }
+                        else
+                        {
+                            panic!("error: can't offset into arrays except with type i64 (used type `{}`)", offset_type.name)
+                        }
+                    }
                     "indirection_head" =>
                     {
                         compile(env, node.child(0).unwrap(), true);
-                        let right_name = &node.child(1).unwrap().child(0).unwrap().text;
-                        
                         let (struct_type, struct_addr) = env.stack.pop().unwrap();
+                        
+                        let right_name = &node.child(1).unwrap().child(0).unwrap().text;
                         
                         if let Some(found) = match &struct_type.data
                         {
@@ -591,7 +660,8 @@ fn main()
                             _ => panic!("error: tried to use indirection (.) operator on non-struct"),
                         }
                         {
-                            // FIXME double check that nested structs work properly
+                            // TODO: do multi-level struct accesses (e.g. mat.x_vec.x) in a single load operation instead of several
+                            // FIXME: double check that nested structs work properly
                             let inner_type = &found.1;
                             if want_pointer || inner_type.is_struct()
                             {
@@ -636,14 +706,25 @@ fn main()
                     {
                         let name = &node.child(0).unwrap().text;
                         println!("{}", name);
-                        // FIXME: make these use the same stack
                         if env.variables.contains_key(name)
                         {
                             let (type_, slot) = &env.variables[name];
                             println!("{:?}", (type_, slot));
                             let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
-                            let val = env.builder.ins().load(type_.to_cranetype().unwrap(), MemFlags::trusted(), addr, 0);
-                            env.stack.push((type_.clone(), val));
+                            // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
+                            if type_.is_struct() || type_.is_array()
+                            {
+                                env.stack.push((type_.clone(), addr));
+                            }
+                            else if want_pointer
+                            {
+                                env.stack.push((type_.to_ptr(), addr));
+                            }
+                            else
+                            {
+                                let val = env.builder.ins().load(type_.to_cranetype().unwrap(), MemFlags::trusted(), addr, 0);
+                                env.stack.push((type_.clone(), val));
+                            }
                         }
                         else if env.funcrefs.contains_key(name)
                         {
@@ -725,6 +806,75 @@ fn main()
                             _ => panic!("unknown float suffix pattern {}", parts.1)
                         }
                     }
+                    "integer" =>
+                    {
+                        let text = &node.child(0).unwrap().text;
+                        let mut location = text.rfind("i");
+                        if location.is_none()
+                        {
+                            location = text.rfind("u");
+                        }
+                        if location.is_none()
+                        {
+                            panic!("internal error: unknown integer type literal suffix");
+                        }
+                        let location = location.unwrap();
+                        let parts = text.split_at(location);
+                        let text = parts.0;
+                        match parts.1
+                        {
+                            // FIXME: check if we need to use sign extension (probably don't)
+                            "u8" =>
+                            {
+                                let val : u8 = text.parse().unwrap();
+                                let res = env.builder.ins().iconst(types::I8, val as i64);
+                                env.stack.push((env.types.get("u8").unwrap().clone(), res));
+                            }
+                            "u16" =>
+                            {
+                                let val : u16 = text.parse().unwrap();
+                                let res = env.builder.ins().iconst(types::I16, val as i64);
+                                env.stack.push((env.types.get("u16").unwrap().clone(), res));
+                            }
+                            "u32" =>
+                            {
+                                let val : u32 = text.parse().unwrap();
+                                let res = env.builder.ins().iconst(types::I32, val as i64);
+                                env.stack.push((env.types.get("u32").unwrap().clone(), res));
+                            }
+                            "u64" =>
+                            {
+                                let val : u64 = text.parse().unwrap();
+                                let res = env.builder.ins().iconst(types::I64, val as i64);
+                                env.stack.push((env.types.get("u64").unwrap().clone(), res));
+                            }
+                            "i8" =>
+                            {
+                                let val : i8 = text.parse().unwrap();
+                                let res = env.builder.ins().iconst(types::I8, val as i64);
+                                env.stack.push((env.types.get("i8").unwrap().clone(), res));
+                            }
+                            "i16" =>
+                            {
+                                let val : i16 = text.parse().unwrap();
+                                let res = env.builder.ins().iconst(types::I16, val as i64);
+                                env.stack.push((env.types.get("i16").unwrap().clone(), res));
+                            }
+                            "i32" =>
+                            {
+                                let val : i32 = text.parse().unwrap();
+                                let res = env.builder.ins().iconst(types::I32, val as i64);
+                                env.stack.push((env.types.get("i32").unwrap().clone(), res));
+                            }
+                            "i64" =>
+                            {
+                                let val : i64 = text.parse().unwrap();
+                                let res = env.builder.ins().iconst(types::I64, val as i64);
+                                env.stack.push((env.types.get("i64").unwrap().clone(), res));
+                            }
+                            _ => panic!("unknown float suffix pattern {}", parts.1)
+                        }
+                    }
                     text => 
                     {
                         println!("compiling {} ...", text);
@@ -780,7 +930,7 @@ fn main()
         {
             panic!("{}", errors);
         }
-        println!("function compiled with no errors!");
+        println!("function {} compiled with no errors!", function.name);
         
         module.clear_context(&mut ctx);
     }
@@ -808,6 +958,7 @@ fn main()
         // FIXME: SAFETY: WARNING: EVIL: THIS INVOKES UB BECAUSE WE DON'T CHECK FUNCTION SIGNATURES
         unsafe
         {
+            println!("running function {}...", f_name);
             println!("{}({}, {}) = {}", f_name, a, b, func(a, b));
         }
         // dump code to console for later manual disassembly
