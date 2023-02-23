@@ -622,9 +622,11 @@ fn main()
                             let inner_size = inner_type.size();
                             let inner_offset = env.builder.ins().imul_imm(offset_val, inner_size as i64);
                             let inner_addr = env.builder.ins().iadd(base_addr, inner_offset);
+                            
+                            // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
                             if want_pointer
                             {
-                                if inner_type.is_struct()
+                                if inner_type.is_struct() || inner_type.is_array()
                                 {
                                     env.stack.push((inner_type.clone(), inner_addr));
                                 }
@@ -663,11 +665,11 @@ fn main()
                             // TODO: do multi-level struct accesses (e.g. mat.x_vec.x) in a single load operation instead of several
                             // FIXME: double check that nested structs work properly
                             let inner_type = &found.1;
-                            if want_pointer || inner_type.is_struct()
+                            if want_pointer || inner_type.is_struct() || inner_type.is_array()
                             {
                                 let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
                                 let inner_addr = env.builder.ins().iadd(struct_addr, offset);
-                                if inner_type.is_struct()
+                                if inner_type.is_struct() || inner_type.is_array()
                                 {
                                     env.stack.push((inner_type.clone(), inner_addr));
                                 }
@@ -821,59 +823,20 @@ fn main()
                         let location = location.unwrap();
                         let parts = text.split_at(location);
                         let text = parts.0;
-                        match parts.1
+                        let res = match parts.1
                         {
                             // FIXME: check if we need to use sign extension (probably don't)
-                            "u8" =>
-                            {
-                                let val : u8 = text.parse().unwrap();
-                                let res = env.builder.ins().iconst(types::I8, val as i64);
-                                env.stack.push((env.types.get("u8").unwrap().clone(), res));
-                            }
-                            "u16" =>
-                            {
-                                let val : u16 = text.parse().unwrap();
-                                let res = env.builder.ins().iconst(types::I16, val as i64);
-                                env.stack.push((env.types.get("u16").unwrap().clone(), res));
-                            }
-                            "u32" =>
-                            {
-                                let val : u32 = text.parse().unwrap();
-                                let res = env.builder.ins().iconst(types::I32, val as i64);
-                                env.stack.push((env.types.get("u32").unwrap().clone(), res));
-                            }
-                            "u64" =>
-                            {
-                                let val : u64 = text.parse().unwrap();
-                                let res = env.builder.ins().iconst(types::I64, val as i64);
-                                env.stack.push((env.types.get("u64").unwrap().clone(), res));
-                            }
-                            "i8" =>
-                            {
-                                let val : i8 = text.parse().unwrap();
-                                let res = env.builder.ins().iconst(types::I8, val as i64);
-                                env.stack.push((env.types.get("i8").unwrap().clone(), res));
-                            }
-                            "i16" =>
-                            {
-                                let val : i16 = text.parse().unwrap();
-                                let res = env.builder.ins().iconst(types::I16, val as i64);
-                                env.stack.push((env.types.get("i16").unwrap().clone(), res));
-                            }
-                            "i32" =>
-                            {
-                                let val : i32 = text.parse().unwrap();
-                                let res = env.builder.ins().iconst(types::I32, val as i64);
-                                env.stack.push((env.types.get("i32").unwrap().clone(), res));
-                            }
-                            "i64" =>
-                            {
-                                let val : i64 = text.parse().unwrap();
-                                let res = env.builder.ins().iconst(types::I64, val as i64);
-                                env.stack.push((env.types.get("i64").unwrap().clone(), res));
-                            }
+                            "u8"  => env.builder.ins().iconst(types::I8 , text.parse::<u8>() .unwrap() as i64),
+                            "u16" => env.builder.ins().iconst(types::I16, text.parse::<u16>().unwrap() as i64),
+                            "u32" => env.builder.ins().iconst(types::I32, text.parse::<u32>().unwrap() as i64),
+                            "u64" => env.builder.ins().iconst(types::I64, text.parse::<u64>().unwrap() as i64),
+                            "i8"  => env.builder.ins().iconst(types::I8 , text.parse::<i8>() .unwrap() as i64),
+                            "i16" => env.builder.ins().iconst(types::I16, text.parse::<i16>().unwrap() as i64),
+                            "i32" => env.builder.ins().iconst(types::I32, text.parse::<i32>().unwrap() as i64),
+                            "i64" => env.builder.ins().iconst(types::I64, text.parse::<i64>().unwrap() as i64),
                             _ => panic!("unknown float suffix pattern {}", parts.1)
-                        }
+                        };
+                        env.stack.push((env.types.get(parts.1).unwrap().clone(), res));
                     }
                     text => 
                     {
@@ -883,16 +846,47 @@ fn main()
                             compile(env, node.child(0).unwrap(), false);
                             compile(env, node.child(2).unwrap(), false);
                             let op = &node.child(1).unwrap().child(0).unwrap().text;
-                            let right = env.stack.pop().unwrap();
-                            let left  = env.stack.pop().unwrap();
-                            // FIXME: check types
-                            let res = match op.as_str()
+                            let (right_type, right_val)  = env.stack.pop().unwrap();
+                            let (left_type , left_val )  = env.stack.pop().unwrap();
+                            match (left_type.name.as_str(), right_type.name.as_str())
                             {
-                                "+" => env.builder.ins().fadd(left.1, right.1),
-                                "-" => env.builder.ins().fsub(left.1, right.1),
-                                _ => panic!("unhandled binary operator {}", op)
-                            };
-                            env.stack.push((env.types.get("f32").unwrap().clone(), res));
+                                ("f32", "f32") | ("f64", "f64") =>
+                                {
+                                    match op.as_str()
+                                    {
+                                        "+" | "-" | "*" | "/" =>
+                                        {
+                                            let res = match op.as_str()
+                                            {
+                                                "+" => env.builder.ins().fadd(left_val, right_val),
+                                                "-" => env.builder.ins().fsub(left_val, right_val),
+                                                "*" => env.builder.ins().fmul(left_val, right_val),
+                                                "/" => env.builder.ins().fdiv(left_val, right_val),
+                                                _ => panic!("internal error: operator mismatch")
+                                            };
+                                            env.stack.push((left_type.clone(), res));
+                                        }
+                                        
+                                        ">" | "<" | ">=" | "<=" | "==" | "!=" =>
+                                        {
+                                            let cond = match op.as_str()
+                                            {
+                                                "==" => FloatCC::Equal,
+                                                "!=" => FloatCC::NotEqual,
+                                                "<"  => FloatCC::LessThan,
+                                                "<=" => FloatCC::LessThanOrEqual,
+                                                ">"  => FloatCC::GreaterThan,
+                                                ">=" => FloatCC::GreaterThanOrEqual,
+                                                _ => panic!("internal error: operator mismatch")
+                                            };
+                                            let res = env.builder.ins().fcmp(cond, left_val, right_val);
+                                            env.stack.push((env.types.get("u8").unwrap().clone(), res));
+                                        }
+                                        _ => panic!("operator {} not supported on type {}", op, left_type.name)
+                                    }
+                                }
+                                _ => panic!("unhandled type pair `{}`, `{}`", left_type.name, right_type.name)
+                            }
                         }
                         else
                         {
