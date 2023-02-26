@@ -16,8 +16,7 @@ use parser::ast::ASTNode;
 mod parser;
 
 // TODO: type casts
-// TODO: throw an error if struct members are misaligned
-// TODO: allow anonymous (name is just a single underscore) struct properties
+// TODO: intrinsic for calling memcpy
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeData
@@ -193,6 +192,23 @@ impl Type
                 }
                 _ => panic!("internal error: failed to cover type when getting size"),
             }
+        }
+    }
+    fn align_size(&self) -> u32
+    {
+        match &self.data
+        {
+            TypeData::Array(inner, _) => inner.align_size(),
+            TypeData::Struct(subs) =>
+            {
+                let mut maximum = 0;
+                for (_, sub, _) in subs
+                {
+                    maximum = maximum.max(sub.align_size());
+                }
+                maximum
+            }
+            _ => self.size()
         }
     }
     fn to_cranetype(&self) -> Option<cranelift::prelude::Type>
@@ -385,13 +401,21 @@ impl Program
                 {
                     let prop_type = parse_type(&types, prop.child(0)?).unwrap();
                     let prop_name = prop.child(1)?.child(0)?.text.clone();
-                    // FIXME: don't add fields with the name "_" (for padding)
-                    // FIXME: throw an error on misaligned fields
-                    struct_data.push((prop_name, prop_type.clone(), offset));
+                    if prop_name != "_" // for placeholders only
+                    {
+                        let align_size = prop_type.align_size();
+                        let align = (2_u32.pow(if align_size > 1 { (align_size-1).ilog2() + 1 } else { 1 })) as usize;
+                        println!("align of {} is {}", prop_type.name, align);
+                        if offset%align != 0
+                        {
+                            panic!("error: property {} of struct type {} is not aligned (should be aligned to {} bytes; actual offset was {}, for a misalignment of {} bytes)\nNOTE: add padding before this property like `array(u8, {}) _;`", prop_name, name, align, offset, offset%align, align - offset%align);
+                        }
+                        
+                        struct_data.push((prop_name, prop_type.clone(), offset));
+                    }
                     offset += prop_type.size() as usize;
                 }
                 
-                //Struct(Vec<(String, Type, usize)>), // property name, property type, location within struct
                 let struct_type = Type { name : name.clone(), data : TypeData::Struct(struct_data) };
                 
                 types.insert(name.clone(), struct_type);
