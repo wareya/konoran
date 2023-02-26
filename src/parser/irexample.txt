@@ -51,3 +51,31 @@ loop_head:
     
     return x;
 }
+
+f32 func_gravity()
+{
+    u64 i;
+    f64 yvel;
+    f64 y;
+    f64 gravity;
+    f64 delta;
+    
+    i = 0u64;
+    yvel = 0.0f64;
+    y = 0.0f64;
+    delta = 0.0001f64;
+    gravity = 9.8f64;
+    
+head:
+    
+    yvel = yvel + delta*gravity*0.5f64;
+    y = y + yvel*delta;
+    yvel = yvel + delta*gravity*0.5f64;
+    
+    i = i + 1u64;
+    
+    if (i < 5000000u64)
+        goto head;
+    
+    return (y as f32);
+}

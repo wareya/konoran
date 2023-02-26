@@ -1089,8 +1089,7 @@ fn main()
                         compile(env, node.child(0).unwrap(), WantPointer::None);
                         let (left_type, left_val)  = env.stack.pop().unwrap();
                         
-                        let right_name = &node.child(1).unwrap().child(0).unwrap().text;
-                        let right_type = env.types.get(right_name).unwrap().clone();
+                        let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
                         
                         let target_cranetype = right_type.to_cranetype().unwrap();
                         
@@ -1109,8 +1108,7 @@ fn main()
                         compile(env, node.child(0).unwrap(), WantPointer::None);
                         let (left_type, left_val)  = env.stack.pop().unwrap();
                         
-                        let right_name = &node.child(1).unwrap().child(0).unwrap().text;
-                        let right_type = env.types.get(right_name).unwrap().clone();
+                        let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
                         
                         let target_cranetype = right_type.to_cranetype().unwrap();
                         // cast as own type (do nothing)
@@ -1385,8 +1383,11 @@ fn main()
         // FIXME: SAFETY: WARNING: EVIL: THIS INVOKES UB BECAUSE WE DON'T CHECK FUNCTION SIGNATURES
         unsafe
         {
+            let start = std::time::Instant::now();
             println!("running function {}...", f_name);
             println!("{}({}, {}) = {}", f_name, a, b, func(a, b));
+            let elapsed_time = start.elapsed();
+            println!("time: {}", elapsed_time.as_secs_f64());
         }
         // dump code to console for later manual disassembly
         //unsafe
