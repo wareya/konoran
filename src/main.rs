@@ -15,8 +15,8 @@ use parser::ast::ASTNode;
 
 mod parser;
 
-// TODO: type casts
 // TODO: intrinsic for calling memcpy
+// TODO: proper importing and exporting of functions
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeData
@@ -149,6 +149,22 @@ impl Type
     fn is_virtual_pointer(&self) -> bool
     {
         matches!(self.data, TypeData::VirtualPointer(_))
+    }
+    fn is_float(&self) -> bool
+    {
+        self.name == "f32" || self.name == "f64"
+    }
+    fn is_int(&self) -> bool
+    {
+        ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"].contains(&self.name.as_str())
+    }
+    fn is_int_signed(&self) -> bool
+    {
+        ["i8", "i16", "i32", "i64"].contains(&self.name.as_str())
+    }
+    fn is_int_unsigned(&self) -> bool
+    {
+        ["u8", "u16", "u32", "u64"].contains(&self.name.as_str())
     }
     fn from_functionsig(funcsig : &FunctionSig) -> Type
     {
@@ -1066,6 +1082,102 @@ fn main()
                         else
                         {
                             panic!("error: no such label {}", label);
+                        }
+                    }
+                    "bitcast" =>
+                    {
+                        compile(env, node.child(0).unwrap(), WantPointer::None);
+                        let (left_type, left_val)  = env.stack.pop().unwrap();
+                        
+                        let right_name = &node.child(1).unwrap().child(0).unwrap().text;
+                        let right_type = env.types.get(right_name).unwrap().clone();
+                        
+                        let target_cranetype = right_type.to_cranetype().unwrap();
+                        
+                        if left_type.size() == right_type.size()
+                        {
+                            let ret = env.builder.ins().bitcast(target_cranetype, MemFlags::new(), left_val);
+                            env.stack.push((right_type, ret));
+                        }
+                        else
+                        {
+                            println!("unsupported bitcast from type {} to type {} (types must have the same size to be bitcasted)", left_type.to_string(), right_type.to_string());
+                        }
+                    }
+                    "cast" =>
+                    {
+                        compile(env, node.child(0).unwrap(), WantPointer::None);
+                        let (left_type, left_val)  = env.stack.pop().unwrap();
+                        
+                        let right_name = &node.child(1).unwrap().child(0).unwrap().text;
+                        let right_type = env.types.get(right_name).unwrap().clone();
+                        
+                        let target_cranetype = right_type.to_cranetype().unwrap();
+                        // cast as own type (do nothing)
+                        if left_type.name == right_type.name
+                        {
+                            env.stack.push((left_type, left_val));
+                        }
+                        // cast between float types"
+                        else if left_type.name == "f32" && right_type.name == "f64"
+                        {
+                            let ret = env.builder.ins().fpromote(target_cranetype, left_val);
+                            env.stack.push((right_type, ret));
+                        }
+                        else if left_type.name == "f64" && right_type.name == "f32"
+                        {
+                            let ret = env.builder.ins().fdemote(target_cranetype, left_val);
+                            env.stack.push((right_type, ret));
+                        }
+                        // cast between types of same size, non-float. bitcast.
+                        else if !left_type.is_float() && !right_type.is_float() && left_type.size() == right_type.size()
+                        {
+                            let ret = env.builder.ins().bitcast(target_cranetype, MemFlags::new(), left_val);
+                            env.stack.push((right_type, ret));
+                        }
+                        // cast from float to int (must be int, not pointer)
+                        else if left_type.is_int_signed() && right_type.is_float()
+                        {
+                            let ret = env.builder.ins().fcvt_from_sint(target_cranetype, left_val);
+                            env.stack.push((right_type, ret));
+                        }
+                        else if left_type.is_int_unsigned() && right_type.is_float()
+                        {
+                            let ret = env.builder.ins().fcvt_from_uint(target_cranetype, left_val);
+                            env.stack.push((right_type, ret));
+                        }
+                        // cast from int to float (must be int, not pointer)
+                        else if left_type.is_float() && right_type.is_int_signed()
+                        {
+                            let ret = env.builder.ins().fcvt_to_sint(target_cranetype, left_val);
+                            env.stack.push((right_type, ret));
+                        }
+                        else if left_type.is_float() && right_type.is_int_unsigned()
+                        {
+                            let ret = env.builder.ins().fcvt_to_uint(target_cranetype, left_val);
+                            env.stack.push((right_type, ret));
+                        }
+                        // cast from smaller signed to larger unsigned
+                        else if left_type.size() < right_type.size() && left_type.is_int_signed() && right_type.is_int_unsigned()
+                        {
+                            let ret = env.builder.ins().sextend(target_cranetype, left_val);
+                            env.stack.push((right_type, ret));
+                        }
+                        // cast from smaller signed to larger unsigned
+                        else if left_type.size() < right_type.size() && left_type.is_int_unsigned() && right_type.is_int_signed()
+                        {
+                            let ret = env.builder.ins().uextend(target_cranetype, left_val);
+                            env.stack.push((right_type, ret));
+                        }
+                        // cast to smaller int type
+                        else if left_type.size() < right_type.size() && left_type.is_int() && right_type.is_int()
+                        {
+                            let ret = env.builder.ins().ireduce(target_cranetype, left_val);
+                            env.stack.push((right_type, ret));
+                        }
+                        else
+                        {
+                            println!("unsupported cast from type {} to type {}", left_type.to_string(), right_type.to_string());
                         }
                     }
                     text => 

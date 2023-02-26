@@ -71,12 +71,16 @@ $lvar_name$
 cast: HIDELITERALS
 ( $expr$ as $type$ )
 
+bitcast: HIDELITERALS
+( $expr$ bit_as $type$ )
+
 supersimplexpr: SIMPLIFY
 $parenexpr$
 $float$
 $integer$
 $rvarname$
 $cast$
+$bitcast$
 
 simplexpr: SIMPLIFY
 $rhunexpr$
