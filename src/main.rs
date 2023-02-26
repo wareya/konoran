@@ -16,9 +16,8 @@ use parser::ast::ASTNode;
 mod parser;
 
 // TODO: type casts
-// TODO: typed integer arithmetic
-// TODO: full float arithmetic
-
+// TODO: throw an error if struct members are misaligned
+// TODO: allow anonymous (name is just a single underscore) struct properties
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeData
@@ -983,6 +982,19 @@ fn main()
                                     };
                                     env.stack.push((type_.clone(), res));
                                 }
+                                "i8" | "i16" | "i32" | "i64" |
+                                "u8" | "u16" | "u32" | "u64" =>
+                                {
+                                    let res = match op.as_str()
+                                    {
+                                        "+" => val,
+                                        "-" => env.builder.ins().ineg(val),
+                                        "!" => env.builder.ins().icmp_imm(IntCC::Equal, val, 0),
+                                        "~" => env.builder.ins().bnot(val),
+                                        _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                                    };
+                                    env.stack.push((type_.clone(), res));
+                                }
                                 _ => panic!("error: type `{}` is not supported by unary operators", type_.name)
                             }
                         }
@@ -1041,13 +1053,16 @@ fn main()
                             let op = &node.child(1).unwrap().child(0).unwrap().text;
                             let (right_type, right_val)  = env.stack.pop().unwrap();
                             let (left_type , left_val )  = env.stack.pop().unwrap();
+                            
+                            let is_u = left_type.name.starts_with("u");
+                            
                             match (left_type.name.as_str(), right_type.name.as_str())
                             {
                                 ("f32", "f32") | ("f64", "f64") =>
                                 {
                                     match op.as_str()
                                     {
-                                        "+" | "-" | "*" | "/" =>
+                                        "+" | "-" | "*" | "/" | "%" =>
                                         {
                                             let res = match op.as_str()
                                             {
@@ -1055,6 +1070,13 @@ fn main()
                                                 "-" => env.builder.ins().fsub(left_val, right_val),
                                                 "*" => env.builder.ins().fmul(left_val, right_val),
                                                 "/" => env.builder.ins().fdiv(left_val, right_val),
+                                                "%" =>
+                                                {
+                                                    let times = env.builder.ins().fdiv(left_val, right_val);
+                                                    let floored = env.builder.ins().floor(times);
+                                                    let n = env.builder.ins().fmul(floored, right_val);
+                                                    env.builder.ins().fsub(left_val, n)
+                                                }
                                                 _ => panic!("internal error: operator mismatch")
                                             };
                                             env.stack.push((left_type.clone(), res));
@@ -1075,6 +1097,88 @@ fn main()
                                             let res = env.builder.ins().fcmp(cond, left_val, right_val);
                                             env.stack.push((env.types.get("u8").unwrap().clone(), res));
                                         }
+                                        
+                                        _ => panic!("operator {} not supported on type {}", op, left_type.name)
+                                    }
+                                }
+                                ("i8", "i8") | ("i16", "i16") | ("i32", "i32") | ("i64", "i64") |
+                                ("u8", "u8") | ("u16", "u16") | ("u32", "u32") | ("u64", "u64") =>
+                                {
+                                    match op.as_str()
+                                    {
+                                        "&&" | "||" | "and" | "or" =>
+                                        {
+                                            let left_bool  = env.builder.ins().icmp_imm(IntCC::NotEqual, left_val , 0);
+                                            let right_bool = env.builder.ins().icmp_imm(IntCC::NotEqual, right_val, 0);
+                                            
+                                            let res = match op.as_str()
+                                            {
+                                                "||" | "or"  => env.builder.ins().bor (left_bool, right_bool),
+                                                "&&" | "and" => env.builder.ins().band(left_bool, right_bool),
+                                                _ => panic!("internal error: operator mismatch")
+                                            };
+                                            env.stack.push((env.types.get("u8").unwrap().clone(), res));
+                                        }
+                                        "|" | "&" | "^" =>
+                                        {
+                                            let res = match op.as_str()
+                                            {
+                                                "|" => env.builder.ins().bor(left_val , right_val),
+                                                "&" => env.builder.ins().band(left_val, right_val),
+                                                "^" => env.builder.ins().bxor(left_val, right_val),
+                                                _ => panic!("internal error: operator mismatch")
+                                            };
+                                            env.stack.push((left_type.clone(), res));
+                                        }
+                                        "+" | "-" | "*" | "/" | "%" =>
+                                        {
+                                            let res = match op.as_str()
+                                            {
+                                                "+" => env.builder.ins().iadd(left_val, right_val),
+                                                "-" => env.builder.ins().isub(left_val, right_val),
+                                                "*" => env.builder.ins().imul(left_val, right_val),
+                                                "/" => if is_u
+                                                {
+                                                    env.builder.ins().udiv(left_val, right_val)
+                                                }
+                                                else
+                                                {
+                                                    env.builder.ins().sdiv(left_val, right_val)
+                                                },
+                                                "%" =>
+                                                {
+                                                    let times = if is_u
+                                                    {
+                                                        env.builder.ins().udiv(left_val, right_val)
+                                                    }
+                                                    else
+                                                    {
+                                                        env.builder.ins().sdiv(left_val, right_val)
+                                                    };
+                                                    let n = env.builder.ins().imul(times, right_val);
+                                                    env.builder.ins().isub(left_val, n)
+                                                }
+                                                _ => panic!("internal error: operator mismatch")
+                                            };
+                                            env.stack.push((left_type.clone(), res));
+                                        }
+                                        
+                                        ">" | "<" | ">=" | "<=" | "==" | "!=" =>
+                                        {
+                                            let cond = match op.as_str()
+                                            {
+                                                "==" => IntCC::Equal,
+                                                "!=" => IntCC::NotEqual,
+                                                "<"  => IntCC::SignedLessThan,
+                                                "<=" => IntCC::SignedLessThanOrEqual,
+                                                ">"  => IntCC::SignedGreaterThan,
+                                                ">=" => IntCC::SignedGreaterThanOrEqual,
+                                                _ => panic!("internal error: operator mismatch")
+                                            };
+                                            let res = env.builder.ins().icmp(cond, left_val, right_val);
+                                            env.stack.push((env.types.get("u8").unwrap().clone(), res));
+                                        }
+                                        
                                         _ => panic!("operator {} not supported on type {}", op, left_type.name)
                                     }
                                 }

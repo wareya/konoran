@@ -38,7 +38,7 @@ f32 add(f32 a, f32 b)
 }
 
 
-f32 nbody()
+f32 tenloop()
 {
     f32 x;
     x = 0.0f32;
