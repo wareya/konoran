@@ -15,6 +15,10 @@ use parser::ast::ASTNode;
 
 mod parser;
 
+// TODO: type casts
+// TODO: typed integer arithmetic
+// TODO: full float arithmetic
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeData
@@ -546,9 +550,9 @@ fn main()
                 let var_name = node.child(1).unwrap().child(0).unwrap().text.clone();
                 let slot = builder.create_sized_stack_slot(StackSlotData { kind : StackSlotKind::ExplicitSlot, size : var_type.size() });
                 
-                if variables.contains_key(&var_name)
+                if variables.contains_key(&var_name) || func_decs.contains_key(&var_name)
                 {
-                    panic!("error: variable {} redeclared", var_name);
+                    panic!("error: variable or function {} shadowed or redeclared", var_name)
                 }
                 variables.insert(var_name, (var_type, slot));
                 i += 1;
@@ -560,7 +564,6 @@ fn main()
         let mut funcrefs = BTreeMap::new();
         function.body.visit(&mut |node : &ASTNode|
         {
-            let mut i = 0;
             if node.is_parent() && node.text == "rvarname"
             {
                 let name = &node.child(0).unwrap().text;
@@ -568,8 +571,34 @@ fn main()
                 {
                     let (id, funcsig, _, _, _) = func_decs.get(name).unwrap();
                     let funcref = module.declare_func_in_func(*id, builder.func);
-                    // FIXME: need a better way to get a SigRef
                     funcrefs.insert(name.clone(), (funcsig.clone(), funcref));
+                }
+            }
+            false
+        });
+        
+        // collect labels (blocks)
+        let mut blocks = BTreeMap::new();
+        let mut blocks_vec = Vec::new();
+        let mut next_block = BTreeMap::new();
+        function.body.visit(&mut |node : &ASTNode|
+        {
+            if node.is_parent() && node.text == "label"
+            {
+                let name = &node.child(0).unwrap().child(0).unwrap().text;
+                if !blocks.contains_key(name)
+                {
+                    let block = builder.create_block();
+                    blocks.insert(name.clone(), block);
+                    if let Some(prev) = blocks_vec.last()
+                    {
+                        next_block.insert(*prev, block);
+                    }
+                    blocks_vec.push(block);
+                }
+                else
+                {
+                    panic!("error: redeclared block {}", name);
                 }
             }
             false
@@ -583,6 +612,8 @@ fn main()
             module     : &'e mut JITModule,
             funcrefs   : &'a BTreeMap<String, (FunctionSig, FuncRef)>,
             types      : &'a BTreeMap<String, Type>,
+            blocks     : &'a BTreeMap<String, Block>,
+            next_block : &'a BTreeMap<Block, Block>,
         }
         
         #[derive(Clone, Debug, Copy, PartialEq)]
@@ -594,7 +625,7 @@ fn main()
         
         let mut stack = Vec::new();
         
-        let mut env = Environment { stack : &mut stack, variables : &variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types };
+        let mut env = Environment { stack : &mut stack, variables : &variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types, blocks : &blocks, next_block : &next_block };
         fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : WantPointer)
         {
             if node.is_parent()
@@ -954,6 +985,51 @@ fn main()
                                 }
                                 _ => panic!("error: type `{}` is not supported by unary operators", type_.name)
                             }
+                        }
+                    }
+                    "label" =>
+                    {
+                        let label = &node.child(0).unwrap().child(0).unwrap().text;
+                        if let Some(block) = env.blocks.get(label)
+                        {
+                            env.builder.ins().jump(*block, &[]);
+                            env.builder.switch_to_block(*block);
+                        }
+                        else
+                        {
+                            panic!("error: no such block {}", label);
+                        }
+                    }
+                    "ifcondition" =>
+                    {
+                        compile(env, node.child(0).unwrap(), WantPointer::None);
+                        let (type_, val)  = env.stack.pop().unwrap();
+                        let label = &node.child(1).unwrap().child(0).unwrap().text;
+                        // anonymous block for "else" case
+                        let else_block = env.builder.create_block();
+                        if let Some(then_block) = env.blocks.get(label)
+                        {
+                            env.builder.ins().brif(val, *then_block, &[], else_block, &[]);
+                            env.builder.switch_to_block(else_block);
+                        }
+                        else
+                        {
+                            panic!("error: no such label {}", label);
+                        }
+                    }
+                    "goto" =>
+                    {
+                        let label = &node.child(0).unwrap().child(0).unwrap().text;
+                        // anonymous block for any dead code between here and the next label
+                        let dead_block = env.builder.create_block();
+                        if let Some(block) = env.blocks.get(label)
+                        {
+                            env.builder.ins().jump(*block, &[]);
+                            env.builder.switch_to_block(dead_block);
+                        }
+                        else
+                        {
+                            panic!("error: no such label {}", label);
                         }
                     }
                     text => 
