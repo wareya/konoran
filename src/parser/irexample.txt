@@ -2,6 +2,8 @@
 // pointer types: ptr(type), funcptr(returntype, (arg1type, arg2type, ...))
 // composite types: structs, array(type, len)
 
+/*
+
 struct Vec2
 {
     f32 x;
@@ -51,6 +53,8 @@ loop_head:
     
     return x;
 }
+
+*/
 
 f32 func_gravity()
 {

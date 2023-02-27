@@ -383,7 +383,7 @@ impl FunctionSig
             panic!("error: funcsig-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
         }
         signature.returns.push(return_abi.unwrap().clone());
-        println!("made func sig {:?}", signature);
+        //println!("made func sig {:?}", signature);
         signature
     }
 }
@@ -421,7 +421,7 @@ impl Program
                     {
                         let align_size = prop_type.align_size();
                         let align = (2_u32.pow(if align_size > 1 { (align_size-1).ilog2() + 1 } else { 1 })) as usize;
-                        println!("align of {} is {}", prop_type.name, align);
+                        //println!("align of {} is {}", prop_type.name, align);
                         if offset%align != 0
                         {
                             panic!("error: property {} of struct type {} is not aligned (should be aligned to {} bytes; actual offset was {}, for a misalignment of {} bytes)\nNOTE: add padding before this property like `array(u8, {}) _;`", prop_name, name, align, offset, offset%align, align - offset%align);
@@ -506,7 +506,7 @@ fn main()
         ).map(|x|
             x.replace("{}", "None").replace(" {", ":").replace("children: Some(", "children:")
         ).collect::<Vec<_>>().join("\n");
-    println!("{}\n", ast_debug);
+    //println!("{}\n", ast_debug);
     
     let builder = JITBuilder::new(cranelift_module::default_libcall_names());
     let mut module = JITModule::new(builder.unwrap());
@@ -570,7 +570,7 @@ fn main()
             
             let tmp = builder.block_params(block)[j];
             builder.ins().stack_store(tmp, slot, 0);
-            println!("inserting {} into vars with type {}", var_name, var_type.name);
+            //println!("inserting {} into vars with type {}", var_name, var_type.name);
             if variables.contains_key(&var_name)
             {
                 panic!("error: variable {} redeclared", var_name);
@@ -821,7 +821,7 @@ fn main()
                         let (type_val, val) = env.stack.pop().unwrap();
                         let (type_left_ptr, left_addr) = env.stack.pop().unwrap();
                         
-                        println!("{:?}", (&type_val, &val, &type_left_ptr, &left_addr));
+                        //println!("{:?}", (&type_val, &val, &type_left_ptr, &left_addr));
                         
                         if !type_left_ptr.is_virtual_pointer()
                         {
@@ -834,11 +834,11 @@ fn main()
                     "rvarname" =>
                     {
                         let name = &node.child(0).unwrap().text;
-                        println!("{}", name);
+                        //println!("{}", name);
                         if env.variables.contains_key(name)
                         {
                             let (type_, slot) = &env.variables[name];
-                            println!("{:?}", (type_, slot));
+                            //println!("{:?}", (type_, slot));
                             let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
                             // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
                             if want_pointer == WantPointer::Real
@@ -872,7 +872,7 @@ fn main()
                     }
                     "funcargs_head" =>
                     {
-                        println!("compiling func call");
+                        //println!("compiling func call");
                         compile(env, node.child(0).unwrap(), WantPointer::None);
                         let (type_, funcaddr) = env.stack.pop().unwrap();
                         match type_.data
@@ -896,10 +896,10 @@ fn main()
                                     args.push(val);
                                 }
                                 
-                                println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
+                                //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
                                 let inst = env.builder.ins().call_indirect(sigref, funcaddr, &args);
                                 let results = env.builder.inst_results(inst);
-                                println!("number of results {}", results.len());
+                                //println!("number of results {}", results.len());
                                 for (result, type_) in results.iter().zip([funcsig.return_type])
                                 {
                                     env.stack.push((type_.clone(), *result));
@@ -907,7 +907,7 @@ fn main()
                             }
                             _ => panic!("tried to fall non-function expression as a function")
                         }
-                        println!("done compiling func call");
+                        //println!("done compiling func call");
                     }
                     "funcargs" =>
                     {
@@ -972,7 +972,7 @@ fn main()
                     "unary" =>
                     {
                         let op = &node.child(0).unwrap().child(0).unwrap().text;
-                        println!("---- compiling unary operator `{}`", op);
+                        //println!("---- compiling unary operator `{}`", op);
                         if op.as_str() == "&"
                         {
                             compile(env, node.child(1).unwrap(), WantPointer::Real);
@@ -998,11 +998,11 @@ fn main()
                                             panic!("error: can't use operator `{}` on type `{}`", op, type_.name);
                                         }
                                         env.stack.push((type_.deref_ptr().to_vptr(), val));
-                                        println!("---- * operator is virtual");
+                                        //println!("---- * operator is virtual");
                                     }
                                     else
                                     {
-                                        println!("---- * operator is real");
+                                        //println!("---- * operator is real");
                                         let inner_type = type_.deref_ptr();
                                         let res = match op.as_str()
                                         {
@@ -1100,7 +1100,7 @@ fn main()
                         }
                         else
                         {
-                            println!("unsupported bitcast from type {} to type {} (types must have the same size to be bitcasted)", left_type.to_string(), right_type.to_string());
+                            //println!("unsupported bitcast from type {} to type {} (types must have the same size to be bitcasted)", left_type.to_string(), right_type.to_string());
                         }
                     }
                     "cast" =>
@@ -1175,7 +1175,7 @@ fn main()
                         }
                         else
                         {
-                            println!("unsupported cast from type {} to type {}", left_type.to_string(), right_type.to_string());
+                            panic!("unsupported cast from type {} to type {}", left_type.to_string(), right_type.to_string());
                         }
                     }
                     text => 
@@ -1344,7 +1344,7 @@ fn main()
         builder.seal_all_blocks();
         builder.finalize();
         
-        println!("{}", ctx.func.display());
+        //println!("{}", ctx.func.display());
         
         module.define_function(id, &mut ctx).unwrap();
         
@@ -1355,7 +1355,7 @@ fn main()
         {
             panic!("{}", errors);
         }
-        println!("function {} compiled with no errors!", function.name);
+        //println!("function {} compiled with no errors!", function.name);
         
         module.clear_context(&mut ctx);
     }
@@ -1390,14 +1390,16 @@ fn main()
             println!("time: {}", elapsed_time.as_secs_f64());
         }
         // dump code to console for later manual disassembly
-        //unsafe
-        //{
-        //    let mut ptr : *mut u8 = core::mem::transmute::<_, _>(code);
-        //    while true
-        //    {
-        //        print!("{:02X} ", *ptr);
-        //        ptr = ptr.offset(1);
-        //    }
-        //}
+        /*
+        unsafe
+        {
+            let mut ptr : *mut u8 = core::mem::transmute::<_, _>(code);
+            while true
+            {
+                print!("{:02X} ", *ptr);
+                ptr = ptr.offset(1);
+            }
+        }
+        */
     }
 }
