@@ -94,3 +94,29 @@ void void_ptr_arg(ptr(void) a)
 {
     return;
 }
+
+void print_garbage()
+{
+    array(u8, 16) garbage;
+    
+    garbage[ 0i64] = 16u8;
+    garbage[ 1i64] = 1u8;
+    garbage[ 2i64] = 175u8;
+    garbage[ 3i64] = 15u8;
+    garbage[ 4i64] = 115u8;
+    garbage[ 5i64] = 255u8;
+    garbage[ 6i64] = 94u8;
+    garbage[ 7i64] = 114u8;
+    garbage[ 8i64] = 62u8;
+    garbage[ 9i64] = 0u8;
+    garbage[10i64] = 183u8;
+    garbage[11i64] = 123u8;
+    garbage[12i64] = 86u8;
+    garbage[13i64] = 63u8;
+    garbage[14i64] = 85u8;
+    garbage[15i64] = 1u8;
+    
+    print_bytes((garbage bit_as ptr(u8)), 16u64);
+    
+    return;
+}

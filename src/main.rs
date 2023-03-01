@@ -159,6 +159,10 @@ impl Type
     {
         matches!(self.data, TypeData::Array(_, _))
     }
+    fn is_composite(&self) -> bool
+    {
+        self.is_struct() || self.is_array()
+    }
     fn is_pointer(&self) -> bool
     {
         matches!(self.data, TypeData::Pointer(_))
@@ -341,7 +345,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
                 let count : u64 = count_text.parse().unwrap();
                 if count * type_.size() as u64 == 0
                 {
-                    panic!("error: zero-size arrays are not allowed");
+                    return Err(format!("error: zero-size arrays are not allowed"));
                 }
                 Ok(Type { name : "array".to_string(), data : TypeData::Array(Box::new(type_.clone()), count as usize) })
             }
@@ -529,6 +533,19 @@ impl Program
     }
 }
 
+unsafe extern "C" fn print_bytes(bytes : *mut u8, count : u64) -> ()
+{
+    println!("pointer... {:?}", bytes);
+    unsafe
+    {
+        for i in 0..count
+        {
+            print!("{:02X} ", *bytes.offset(i as isize));
+        }
+        print!("\n");
+    }
+}
+
 fn main()
 {
     // only holds primitives and structs, not pointers or arrays, those are constructed dynamically
@@ -549,7 +566,6 @@ fn main()
     types.insert("f32".to_string(), Type { name : "f32".to_string(), data : TypeData::Primitive });
     types.insert("f64".to_string(), Type { name : "f64".to_string(), data : TypeData::Primitive });
     
-    
     let ir_grammar = include_str!("parser/irgrammar.txt");
     let program_text = include_str!("parser/irexample.txt");
     let mut parser = parser::Parser::new_from_grammar(&ir_grammar).unwrap();
@@ -558,6 +574,7 @@ fn main()
     let ast = parser.parse_program(&tokens, &program_lines, false).unwrap().unwrap();
     
     let program = Program::new(&mut types, &ast).unwrap();
+    
     
     let mut ast_debug = format!("{:#?}", program);
     ast_debug = ast_debug.replace("    ", " ");
@@ -574,43 +591,59 @@ fn main()
         ).map(|x|
             x.replace("{}", "None").replace(" {", ":").replace("children: Some(", "children:")
         ).collect::<Vec<_>>().join("\n");
-    //println!("{}\n", ast_debug);
     
-    let builder = JITBuilder::new(cranelift_module::default_libcall_names());
-    let mut module = JITModule::new(builder.unwrap());
+    
+    let mut imports : BTreeMap<String, (*const u8, FunctionSig)> = BTreeMap::new();
+    fn import_function<T>(types: &BTreeMap<String, Type>, parser : &mut parser::Parser, imports : &mut BTreeMap<String, (*const u8, FunctionSig)>, name : &str, pointer : T, pointer_usize : usize, type_string : &str)
+    {
+        let type_lines = vec!(type_string.to_string());
+        let type_tokens = parser.tokenize(&type_lines, false).unwrap();
+        let type_ast = parser.parse_with_root_node_type(&type_tokens, &type_lines, false, "type").unwrap().unwrap();
+        let type_ = parse_type(&types, &type_ast).unwrap();
+        if let TypeData::FuncPointer(funcsig) = type_.data
+        {
+            let want_type_string = std::any::type_name::<T>(); // FIXME: not guaranteed to be stable across rust versions
+            let type_string_rust = funcsig.to_string_rusttype();
+            assert!(want_type_string == type_string_rust, "types do not match:\n{}\n{}\n", want_type_string, type_string_rust);
+            assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
+            
+            let ptr = pointer_usize as *const u8;
+            imports.insert(name.to_string(), (ptr, *funcsig));
+        }
+        else
+        {
+            panic!("type string must be function type");
+        }
+    }
+    import_function::<unsafe extern "C" fn(*mut u8, u64) -> ()>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
+    
+    let mut builder = JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
+    
+    for (f_name, (pointer, funcsig)) in &imports
+    {
+        builder.symbol(f_name, *pointer);
+    }
+    
+    let mut module = JITModule::new(builder);
     
     let mut builder_context = FunctionBuilderContext::new();
     let mut ctx = module.make_context();
     
     let mut func_decs = BTreeMap::new();
     
-    for f in &program.funcs
+    for (f_name, (pointer, funcsig)) in &imports
     {
-        let f_name = f.0;
-        let function = f.1;
-        
-        let funcsig = function.to_sig();
-        
         let signature = funcsig.to_signature(&module);
-        
-        let mut variables = BTreeMap::new();
-        let mut parameters = BTreeMap::new();
-        
-        for arg in &function.args
-        {
-            let var_type = arg.0.clone();
-            let var_name = arg.1.clone();
-            
-            if parameters.contains_key(&var_name)
-            {
-                panic!("error: variable {} redeclared", var_name);
-            }
-            parameters.insert(var_name, var_type);
-        }
-        
+        let id = module.declare_function(&f_name, Linkage::Import, &signature).unwrap();
+        func_decs.insert(f_name.clone(), (id, funcsig.clone()));
+    }
+    
+    for (f_name, function) in &program.funcs
+    {
+        let funcsig = function.to_sig();
+        let signature = funcsig.to_signature(&module);
         let id = module.declare_function(&f_name, Linkage::Export, &signature).unwrap();
-        
-        func_decs.insert(f_name.clone(), (id, funcsig, variables, parameters, function.return_type.clone()));
+        func_decs.insert(f_name.clone(), (id, funcsig));
     }
     
     for f in &program.funcs
@@ -619,7 +652,7 @@ fn main()
         let f_name = f.0;
         let function = f.1;
         
-        let (id, funcsig, mut variables, parameters, _) = func_decs.get(f_name).unwrap().clone();
+        let (id, funcsig) = func_decs.get(f_name).unwrap().clone();
         let signature = funcsig.to_signature(&module);
         
         let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_context);
@@ -628,20 +661,22 @@ fn main()
         builder.append_block_params_for_function_params(block);
         builder.switch_to_block(block);
         
+        let mut variables = BTreeMap::new();
+        
         // declare arguments
-        let mut i = variables.len();
-        for (j, param) in parameters.iter().enumerate()
+        let mut i = 0;
+        for (j, param) in function.args.iter().enumerate()
         {
-            let var_type = param.1.clone();
-            let var_name = param.0.clone();
+            let var_type = param.0.clone();
+            let var_name = param.1.clone();
             let slot = builder.create_sized_stack_slot(StackSlotData { kind : StackSlotKind::ExplicitSlot, size : var_type.size() });
             
             let tmp = builder.block_params(block)[j];
             builder.ins().stack_store(tmp, slot, 0);
-            //println!("inserting {} into vars with type {}", var_name, var_type.name);
+            
             if variables.contains_key(&var_name)
             {
-                panic!("error: variable {} redeclared", var_name);
+                panic!("error: parameter {} redeclared", var_name);
             }
             variables.insert(var_name, (var_type, slot));
             
@@ -680,7 +715,7 @@ fn main()
                 let name = &node.child(0).unwrap().text;
                 if !variables.contains_key(name) && func_decs.contains_key(name)
                 {
-                    let (id, funcsig, _, _, _) = func_decs.get(name).unwrap();
+                    let (id, funcsig) = func_decs.get(name).unwrap();
                     let funcref = module.declare_func_in_func(*id, builder.func);
                     funcrefs.insert(name.clone(), (funcsig.clone(), funcref));
                 }
@@ -958,15 +993,17 @@ fn main()
                                 let num_args = node.child(1).unwrap().child_count().unwrap();
                                 
                                 let mut args = Vec::new();
-                                for arg_type in &funcsig.args
+                                for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                                 {
                                     let (type_, val) = env.stack.pop().unwrap();
                                     if type_ != *arg_type
                                     {
-                                        panic!("mismatched types in call to function: expected `{}`, got `{}`", arg_type.to_string(), type_.to_string());
+                                        panic!("mismatched types for parameter {} in call to function: expected `{}`, got `{}`", i+1, arg_type.to_string(), type_.to_string());
                                     }
                                     args.push(val);
                                 }
+                                
+                                args.reverse();
                                 
                                 //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
                                 let inst = env.builder.ins().call_indirect(sigref, funcaddr, &args);
@@ -1169,7 +1206,8 @@ fn main()
                         
                         let target_cranetype = right_type.to_cranetype().unwrap();
                         
-                        if left_type.size() == right_type.size()
+                        // FIXME: platform-specific pointer size
+                        if left_type.size() == right_type.size() || (right_type.size() == 8 && left_type.is_composite())
                         {
                             let ret = env.builder.ins().bitcast(target_cranetype, MemFlags::new(), left_val);
                             env.stack.push((right_type, ret));
@@ -1439,10 +1477,13 @@ fn main()
     
     let mut func_pointers = BTreeMap::new();
     
-    for (f_name, (id, _, _, _, _)) in func_decs.iter()
+    for (f_name, (id, _)) in func_decs.iter()
     {
-        let code = module.get_finalized_function(*id);
-        func_pointers.insert(f_name, code);
+        if !imports.contains_key(f_name)
+        {
+            let code = module.get_finalized_function(*id);
+            func_pointers.insert(f_name, code);
+        }
     }
     
     macro_rules! get_funcptr {
@@ -1466,6 +1507,14 @@ fn main()
     let _ = get_funcptr!("void_ptr_arg", unsafe extern "C" fn(*mut core::ffi::c_void) -> ());
     
     let gravity = get_funcptr!("func_gravity", unsafe extern "C" fn() -> f32);
+    
+    let print_garbage = get_funcptr!("print_garbage", unsafe extern "C" fn() -> ());
+    
+    unsafe
+    {
+        println!("printing garbage...");
+        print_garbage();
+    }
     
     unsafe
     {

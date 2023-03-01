@@ -717,19 +717,7 @@ impl Parser {
         Ok(())
     }
     
-    /// Parses a program. If "silent" is set to true, timing and error diagnostics will be printed to stdout.
-    ///
-    /// If an internal error is encountered during parsing, Err is returned.
-    ///
-    /// If the parse fails, Ok(None) is returned.
-    ///
-    /// Otherwise the root node of an AST is returned.
-    ///
-    /// The returned structure is an AST, not a parse tree.
-    /// - Arithmetic expressions have their associativity direction corrected (to be left-recursive; in the grammar, they're right-recursive, with LEFTBINEXPR tags)
-    /// - Value expressions with a single child are simplified to just their child
-    /// - Statements have their trailing semicolon stripped
-    pub fn parse_program(&self, tokens : &[LexToken], lines : &[String], silent: bool) -> Result<Option<ASTNode>, String>
+    pub fn parse_with_root_node_type(&self, tokens : &[LexToken], lines : &[String], silent: bool, root : &str) -> Result<Option<ASTNode>, String>
     {
         let start_time = Instant::now();
         
@@ -737,7 +725,7 @@ impl Parser {
         {
             println!("parsing...");
         }
-        if let Some(program_type) = self.nodetypemap.get("program")
+        if let Some(program_type) = self.nodetypemap.get(root)
         {
             let (raw_ast, consumed, latesterror) = self.parse(&tokens, 0, program_type)?;
             if !silent
@@ -842,7 +830,23 @@ impl Parser {
         }
         else
         {
-            plainerr("error: grammar does not define \"program\" node type")
+            Err(format!("error: grammar does not define `{}` node type", root))
         }
+    }
+    /// Parses a program. If "silent" is set to true, timing and error diagnostics will be printed to stdout.
+    ///
+    /// If an internal error is encountered during parsing, Err is returned.
+    ///
+    /// If the parse fails, Ok(None) is returned.
+    ///
+    /// Otherwise the root node of an AST is returned as Ok(Ok(Node)).
+    ///
+    /// The returned structure is an AST, not a parse tree.
+    /// - Arithmetic expressions have their associativity direction corrected (to be left-recursive; in the grammar, they're right-recursive, with LEFTBINEXPR tags)
+    /// - Value expressions with a single child are simplified to just their child
+    /// - Statements have their trailing semicolon stripped
+    pub fn parse_program(&self, tokens : &[LexToken], lines : &[String], silent: bool) -> Result<Option<ASTNode>, String>
+    {
+        self.parse_with_root_node_type(tokens, lines, silent, "program")
     }
 }

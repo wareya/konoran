@@ -90,6 +90,7 @@ $float$
 $integer$
 $rvarname$
 $cast$
+$bitcast$
 
 expr: SIMPLIFY
 $binexpr_0$

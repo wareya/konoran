@@ -48,9 +48,9 @@ impl ASTNode {
     {
         if let Some(children) = &self.children
         {
-            let count = children.len();
-            let u_start = if start <  0 {count - (-start as usize)    } else {start as usize};
-            let u_end   = if end   <= 0 {count - (-end   as usize) + 1} else {end   as usize};
+            let count = children.len() as isize;
+            let u_start = if start <  0 {count - (-start)    } else {start} as usize;
+            let u_end   = if end   <= 0 {count - (-end  ) + 1} else {end  } as usize;
             
             children.get(u_start..u_end).ok_or_else(|| format!("internal error: tried to access child range {} to {} (zero-indexed) of ast node that only has {} children", u_start, u_end, count))
         }
