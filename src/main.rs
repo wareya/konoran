@@ -15,12 +15,14 @@ use parser::ast::ASTNode;
 
 mod parser;
 
+// TODO: void return type
 // TODO: intrinsic for calling memcpy
 // TODO: proper importing and exporting of functions
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeData
 {
+    //Void,
     Primitive,
     Struct(Vec<(String, Type, usize)>), // property name, property type, location within struct
     Pointer(Box<Type>),
@@ -53,6 +55,19 @@ impl ToString for Type
 
 impl Type
 {
+    fn to_string_rusttype(&self) -> String
+    {
+        match &self.data
+        {
+            TypeData::Primitive => self.name.clone(),
+            TypeData::Pointer(inner) => format!("*mut {}", inner.to_string_rusttype()),
+            TypeData::VirtualPointer(inner) => format!("<unrepresented>"),
+            TypeData::Array(inner, size) => format!("<unrepresented>"),
+            TypeData::Struct(_) => format!("*mut core::ffi::c_void"),
+            TypeData::FuncPointer(sig) => sig.to_string_rusttype(),
+        }
+    }
+    
     pub (crate) fn visit(&self, f : &mut dyn FnMut(&Type) -> bool)
     {
         if !f(self)
@@ -166,6 +181,12 @@ impl Type
     {
         ["u8", "u16", "u32", "u64"].contains(&self.name.as_str())
     }
+    /*
+    fn is_void(&self) -> bool
+    {
+        matches!(self.data, TypeData::Void)
+    }
+    */
     fn from_functionsig(funcsig : &FunctionSig) -> Type
     {
         Type { name : "funcptr".to_string(), data : TypeData::FuncPointer(Box::new(funcsig.clone())) }
@@ -264,7 +285,6 @@ impl Type
         self.to_cranetype().map(|x| AbiParam::new(x))
     }
 }
-    
 fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, String>
 {
     match (node.is_parent(), node.text.as_str())
@@ -361,6 +381,21 @@ impl ToString for FunctionSig
 }
 impl FunctionSig
 {
+    fn to_string_rusttype(&self) -> String
+    {
+        let return_type = self.return_type.to_string_rusttype();
+        let mut args = String::new();
+        let arg_count = self.args.len();
+        for (i, arg) in self.args.iter().enumerate()
+        {
+            args += &arg.to_string_rusttype();
+            if i+1 < arg_count
+            {
+                args += ", ";
+            }
+        }
+        format!("unsafe extern \"C\" fn({}) -> {}", args, return_type)
+    }
     fn to_signature<T : Module>(&self, module : &T) -> Signature
     {
         let mut signature = module.make_signature();
@@ -1100,7 +1135,7 @@ fn main()
                         }
                         else
                         {
-                            //println!("unsupported bitcast from type {} to type {} (types must have the same size to be bitcasted)", left_type.to_string(), right_type.to_string());
+                            panic!("error: unsupported bitcast from type {} to type {} (types must have the same size to be bitcasted)", left_type.to_string(), right_type.to_string());
                         }
                     }
                     "cast" =>
@@ -1361,45 +1396,41 @@ fn main()
     }
     module.finalize_definitions().unwrap();
     
-    /*
-    macro_rules! do_call {
-        ($(($b:ty) ($a:expr)),* -> $r:ty) =>
-        (
-        
-        );
-    }
-    */
+    let mut func_pointers = BTreeMap::new();
     
     for (f_name, (id, _, _, _, _)) in func_decs.iter()
     {
         let code = module.get_finalized_function(*id);
-        // FIXME: SAFETY: use actual function signature
-        let func = unsafe
+        func_pointers.insert(f_name, code);
+    }
+    
+    macro_rules! get_funcptr {
+        ($name:expr, $T:ty) =>
         {
-            core::mem::transmute::<_, unsafe extern "C" fn(f32, f32) -> f32>(code)
-        };
-        let a = 3.14;
-        let b = 150.0012;
-        // FIXME: SAFETY: WARNING: EVIL: THIS INVOKES UB BECAUSE WE DON'T CHECK FUNCTION SIGNATURES
-        unsafe
-        {
-            let start = std::time::Instant::now();
-            println!("running function {}...", f_name);
-            println!("{}({}, {}) = {}", f_name, a, b, func(a, b));
-            let elapsed_time = start.elapsed();
-            println!("time: {}", elapsed_time.as_secs_f64());
-        }
-        // dump code to console for later manual disassembly
-        /*
-        unsafe
-        {
-            let mut ptr : *mut u8 = core::mem::transmute::<_, _>(code);
-            while true
+            unsafe
             {
-                print!("{:02X} ", *ptr);
-                ptr = ptr.offset(1);
+                let dec = func_decs.get(&$name.to_string()).unwrap();
+                let sig = &dec.1;
+                let type_ = Type::from_functionsig(sig);
+                let type_string = type_.to_string_rusttype();
+                
+                let want_type_string = std::any::type_name::<$T>(); // FIXME: not guaranteed to be stable across rust versions
+                assert!(want_type_string == type_string, "types do not match:\n{}\n{}\n", want_type_string, type_string);
+                
+                core::mem::transmute::<_, $T>(*func_pointers.get(&$name.to_string()).unwrap())
             }
         }
-        */
+    }
+    
+    let gravity = get_funcptr!("func_gravity", unsafe extern "C" fn() -> f32);
+    
+    unsafe
+    {
+        let start = std::time::Instant::now();
+        println!("running func_gravity...");
+        let out = gravity();
+        println!("func_gravity() = {}", out);
+        let elapsed_time = start.elapsed();
+        println!("time: {}", elapsed_time.as_secs_f64());
     }
 }
