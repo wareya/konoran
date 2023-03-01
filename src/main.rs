@@ -15,9 +15,6 @@ use parser::ast::ASTNode;
 
 mod parser;
 
-// TODO: intrinsic for calling memcpy
-// TODO: proper importing of functions
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeData
 {
@@ -785,6 +782,87 @@ fn main()
                             compile(env, child, want_pointer);
                         }
                     }
+                    "intrinsic_memcmp" =>
+                    {
+                        compile(env, node.child(0).unwrap(), WantPointer::None);
+                        compile(env, node.child(1).unwrap(), WantPointer::None);
+                        compile(env, node.child(2).unwrap(), WantPointer::None);
+                        
+                        let (  len_type,   len_val) = env.stack.pop().unwrap();
+                        let (right_type, right_val) = env.stack.pop().unwrap();
+                        let ( left_type,  left_val) = env.stack.pop().unwrap();
+                        
+                        if left_type.is_pointer() && right_type.is_pointer() && len_type.name == "u64"
+                        {
+                            let config = env.module.target_config();
+                            let value = env.builder.call_memcmp(config, left_val, right_val, len_val);
+                            env.stack.push((env.types.get("i32").unwrap().clone(), value));
+                        }
+                        else
+                        {
+                            panic!("incompatible types for intrinsic_memcpy (must be ptr, ptr, u64)");
+                        }
+                    }
+                    "intrinsic_memset" =>
+                    {
+                        compile(env, node.child(0).unwrap(), WantPointer::None);
+                        compile(env, node.child(1).unwrap(), WantPointer::None);
+                        compile(env, node.child(2).unwrap(), WantPointer::None);
+                        
+                        let (  val_type,   val_val) = env.stack.pop().unwrap();
+                        let (right_type, right_val) = env.stack.pop().unwrap();
+                        let ( left_type,  left_val) = env.stack.pop().unwrap();
+                        
+                        if left_type.is_pointer() && right_type.is_pointer() && val_type.name == "u8"
+                        {
+                            let config = env.module.target_config();
+                            env.builder.call_memset(config, left_val, right_val, val_val);
+                        }
+                        else
+                        {
+                            panic!("incompatible types for intrinsic_memset (must be ptr, ptr, u8)");
+                        }
+                    }
+                    "call_memcpy" =>
+                    {
+                        compile(env, node.child(0).unwrap(), WantPointer::None);
+                        compile(env, node.child(1).unwrap(), WantPointer::None);
+                        compile(env, node.child(2).unwrap(), WantPointer::None);
+                        
+                        let ( size_type,  size_val) = env.stack.pop().unwrap();
+                        let (right_type, right_val) = env.stack.pop().unwrap();
+                        let ( left_type,  left_val) = env.stack.pop().unwrap();
+                        
+                        if left_type.is_pointer() && right_type.is_pointer() && size_type.name == "u64"
+                        {
+                            let config = env.module.target_config();
+                            env.builder.call_memcpy(config, left_val, right_val, size_val);
+                        }
+                        else
+                        {
+                            panic!("incompatible types for call_memcpy (must be ptr, ptr, u64)");
+                        }
+                    }
+                    "call_memmove" =>
+                    {
+                        compile(env, node.child(0).unwrap(), WantPointer::None);
+                        compile(env, node.child(1).unwrap(), WantPointer::None);
+                        compile(env, node.child(2).unwrap(), WantPointer::None);
+                        
+                        let ( size_type,  size_val) = env.stack.pop().unwrap();
+                        let (right_type, right_val) = env.stack.pop().unwrap();
+                        let ( left_type,  left_val) = env.stack.pop().unwrap();
+                        
+                        if left_type.is_pointer() && right_type.is_pointer() && size_type.name == "u64"
+                        {
+                            let config = env.module.target_config();
+                            env.builder.call_memmove(config, left_val, right_val, size_val);
+                        }
+                        else
+                        {
+                            panic!("incompatible types for call_memmove (must be ptr, ptr, u64)");
+                        }
+                    }
                     "return" =>
                     {
                         let mut returns = Vec::new();
@@ -1220,7 +1298,7 @@ fn main()
                     "cast" =>
                     {
                         compile(env, node.child(0).unwrap(), WantPointer::None);
-                        let (left_type, left_val)  = env.stack.pop().unwrap();
+                        let (left_type, left_val) = env.stack.pop().unwrap();
                         
                         let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
                         
@@ -1228,7 +1306,12 @@ fn main()
                         // cast as own type (do nothing)
                         if left_type.name == right_type.name
                         {
-                            env.stack.push((left_type, left_val));
+                            env.stack.push((right_type, left_val));
+                        }
+                        // cast from pointer to pointer
+                        else if left_type.is_pointer() && right_type.is_pointer()
+                        {
+                            env.stack.push((right_type, left_val));
                         }
                         // cast between float types"
                         else if left_type.name == "f32" && right_type.name == "f64"
