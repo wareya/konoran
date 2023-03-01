@@ -84,3 +84,13 @@ head:
     return (y as f32);
 }
 
+void returns_void(f32 a)
+{
+    a = a;
+    return;
+}
+
+void void_ptr_arg(ptr(void) a)
+{
+    return;
+}

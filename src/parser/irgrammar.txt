@@ -33,6 +33,7 @@ array_type: HIDELITERALS
 array ( $type$ , $integer_token$ )
 
 fundamental_type: TOKEN
+void
 u8
 i8
 u16

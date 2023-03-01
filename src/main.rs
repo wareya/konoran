@@ -17,12 +17,12 @@ mod parser;
 
 // TODO: void return type
 // TODO: intrinsic for calling memcpy
-// TODO: proper importing and exporting of functions
+// TODO: proper importing of functions
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeData
 {
-    //Void,
+    Void,
     Primitive,
     Struct(Vec<(String, Type, usize)>), // property name, property type, location within struct
     Pointer(Box<Type>),
@@ -43,6 +43,7 @@ impl ToString for Type
     {
         match &self.data
         {
+            TypeData::Void => self.name.clone(),
             TypeData::Primitive => self.name.clone(),
             TypeData::Pointer(inner) => format!("ptr({})", inner.to_string()),
             TypeData::VirtualPointer(inner) => format!("vptr({})", inner.to_string()),
@@ -55,12 +56,13 @@ impl ToString for Type
 
 impl Type
 {
-    fn to_string_rusttype(&self) -> String
+    fn to_string_rusttype(&self, is_ptr : bool) -> String
     {
         match &self.data
         {
+            TypeData::Void => if is_ptr { "core::ffi::c_void" } else { "()" }.to_string(),
             TypeData::Primitive => self.name.clone(),
-            TypeData::Pointer(inner) => format!("*mut {}", inner.to_string_rusttype()),
+            TypeData::Pointer(inner) => format!("*mut {}", inner.to_string_rusttype(true)),
             TypeData::VirtualPointer(inner) => format!("<unrepresented>"),
             TypeData::Array(inner, size) => format!("<unrepresented>"),
             TypeData::Struct(_) => format!("*mut core::ffi::c_void"),
@@ -74,6 +76,7 @@ impl Type
         {
             match &self.data
             {
+                TypeData::Void => {}
                 TypeData::Primitive => {}
                 TypeData::Pointer(inner) =>
                 {
@@ -181,12 +184,10 @@ impl Type
     {
         ["u8", "u16", "u32", "u64"].contains(&self.name.as_str())
     }
-    /*
     fn is_void(&self) -> bool
     {
         matches!(self.data, TypeData::Void)
     }
-    */
     fn from_functionsig(funcsig : &FunctionSig) -> Type
     {
         Type { name : "funcptr".to_string(), data : TypeData::FuncPointer(Box::new(funcsig.clone())) }
@@ -195,6 +196,8 @@ impl Type
     {
         match self.name.as_str()
         {
+            "void" => 0,
+            
             "u8"  => 1,
             "u16" => 2,
             "u32" => 4,
@@ -254,6 +257,8 @@ impl Type
         {
             match self.name.as_str()
             {
+                "void" => panic!("tried to use expression of type void; void expressions have no value"),
+                
                 "u8"  => Some(types::I8),
                 "u16" => Some(types::I16),
                 "u32" => Some(types::I32),
@@ -335,6 +340,10 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
             {
                 let count_text = &node.child(1).unwrap().child(0).unwrap().text;
                 let count : u64 = count_text.parse().unwrap();
+                if count * type_.size() as u64 == 0
+                {
+                    panic!("error: zero-size arrays are not allowed");
+                }
                 Ok(Type { name : "array".to_string(), data : TypeData::Array(Box::new(type_.clone()), count as usize) })
             }
             else
@@ -342,8 +351,13 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
                 res
             }
         }
+        (true, "ptr_type") =>
+        {
+            let res = parse_type(types, node.child(0).unwrap());
+            res.map(|x| x.to_ptr())
+        }
         // FIXME
-        (_, name) => Err(format!("error: non-fundemental types not yet supported (culprit: `{}`)", name)),
+        (_, name) => Err(format!("error: unsupported type (culprit: `{}`)", name)),
     }
 }
 
@@ -383,18 +397,25 @@ impl FunctionSig
 {
     fn to_string_rusttype(&self) -> String
     {
-        let return_type = self.return_type.to_string_rusttype();
+        let return_type = self.return_type.to_string_rusttype(false);
         let mut args = String::new();
         let arg_count = self.args.len();
         for (i, arg) in self.args.iter().enumerate()
         {
-            args += &arg.to_string_rusttype();
+            args += &arg.to_string_rusttype(false);
             if i+1 < arg_count
             {
                 args += ", ";
             }
         }
-        format!("unsafe extern \"C\" fn({}) -> {}", args, return_type)
+        if return_type == "()"
+        {
+            format!("unsafe extern \"C\" fn({})", args)
+        }
+        else
+        {
+            format!("unsafe extern \"C\" fn({}) -> {}", args, return_type)
+        }
     }
     fn to_signature<T : Module>(&self, module : &T) -> Signature
     {
@@ -402,6 +423,10 @@ impl FunctionSig
         
         for var_type in &self.args
         {
+            if var_type.is_void()
+            {
+                panic!("error: void function arguments are not allowed");
+            }
             let var_abi = var_type.to_abi();
             if var_abi.is_none()
             {
@@ -411,13 +436,16 @@ impl FunctionSig
             signature.params.push(var_abi.unwrap().clone());
         }
         
-        let return_abi = self.return_type.to_abi();
-        if return_abi.is_none()
+        if !self.return_type.is_void()
         {
-            let name = &self.return_type.name;
-            panic!("error: funcsig-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
+            let return_abi = self.return_type.to_abi();
+            if return_abi.is_none()
+            {
+                let name = &self.return_type.name;
+                panic!("error: funcsig-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", name, name);
+            }
+            signature.returns.push(return_abi.unwrap().clone());
         }
-        signature.returns.push(return_abi.unwrap().clone());
         //println!("made func sig {:?}", signature);
         signature
     }
@@ -454,6 +482,10 @@ impl Program
                     let prop_name = prop.child(1)?.child(0)?.text.clone();
                     if prop_name != "_" // for placeholders only
                     {
+                        if prop_type.name == "void"
+                        {
+                            panic!("error: void struct properties are not allowed");
+                        }
                         let align_size = prop_type.align_size();
                         let align = (2_u32.pow(if align_size > 1 { (align_size-1).ilog2() + 1 } else { 1 })) as usize;
                         //println!("align of {} is {}", prop_type.name, align);
@@ -502,6 +534,8 @@ fn main()
 {
     // only holds primitives and structs, not pointers or arrays, those are constructed dynamically
     let mut types = BTreeMap::new();
+    
+    types.insert("void".to_string(), Type { name : "void".to_string(), data : TypeData::Void });
     
     types.insert("u8" .to_string(), Type { name : "u8" .to_string(), data : TypeData::Primitive });
     types.insert("u16".to_string(), Type { name : "u16".to_string(), data : TypeData::Primitive });
@@ -624,6 +658,10 @@ fn main()
                 let var_name = node.child(1).unwrap().child(0).unwrap().text.clone();
                 let slot = builder.create_sized_stack_slot(StackSlotData { kind : StackSlotKind::ExplicitSlot, size : var_type.size() });
                 
+                if var_type.is_void()
+                {
+                    panic!("error: void variables are not allowed");
+                }
                 if variables.contains_key(&var_name) || func_decs.contains_key(&var_name)
                 {
                     panic!("error: variable or function {} shadowed or redeclared", var_name)
@@ -1039,6 +1077,10 @@ fn main()
                                     {
                                         //println!("---- * operator is real");
                                         let inner_type = type_.deref_ptr();
+                                        if inner_type.is_void()
+                                        {
+                                            panic!("can't dereference void pointers");
+                                        }
                                         let res = match op.as_str()
                                         {
                                             "*" => env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), val, 0),
@@ -1410,17 +1452,19 @@ fn main()
             unsafe
             {
                 let dec = func_decs.get(&$name.to_string()).unwrap();
-                let sig = &dec.1;
-                let type_ = Type::from_functionsig(sig);
-                let type_string = type_.to_string_rusttype();
+                let type_string = dec.1.to_string_rusttype();
                 
                 let want_type_string = std::any::type_name::<$T>(); // FIXME: not guaranteed to be stable across rust versions
                 assert!(want_type_string == type_string, "types do not match:\n{}\n{}\n", want_type_string, type_string);
+                assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
                 
                 core::mem::transmute::<_, $T>(*func_pointers.get(&$name.to_string()).unwrap())
             }
         }
     }
+    
+    let _ = get_funcptr!("returns_void", unsafe extern "C" fn(f32) -> ());
+    let _ = get_funcptr!("void_ptr_arg", unsafe extern "C" fn(*mut core::ffi::c_void) -> ());
     
     let gravity = get_funcptr!("func_gravity", unsafe extern "C" fn() -> f32);
     
