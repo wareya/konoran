@@ -15,7 +15,6 @@ use parser::ast::ASTNode;
 
 mod parser;
 
-// TODO: void return type
 // TODO: intrinsic for calling memcpy
 // TODO: proper importing of functions
 
