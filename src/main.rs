@@ -488,7 +488,7 @@ impl Program
                         }
                         let align_size = prop_type.align_size();
                         let align = (2_u32.pow(if align_size > 1 { (align_size-1).ilog2() + 1 } else { 1 })) as usize;
-                        //println!("align of {} is {}", prop_type.name, align);
+                        
                         if offset%align != 0
                         {
                             panic!("error: property {} of struct type {} is not aligned (should be aligned to {} bytes; actual offset was {}, for a misalignment of {} bytes)\nNOTE: add padding before this property like `array(u8, {}) _;`", prop_name, name, align, offset, offset%align, align - offset%align);
@@ -532,7 +532,6 @@ impl Program
 
 unsafe extern "C" fn print_bytes(bytes : *mut u8, count : u64) -> ()
 {
-    println!("pointer... {:?}", bytes);
     unsafe
     {
         for i in 0..count
@@ -540,6 +539,15 @@ unsafe extern "C" fn print_bytes(bytes : *mut u8, count : u64) -> ()
             print!("{:02X} ", *bytes.offset(i as isize));
         }
         print!("\n");
+    }
+}
+
+unsafe extern "C" fn malloc(size : u64) -> ()
+{
+    unsafe
+    {
+        let align = (2_u64.pow(if size > 1 { (size-1).ilog2() + 1 } else { 1 })) as usize;
+        std::alloc::Layout::from_size_align(size as usize, align);
     }
 }
 
@@ -1607,5 +1615,15 @@ fn main()
         println!("func_gravity() = {}", out);
         let elapsed_time = start.elapsed();
         println!("time: {}", elapsed_time.as_secs_f64());
+        
+        unsafe
+        {
+            let mut ptr : *mut u8 = core::mem::transmute::<_, _>(gravity);
+            while true
+            {
+                print!("{:02X}", *ptr);
+                ptr = ptr.offset(1);
+            }
+        }
     }
 }
