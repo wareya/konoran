@@ -551,6 +551,793 @@ unsafe extern "C" fn malloc(size : u64) -> ()
     }
 }
 
+struct Environment<'a, 'b, 'c, 'e>
+{
+    stack      : &'a mut Vec<(Type, Value)>,
+    variables  : &'a BTreeMap<String, (Type, StackSlot)>,
+    builder    : &'b mut FunctionBuilder<'c>,
+    module     : &'e mut JITModule,
+    funcrefs   : &'a BTreeMap<String, (FunctionSig, FuncRef)>,
+    types      : &'a BTreeMap<String, Type>,
+    blocks     : &'a BTreeMap<String, Block>,
+    next_block : &'a BTreeMap<Block, Block>,
+}
+
+#[derive(Clone, Debug, Copy, PartialEq)]
+enum WantPointer {
+    None,
+    Real,
+    Virtual,
+}
+
+fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : WantPointer)
+{
+    if node.is_parent()
+    {
+        match node.text.as_str()
+        {
+            "statementlist" | "statement" | "instruction" | "parenexpr" | "arrayindex" =>
+            {
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, want_pointer);
+                }
+            }
+            "intrinsic_memcmp" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                compile(env, node.child(1).unwrap(), WantPointer::None);
+                compile(env, node.child(2).unwrap(), WantPointer::None);
+                
+                let (  len_type,   len_val) = env.stack.pop().unwrap();
+                let (right_type, right_val) = env.stack.pop().unwrap();
+                let ( left_type,  left_val) = env.stack.pop().unwrap();
+                
+                if left_type.is_pointer() && right_type.is_pointer() && len_type.name == "u64"
+                {
+                    let config = env.module.target_config();
+                    let value = env.builder.call_memcmp(config, left_val, right_val, len_val);
+                    env.stack.push((env.types.get("i32").unwrap().clone(), value));
+                }
+                else
+                {
+                    panic!("incompatible types for intrinsic_memcpy (must be ptr, ptr, u64)");
+                }
+            }
+            "intrinsic_memset" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                compile(env, node.child(1).unwrap(), WantPointer::None);
+                compile(env, node.child(2).unwrap(), WantPointer::None);
+                
+                let (  val_type,   val_val) = env.stack.pop().unwrap();
+                let (right_type, right_val) = env.stack.pop().unwrap();
+                let ( left_type,  left_val) = env.stack.pop().unwrap();
+                
+                if left_type.is_pointer() && right_type.is_pointer() && val_type.name == "u8"
+                {
+                    let config = env.module.target_config();
+                    env.builder.call_memset(config, left_val, right_val, val_val);
+                }
+                else
+                {
+                    panic!("incompatible types for intrinsic_memset (must be ptr, ptr, u8)");
+                }
+            }
+            "call_memcpy" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                compile(env, node.child(1).unwrap(), WantPointer::None);
+                compile(env, node.child(2).unwrap(), WantPointer::None);
+                
+                let ( size_type,  size_val) = env.stack.pop().unwrap();
+                let (right_type, right_val) = env.stack.pop().unwrap();
+                let ( left_type,  left_val) = env.stack.pop().unwrap();
+                
+                if left_type.is_pointer() && right_type.is_pointer() && size_type.name == "u64"
+                {
+                    let config = env.module.target_config();
+                    env.builder.call_memcpy(config, left_val, right_val, size_val);
+                }
+                else
+                {
+                    panic!("incompatible types for call_memcpy (must be ptr, ptr, u64)");
+                }
+            }
+            "call_memmove" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                compile(env, node.child(1).unwrap(), WantPointer::None);
+                compile(env, node.child(2).unwrap(), WantPointer::None);
+                
+                let ( size_type,  size_val) = env.stack.pop().unwrap();
+                let (right_type, right_val) = env.stack.pop().unwrap();
+                let ( left_type,  left_val) = env.stack.pop().unwrap();
+                
+                if left_type.is_pointer() && right_type.is_pointer() && size_type.name == "u64"
+                {
+                    let config = env.module.target_config();
+                    env.builder.call_memmove(config, left_val, right_val, size_val);
+                }
+                else
+                {
+                    panic!("incompatible types for call_memmove (must be ptr, ptr, u64)");
+                }
+            }
+            "return" =>
+            {
+                let mut returns = Vec::new();
+                // FIXME: check types
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::None);
+                    returns.push(env.stack.pop().unwrap().1);
+                }
+                env.builder.ins().return_(&returns);
+            }
+            "declaration" =>
+            {
+                return;
+            }
+            "lvar" =>
+            {
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::Virtual);
+                }
+            }
+            "lvar_name" =>
+            {
+                let name = &node.child(0).unwrap().child(0).unwrap().text;
+                if env.variables.contains_key(name)
+                {
+                    let (type_, slot) = &env.variables[name];
+                    let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
+                    if want_pointer == WantPointer::Real
+                    {
+                        env.stack.push((type_.to_ptr(), addr));
+                    }
+                    else if want_pointer == WantPointer::Virtual
+                    {
+                        env.stack.push((type_.to_vptr(), addr));
+                    }
+                    else
+                    {
+                        panic!("internal error: lvar expression tried to return fully-evaluated form");
+                    }
+                }
+                else
+                {
+                    panic!("error: unrecognized variable `{}`", name);
+                }
+            }
+            "arrayindex_head" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                compile(env, node.child(1).unwrap(), WantPointer::None);
+                let (offset_type, offset_val) = env.stack.pop().unwrap();
+                let (base_type, base_addr) = env.stack.pop().unwrap();
+                
+                if offset_type.name == "i64"
+                {
+                    // TODO: do multi-level accesses in a single load operation instead of several
+                    // FIXME: double check that nested types work properly
+                    let inner_type = base_type.array_to_inner();
+                    let inner_size = inner_type.size();
+                    let inner_offset = env.builder.ins().imul_imm(offset_val, inner_size as i64);
+                    let inner_addr = env.builder.ins().iadd(base_addr, inner_offset);
+                    
+                    // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
+                    if want_pointer == WantPointer::Real
+                    {
+                        env.stack.push((inner_type.to_ptr(), inner_addr));
+                    }
+                    else if want_pointer == WantPointer::Virtual
+                    {
+                        env.stack.push((inner_type.to_vptr(), inner_addr));
+                    }
+                    else if inner_type.is_struct() || inner_type.is_array()
+                    {
+                        env.stack.push((inner_type.clone(), inner_addr));
+                    }
+                    else
+                    {
+                        let val = env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), inner_addr, 0);
+                        env.stack.push((inner_type.clone(), val));
+                    }
+                }
+                else
+                {
+                    panic!("error: can't offset into arrays except with type i64 (used type `{}`)", offset_type.name)
+                }
+            }
+            "indirection_head" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                let (struct_type, struct_addr) = env.stack.pop().unwrap();
+                
+                let right_name = &node.child(1).unwrap().child(0).unwrap().text;
+                
+                if let Some(found) = match &struct_type.data
+                {
+                    TypeData::Struct(ref props) =>
+                    {
+                        props.iter().find(|x| x.0 == *right_name)
+                    }
+                    _ => panic!("error: tried to use indirection (.) operator on non-struct"),
+                }
+                {
+                    // TODO: do multi-level struct accesses (e.g. mat.x_vec.x) in a single load operation instead of several
+                    // FIXME: double check that nested structs work properly
+                    let inner_type = &found.1;
+                    if want_pointer == WantPointer::Real
+                    {
+                        let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
+                        let inner_addr = env.builder.ins().iadd(struct_addr, offset);
+                        env.stack.push((inner_type.to_ptr(), inner_addr));
+                    }
+                    else if want_pointer == WantPointer::Virtual
+                    {
+                        let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
+                        let inner_addr = env.builder.ins().iadd(struct_addr, offset);
+                        env.stack.push((inner_type.to_vptr(), inner_addr));
+                    }
+                    else if inner_type.is_struct() || inner_type.is_array()
+                    {
+                        let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
+                        let inner_addr = env.builder.ins().iadd(struct_addr, offset);
+                        env.stack.push((inner_type.clone(), inner_addr));
+                    }
+                    else
+                    {
+                        let val = env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), struct_addr, found.2 as i32);
+                        env.stack.push((inner_type.clone(), val));
+                    }
+                }
+                else
+                {
+                    panic!("error: no such property {} in struct type {}", right_name, struct_type.name);
+                }
+            }
+            "binstate" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::Virtual);
+                compile(env, node.child(2).unwrap(), WantPointer::None);
+                
+                let (type_val, val) = env.stack.pop().unwrap();
+                let (type_left_ptr, left_addr) = env.stack.pop().unwrap();
+                
+                //println!("{:?}", (&type_val, &val, &type_left_ptr, &left_addr));
+                
+                if !type_left_ptr.is_virtual_pointer()
+                {
+                    panic!("tried to assign to fully evaluated expression (not a variable or pointer)");
+                }
+                let type_left = type_left_ptr.deref_vptr();
+                assert!(type_val == type_left);
+                env.builder.ins().store(MemFlags::trusted(), val, left_addr, 0);
+            }
+            "rvarname" =>
+            {
+                let name = &node.child(0).unwrap().text;
+                //println!("{}", name);
+                if env.variables.contains_key(name)
+                {
+                    let (type_, slot) = &env.variables[name];
+                    //println!("{:?}", (type_, slot));
+                    let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
+                    // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
+                    if want_pointer == WantPointer::Real
+                    {
+                        env.stack.push((type_.to_ptr(), addr));
+                    }
+                    else if want_pointer == WantPointer::Virtual
+                    {
+                        env.stack.push((type_.to_vptr(), addr));
+                    }
+                    else if type_.is_struct() || type_.is_array()
+                    {
+                        env.stack.push((type_.clone(), addr));
+                    }
+                    else
+                    {
+                        let val = env.builder.ins().load(type_.to_cranetype().unwrap(), MemFlags::trusted(), addr, 0);
+                        env.stack.push((type_.clone(), val));
+                    }
+                }
+                else if env.funcrefs.contains_key(name)
+                {
+                    let (funcsig, funcref) = env.funcrefs.get(name).unwrap();
+                    let funcaddr = env.builder.ins().func_addr(types::I64, *funcref);
+                    env.stack.push((Type::from_functionsig(funcsig), funcaddr));
+                }
+                else
+                {
+                    panic!("unrecognized identifier {}", name);
+                }
+            }
+            "funcargs_head" =>
+            {
+                //println!("compiling func call");
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                let (type_, funcaddr) = env.stack.pop().unwrap();
+                match type_.data
+                {
+                    TypeData::FuncPointer(funcsig) =>
+                    {
+                        let sig = funcsig.to_signature(&env.module);
+                        let sigref = env.builder.import_signature(sig);
+                        
+                        compile(env, node.child(1).unwrap(), WantPointer::None);
+                        let num_args = node.child(1).unwrap().child_count().unwrap();
+                        
+                        let mut args = Vec::new();
+                        for (i, arg_type) in funcsig.args.iter().rev().enumerate()
+                        {
+                            let (type_, val) = env.stack.pop().unwrap();
+                            if type_ != *arg_type
+                            {
+                                panic!("mismatched types for parameter {} in call to function: expected `{}`, got `{}`", i+1, arg_type.to_string(), type_.to_string());
+                            }
+                            args.push(val);
+                        }
+                        
+                        args.reverse();
+                        
+                        //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
+                        let inst = env.builder.ins().call_indirect(sigref, funcaddr, &args);
+                        let results = env.builder.inst_results(inst);
+                        //println!("number of results {}", results.len());
+                        for (result, type_) in results.iter().zip([funcsig.return_type])
+                        {
+                            env.stack.push((type_.clone(), *result));
+                        }
+                    }
+                    _ => panic!("tried to fall non-function expression as a function")
+                }
+                //println!("done compiling func call");
+            }
+            "funcargs" =>
+            {
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::None);
+                }
+            }
+            "float" =>
+            {
+                let text = &node.child(0).unwrap().text;
+                let location = text.rfind("f").unwrap();
+                let parts = text.split_at(location);
+                let text = parts.0;
+                match parts.1
+                {
+                    "f32" =>
+                    {
+                        let val : f32 = text.parse().unwrap();
+                        let res = env.builder.ins().f32const(val);
+                        env.stack.push((env.types.get("f32").unwrap().clone(), res));
+                    }
+                    "f64" =>
+                    {
+                        let val : f64 = text.parse().unwrap();
+                        let res = env.builder.ins().f64const(val);
+                        env.stack.push((env.types.get("f64").unwrap().clone(), res));
+                    }
+                    _ => panic!("unknown float suffix pattern {}", parts.1)
+                }
+            }
+            "integer" =>
+            {
+                let text = &node.child(0).unwrap().text;
+                let mut location = text.rfind("i");
+                if location.is_none()
+                {
+                    location = text.rfind("u");
+                }
+                if location.is_none()
+                {
+                    panic!("internal error: unknown integer type literal suffix");
+                }
+                let location = location.unwrap();
+                let parts = text.split_at(location);
+                let text = parts.0;
+                let res = match parts.1
+                {
+                    // FIXME: check if we need to use sign extension (probably don't)
+                    "u8"  => env.builder.ins().iconst(types::I8 , text.parse::<u8>() .unwrap() as i64),
+                    "u16" => env.builder.ins().iconst(types::I16, text.parse::<u16>().unwrap() as i64),
+                    "u32" => env.builder.ins().iconst(types::I32, text.parse::<u32>().unwrap() as i64),
+                    "u64" => env.builder.ins().iconst(types::I64, text.parse::<u64>().unwrap() as i64),
+                    "i8"  => env.builder.ins().iconst(types::I8 , text.parse::<i8>() .unwrap() as i64),
+                    "i16" => env.builder.ins().iconst(types::I16, text.parse::<i16>().unwrap() as i64),
+                    "i32" => env.builder.ins().iconst(types::I32, text.parse::<i32>().unwrap() as i64),
+                    "i64" => env.builder.ins().iconst(types::I64, text.parse::<i64>().unwrap() as i64),
+                    _ => panic!("unknown float suffix pattern {}", parts.1)
+                };
+                env.stack.push((env.types.get(parts.1).unwrap().clone(), res));
+            }
+            "unary" =>
+            {
+                let op = &node.child(0).unwrap().child(0).unwrap().text;
+                //println!("---- compiling unary operator `{}`", op);
+                if op.as_str() == "&"
+                {
+                    compile(env, node.child(1).unwrap(), WantPointer::Real);
+                    let (type_, val) = env.stack.pop().unwrap();
+                    if !type_.is_pointer()
+                    {
+                        panic!("error: tried to get address of non-variable");
+                    }
+                    env.stack.push((type_, val));
+                }
+                else
+                {
+                    compile(env, node.child(1).unwrap(), WantPointer::None);
+                    let (type_, val) = env.stack.pop().unwrap();
+                    match type_.name.as_str()
+                    {
+                        "ptr" =>
+                        {
+                            if want_pointer == WantPointer::Virtual
+                            {
+                                if op.as_str() != "*"
+                                {
+                                    panic!("error: can't use operator `{}` on type `{}`", op, type_.name);
+                                }
+                                env.stack.push((type_.deref_ptr().to_vptr(), val));
+                                //println!("---- * operator is virtual");
+                            }
+                            else
+                            {
+                                //println!("---- * operator is real");
+                                let inner_type = type_.deref_ptr();
+                                if inner_type.is_void()
+                                {
+                                    panic!("can't dereference void pointers");
+                                }
+                                let res = match op.as_str()
+                                {
+                                    "*" => env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), val, 0),
+                                    _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                                };
+                                env.stack.push((inner_type, res));
+                            }
+                        }
+                        "f32" | "f64" =>
+                        {
+                            let res = match op.as_str()
+                            {
+                                "+" => val,
+                                "-" => env.builder.ins().fneg(val),
+                                _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                            };
+                            env.stack.push((type_.clone(), res));
+                        }
+                        "i8" | "i16" | "i32" | "i64" |
+                        "u8" | "u16" | "u32" | "u64" =>
+                        {
+                            let res = match op.as_str()
+                            {
+                                "+" => val,
+                                "-" => env.builder.ins().ineg(val),
+                                "!" => env.builder.ins().icmp_imm(IntCC::Equal, val, 0),
+                                "~" => env.builder.ins().bnot(val),
+                                _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                            };
+                            env.stack.push((type_.clone(), res));
+                        }
+                        _ => panic!("error: type `{}` is not supported by unary operators", type_.name)
+                    }
+                }
+            }
+            "label" =>
+            {
+                let label = &node.child(0).unwrap().child(0).unwrap().text;
+                if let Some(block) = env.blocks.get(label)
+                {
+                    env.builder.ins().jump(*block, &[]);
+                    env.builder.switch_to_block(*block);
+                }
+                else
+                {
+                    panic!("error: no such block {}", label);
+                }
+            }
+            "ifcondition" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                let (type_, val)  = env.stack.pop().unwrap();
+                let label = &node.child(1).unwrap().child(0).unwrap().text;
+                // anonymous block for "else" case
+                let else_block = env.builder.create_block();
+                if let Some(then_block) = env.blocks.get(label)
+                {
+                    env.builder.ins().brif(val, *then_block, &[], else_block, &[]);
+                    env.builder.switch_to_block(else_block);
+                }
+                else
+                {
+                    panic!("error: no such label {}", label);
+                }
+            }
+            "goto" =>
+            {
+                let label = &node.child(0).unwrap().child(0).unwrap().text;
+                // anonymous block for any dead code between here and the next label
+                let dead_block = env.builder.create_block();
+                if let Some(block) = env.blocks.get(label)
+                {
+                    env.builder.ins().jump(*block, &[]);
+                    env.builder.switch_to_block(dead_block);
+                }
+                else
+                {
+                    panic!("error: no such label {}", label);
+                }
+            }
+            "bitcast" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                let (left_type, left_val)  = env.stack.pop().unwrap();
+                
+                let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
+                
+                let target_cranetype = right_type.to_cranetype().unwrap();
+                
+                // FIXME: platform-specific pointer size
+                if left_type.size() == right_type.size() || (right_type.size() == 8 && left_type.is_composite())
+                {
+                    let ret = env.builder.ins().bitcast(target_cranetype, MemFlags::new(), left_val);
+                    env.stack.push((right_type, ret));
+                }
+                else
+                {
+                    panic!("error: unsupported bitcast from type {} to type {} (types must have the same size to be bitcasted)", left_type.to_string(), right_type.to_string());
+                }
+            }
+            "cast" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                let (left_type, left_val) = env.stack.pop().unwrap();
+                
+                let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
+                
+                let target_cranetype = right_type.to_cranetype().unwrap();
+                // cast as own type (do nothing)
+                if left_type.name == right_type.name
+                {
+                    env.stack.push((right_type, left_val));
+                }
+                // cast from pointer to pointer
+                else if left_type.is_pointer() && right_type.is_pointer()
+                {
+                    env.stack.push((right_type, left_val));
+                }
+                // cast between float types"
+                else if left_type.name == "f32" && right_type.name == "f64"
+                {
+                    let ret = env.builder.ins().fpromote(target_cranetype, left_val);
+                    env.stack.push((right_type, ret));
+                }
+                else if left_type.name == "f64" && right_type.name == "f32"
+                {
+                    let ret = env.builder.ins().fdemote(target_cranetype, left_val);
+                    env.stack.push((right_type, ret));
+                }
+                // cast between types of same size, non-float. bitcast.
+                else if !left_type.is_float() && !right_type.is_float() && left_type.size() == right_type.size()
+                {
+                    let ret = env.builder.ins().bitcast(target_cranetype, MemFlags::new(), left_val);
+                    env.stack.push((right_type, ret));
+                }
+                // cast from float to int (must be int, not pointer)
+                else if left_type.is_int_signed() && right_type.is_float()
+                {
+                    let ret = env.builder.ins().fcvt_from_sint(target_cranetype, left_val);
+                    env.stack.push((right_type, ret));
+                }
+                else if left_type.is_int_unsigned() && right_type.is_float()
+                {
+                    let ret = env.builder.ins().fcvt_from_uint(target_cranetype, left_val);
+                    env.stack.push((right_type, ret));
+                }
+                // cast from int to float (must be int, not pointer)
+                else if left_type.is_float() && right_type.is_int_signed()
+                {
+                    let ret = env.builder.ins().fcvt_to_sint(target_cranetype, left_val);
+                    env.stack.push((right_type, ret));
+                }
+                else if left_type.is_float() && right_type.is_int_unsigned()
+                {
+                    let ret = env.builder.ins().fcvt_to_uint(target_cranetype, left_val);
+                    env.stack.push((right_type, ret));
+                }
+                // cast from smaller signed to larger unsigned
+                else if left_type.size() < right_type.size() && left_type.is_int_signed() && right_type.is_int_unsigned()
+                {
+                    let ret = env.builder.ins().sextend(target_cranetype, left_val);
+                    env.stack.push((right_type, ret));
+                }
+                // cast from smaller signed to larger unsigned
+                else if left_type.size() < right_type.size() && left_type.is_int_unsigned() && right_type.is_int_signed()
+                {
+                    let ret = env.builder.ins().uextend(target_cranetype, left_val);
+                    env.stack.push((right_type, ret));
+                }
+                // cast to smaller int type
+                else if left_type.size() < right_type.size() && left_type.is_int() && right_type.is_int()
+                {
+                    let ret = env.builder.ins().ireduce(target_cranetype, left_val);
+                    env.stack.push((right_type, ret));
+                }
+                else
+                {
+                    panic!("unsupported cast from type {} to type {}", left_type.to_string(), right_type.to_string());
+                }
+            }
+            text => 
+            {
+                if text.starts_with("binexpr")
+                {
+                    compile(env, node.child(0).unwrap(), WantPointer::None);
+                    compile(env, node.child(2).unwrap(), WantPointer::None);
+                    let op = &node.child(1).unwrap().child(0).unwrap().text;
+                    let (right_type, right_val)  = env.stack.pop().unwrap();
+                    let (left_type , left_val )  = env.stack.pop().unwrap();
+                    
+                    let is_u = left_type.name.starts_with("u");
+                    
+                    match (left_type.name.as_str(), right_type.name.as_str())
+                    {
+                        ("f32", "f32") | ("f64", "f64") =>
+                        {
+                            match op.as_str()
+                            {
+                                "+" | "-" | "*" | "/" | "%" =>
+                                {
+                                    let res = match op.as_str()
+                                    {
+                                        "+" => env.builder.ins().fadd(left_val, right_val),
+                                        "-" => env.builder.ins().fsub(left_val, right_val),
+                                        "*" => env.builder.ins().fmul(left_val, right_val),
+                                        "/" => env.builder.ins().fdiv(left_val, right_val),
+                                        "%" =>
+                                        {
+                                            let times = env.builder.ins().fdiv(left_val, right_val);
+                                            let floored = env.builder.ins().floor(times);
+                                            let n = env.builder.ins().fmul(floored, right_val);
+                                            env.builder.ins().fsub(left_val, n)
+                                        }
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    env.stack.push((left_type.clone(), res));
+                                }
+                                
+                                ">" | "<" | ">=" | "<=" | "==" | "!=" =>
+                                {
+                                    let cond = match op.as_str()
+                                    {
+                                        "==" => FloatCC::Equal,
+                                        "!=" => FloatCC::NotEqual,
+                                        "<"  => FloatCC::LessThan,
+                                        "<=" => FloatCC::LessThanOrEqual,
+                                        ">"  => FloatCC::GreaterThan,
+                                        ">=" => FloatCC::GreaterThanOrEqual,
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    let res = env.builder.ins().fcmp(cond, left_val, right_val);
+                                    env.stack.push((env.types.get("u8").unwrap().clone(), res));
+                                }
+                                
+                                _ => panic!("operator {} not supported on type {}", op, left_type.name)
+                            }
+                        }
+                        ("i8", "i8") | ("i16", "i16") | ("i32", "i32") | ("i64", "i64") |
+                        ("u8", "u8") | ("u16", "u16") | ("u32", "u32") | ("u64", "u64") =>
+                        {
+                            match op.as_str()
+                            {
+                                "&&" | "||" | "and" | "or" =>
+                                {
+                                    let left_bool  = env.builder.ins().icmp_imm(IntCC::NotEqual, left_val , 0);
+                                    let right_bool = env.builder.ins().icmp_imm(IntCC::NotEqual, right_val, 0);
+                                    
+                                    let res = match op.as_str()
+                                    {
+                                        "||" | "or"  => env.builder.ins().bor (left_bool, right_bool),
+                                        "&&" | "and" => env.builder.ins().band(left_bool, right_bool),
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    env.stack.push((env.types.get("u8").unwrap().clone(), res));
+                                }
+                                "|" | "&" | "^" =>
+                                {
+                                    let res = match op.as_str()
+                                    {
+                                        "|" => env.builder.ins().bor(left_val , right_val),
+                                        "&" => env.builder.ins().band(left_val, right_val),
+                                        "^" => env.builder.ins().bxor(left_val, right_val),
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    env.stack.push((left_type.clone(), res));
+                                }
+                                "+" | "-" | "*" | "/" | "%" =>
+                                {
+                                    let res = match op.as_str()
+                                    {
+                                        "+" => env.builder.ins().iadd(left_val, right_val),
+                                        "-" => env.builder.ins().isub(left_val, right_val),
+                                        "*" => env.builder.ins().imul(left_val, right_val),
+                                        "/" => if is_u
+                                        {
+                                            env.builder.ins().udiv(left_val, right_val)
+                                        }
+                                        else
+                                        {
+                                            env.builder.ins().sdiv(left_val, right_val)
+                                        },
+                                        "%" =>
+                                        {
+                                            let times = if is_u
+                                            {
+                                                env.builder.ins().udiv(left_val, right_val)
+                                            }
+                                            else
+                                            {
+                                                env.builder.ins().sdiv(left_val, right_val)
+                                            };
+                                            let n = env.builder.ins().imul(times, right_val);
+                                            env.builder.ins().isub(left_val, n)
+                                        }
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    env.stack.push((left_type.clone(), res));
+                                }
+                                
+                                ">" | "<" | ">=" | "<=" | "==" | "!=" =>
+                                {
+                                    let cond = match op.as_str()
+                                    {
+                                        "==" => IntCC::Equal,
+                                        "!=" => IntCC::NotEqual,
+                                        "<"  => IntCC::SignedLessThan,
+                                        "<=" => IntCC::SignedLessThanOrEqual,
+                                        ">"  => IntCC::SignedGreaterThan,
+                                        ">=" => IntCC::SignedGreaterThanOrEqual,
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    let res = env.builder.ins().icmp(cond, left_val, right_val);
+                                    env.stack.push((env.types.get("u8").unwrap().clone(), res));
+                                }
+                                
+                                _ => panic!("operator {} not supported on type {}", op, left_type.name)
+                            }
+                        }
+                        _ => panic!("unhandled type pair `{}`, `{}`", left_type.name, right_type.name)
+                    }
+                }
+                else
+                {
+                    panic!("unhandled AST node {}", text);
+                }
+            }
+        }
+    }
+    else
+    {
+        /*
+        match node.text.as_str()
+        {
+            "name" =>
+            {
+                let var = variables[node.child(0).unwrap()]
+                builder.use_var()
+            }
+        }*/
+    }
+}
+
 fn main()
 {
     // only holds primitives and structs, not pointers or arrays, those are constructed dynamically
@@ -635,6 +1422,8 @@ fn main()
     let mut ctx = module.make_context();
     
     let mut func_decs = BTreeMap::new();
+    let mut func_sizes = BTreeMap::new();
+    let mut func_disasm = BTreeMap::new();
     
     for (f_name, (pointer, funcsig)) in &imports
     {
@@ -653,6 +1442,7 @@ fn main()
     
     for f in &program.funcs
     {
+        ctx.want_disasm = true;
         
         let f_name = f.0;
         let function = f.1;
@@ -755,795 +1545,10 @@ fn main()
             false
         });
         
-        struct Environment<'a, 'b, 'c, 'e>
-        {
-            stack      : &'a mut Vec<(Type, Value)>,
-            variables  : &'a BTreeMap<String, (Type, StackSlot)>,
-            builder    : &'b mut FunctionBuilder<'c>,
-            module     : &'e mut JITModule,
-            funcrefs   : &'a BTreeMap<String, (FunctionSig, FuncRef)>,
-            types      : &'a BTreeMap<String, Type>,
-            blocks     : &'a BTreeMap<String, Block>,
-            next_block : &'a BTreeMap<Block, Block>,
-        }
-        
-        #[derive(Clone, Debug, Copy, PartialEq)]
-        enum WantPointer {
-            None,
-            Real,
-            Virtual,
-        }
-        
         let mut stack = Vec::new();
         
         let mut env = Environment { stack : &mut stack, variables : &variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types, blocks : &blocks, next_block : &next_block };
-        fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : WantPointer)
-        {
-            if node.is_parent()
-            {
-                match node.text.as_str()
-                {
-                    "statementlist" | "statement" | "instruction" | "parenexpr" | "arrayindex" =>
-                    {
-                        for child in node.get_children().unwrap()
-                        {
-                            compile(env, child, want_pointer);
-                        }
-                    }
-                    "intrinsic_memcmp" =>
-                    {
-                        compile(env, node.child(0).unwrap(), WantPointer::None);
-                        compile(env, node.child(1).unwrap(), WantPointer::None);
-                        compile(env, node.child(2).unwrap(), WantPointer::None);
-                        
-                        let (  len_type,   len_val) = env.stack.pop().unwrap();
-                        let (right_type, right_val) = env.stack.pop().unwrap();
-                        let ( left_type,  left_val) = env.stack.pop().unwrap();
-                        
-                        if left_type.is_pointer() && right_type.is_pointer() && len_type.name == "u64"
-                        {
-                            let config = env.module.target_config();
-                            let value = env.builder.call_memcmp(config, left_val, right_val, len_val);
-                            env.stack.push((env.types.get("i32").unwrap().clone(), value));
-                        }
-                        else
-                        {
-                            panic!("incompatible types for intrinsic_memcpy (must be ptr, ptr, u64)");
-                        }
-                    }
-                    "intrinsic_memset" =>
-                    {
-                        compile(env, node.child(0).unwrap(), WantPointer::None);
-                        compile(env, node.child(1).unwrap(), WantPointer::None);
-                        compile(env, node.child(2).unwrap(), WantPointer::None);
-                        
-                        let (  val_type,   val_val) = env.stack.pop().unwrap();
-                        let (right_type, right_val) = env.stack.pop().unwrap();
-                        let ( left_type,  left_val) = env.stack.pop().unwrap();
-                        
-                        if left_type.is_pointer() && right_type.is_pointer() && val_type.name == "u8"
-                        {
-                            let config = env.module.target_config();
-                            env.builder.call_memset(config, left_val, right_val, val_val);
-                        }
-                        else
-                        {
-                            panic!("incompatible types for intrinsic_memset (must be ptr, ptr, u8)");
-                        }
-                    }
-                    "call_memcpy" =>
-                    {
-                        compile(env, node.child(0).unwrap(), WantPointer::None);
-                        compile(env, node.child(1).unwrap(), WantPointer::None);
-                        compile(env, node.child(2).unwrap(), WantPointer::None);
-                        
-                        let ( size_type,  size_val) = env.stack.pop().unwrap();
-                        let (right_type, right_val) = env.stack.pop().unwrap();
-                        let ( left_type,  left_val) = env.stack.pop().unwrap();
-                        
-                        if left_type.is_pointer() && right_type.is_pointer() && size_type.name == "u64"
-                        {
-                            let config = env.module.target_config();
-                            env.builder.call_memcpy(config, left_val, right_val, size_val);
-                        }
-                        else
-                        {
-                            panic!("incompatible types for call_memcpy (must be ptr, ptr, u64)");
-                        }
-                    }
-                    "call_memmove" =>
-                    {
-                        compile(env, node.child(0).unwrap(), WantPointer::None);
-                        compile(env, node.child(1).unwrap(), WantPointer::None);
-                        compile(env, node.child(2).unwrap(), WantPointer::None);
-                        
-                        let ( size_type,  size_val) = env.stack.pop().unwrap();
-                        let (right_type, right_val) = env.stack.pop().unwrap();
-                        let ( left_type,  left_val) = env.stack.pop().unwrap();
-                        
-                        if left_type.is_pointer() && right_type.is_pointer() && size_type.name == "u64"
-                        {
-                            let config = env.module.target_config();
-                            env.builder.call_memmove(config, left_val, right_val, size_val);
-                        }
-                        else
-                        {
-                            panic!("incompatible types for call_memmove (must be ptr, ptr, u64)");
-                        }
-                    }
-                    "return" =>
-                    {
-                        let mut returns = Vec::new();
-                        // FIXME: check types
-                        for child in node.get_children().unwrap()
-                        {
-                            compile(env, child, WantPointer::None);
-                            returns.push(env.stack.pop().unwrap().1);
-                        }
-                        env.builder.ins().return_(&returns);
-                    }
-                    "declaration" =>
-                    {
-                        return;
-                    }
-                    "lvar" =>
-                    {
-                        for child in node.get_children().unwrap()
-                        {
-                            compile(env, child, WantPointer::Virtual);
-                        }
-                    }
-                    "lvar_name" =>
-                    {
-                        let name = &node.child(0).unwrap().child(0).unwrap().text;
-                        if env.variables.contains_key(name)
-                        {
-                            let (type_, slot) = &env.variables[name];
-                            let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
-                            if want_pointer == WantPointer::Real
-                            {
-                                env.stack.push((type_.to_ptr(), addr));
-                            }
-                            else if want_pointer == WantPointer::Virtual
-                            {
-                                env.stack.push((type_.to_vptr(), addr));
-                            }
-                            else
-                            {
-                                panic!("internal error: lvar expression tried to return fully-evaluated form");
-                            }
-                        }
-                        else
-                        {
-                            panic!("error: unrecognized variable `{}`", name);
-                        }
-                    }
-                    "arrayindex_head" =>
-                    {
-                        compile(env, node.child(0).unwrap(), WantPointer::None);
-                        compile(env, node.child(1).unwrap(), WantPointer::None);
-                        let (offset_type, offset_val) = env.stack.pop().unwrap();
-                        let (base_type, base_addr) = env.stack.pop().unwrap();
-                        
-                        if offset_type.name == "i64"
-                        {
-                            // TODO: do multi-level accesses in a single load operation instead of several
-                            // FIXME: double check that nested types work properly
-                            let inner_type = base_type.array_to_inner();
-                            let inner_size = inner_type.size();
-                            let inner_offset = env.builder.ins().imul_imm(offset_val, inner_size as i64);
-                            let inner_addr = env.builder.ins().iadd(base_addr, inner_offset);
-                            
-                            // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
-                            if want_pointer == WantPointer::Real
-                            {
-                                env.stack.push((inner_type.to_ptr(), inner_addr));
-                            }
-                            else if want_pointer == WantPointer::Virtual
-                            {
-                                env.stack.push((inner_type.to_vptr(), inner_addr));
-                            }
-                            else if inner_type.is_struct() || inner_type.is_array()
-                            {
-                                env.stack.push((inner_type.clone(), inner_addr));
-                            }
-                            else
-                            {
-                                let val = env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), inner_addr, 0);
-                                env.stack.push((inner_type.clone(), val));
-                            }
-                        }
-                        else
-                        {
-                            panic!("error: can't offset into arrays except with type i64 (used type `{}`)", offset_type.name)
-                        }
-                    }
-                    "indirection_head" =>
-                    {
-                        compile(env, node.child(0).unwrap(), WantPointer::None);
-                        let (struct_type, struct_addr) = env.stack.pop().unwrap();
-                        
-                        let right_name = &node.child(1).unwrap().child(0).unwrap().text;
-                        
-                        if let Some(found) = match &struct_type.data
-                        {
-                            TypeData::Struct(ref props) =>
-                            {
-                                props.iter().find(|x| x.0 == *right_name)
-                            }
-                            _ => panic!("error: tried to use indirection (.) operator on non-struct"),
-                        }
-                        {
-                            // TODO: do multi-level struct accesses (e.g. mat.x_vec.x) in a single load operation instead of several
-                            // FIXME: double check that nested structs work properly
-                            let inner_type = &found.1;
-                            if want_pointer == WantPointer::Real
-                            {
-                                let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
-                                let inner_addr = env.builder.ins().iadd(struct_addr, offset);
-                                env.stack.push((inner_type.to_ptr(), inner_addr));
-                            }
-                            else if want_pointer == WantPointer::Virtual
-                            {
-                                let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
-                                let inner_addr = env.builder.ins().iadd(struct_addr, offset);
-                                env.stack.push((inner_type.to_vptr(), inner_addr));
-                            }
-                            else if inner_type.is_struct() || inner_type.is_array()
-                            {
-                                let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
-                                let inner_addr = env.builder.ins().iadd(struct_addr, offset);
-                                env.stack.push((inner_type.clone(), inner_addr));
-                            }
-                            else
-                            {
-                                let val = env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), struct_addr, found.2 as i32);
-                                env.stack.push((inner_type.clone(), val));
-                            }
-                        }
-                        else
-                        {
-                            panic!("error: no such property {} in struct type {}", right_name, struct_type.name);
-                        }
-                    }
-                    "binstate" =>
-                    {
-                        compile(env, node.child(0).unwrap(), WantPointer::Virtual);
-                        compile(env, node.child(2).unwrap(), WantPointer::None);
-                        
-                        let (type_val, val) = env.stack.pop().unwrap();
-                        let (type_left_ptr, left_addr) = env.stack.pop().unwrap();
-                        
-                        //println!("{:?}", (&type_val, &val, &type_left_ptr, &left_addr));
-                        
-                        if !type_left_ptr.is_virtual_pointer()
-                        {
-                            panic!("tried to assign to fully evaluated expression (not a variable or pointer)");
-                        }
-                        let type_left = type_left_ptr.deref_vptr();
-                        assert!(type_val == type_left);
-                        env.builder.ins().store(MemFlags::trusted(), val, left_addr, 0);
-                    }
-                    "rvarname" =>
-                    {
-                        let name = &node.child(0).unwrap().text;
-                        //println!("{}", name);
-                        if env.variables.contains_key(name)
-                        {
-                            let (type_, slot) = &env.variables[name];
-                            //println!("{:?}", (type_, slot));
-                            let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
-                            // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
-                            if want_pointer == WantPointer::Real
-                            {
-                                env.stack.push((type_.to_ptr(), addr));
-                            }
-                            else if want_pointer == WantPointer::Virtual
-                            {
-                                env.stack.push((type_.to_vptr(), addr));
-                            }
-                            else if type_.is_struct() || type_.is_array()
-                            {
-                                env.stack.push((type_.clone(), addr));
-                            }
-                            else
-                            {
-                                let val = env.builder.ins().load(type_.to_cranetype().unwrap(), MemFlags::trusted(), addr, 0);
-                                env.stack.push((type_.clone(), val));
-                            }
-                        }
-                        else if env.funcrefs.contains_key(name)
-                        {
-                            let (funcsig, funcref) = env.funcrefs.get(name).unwrap();
-                            let funcaddr = env.builder.ins().func_addr(types::I64, *funcref);
-                            env.stack.push((Type::from_functionsig(funcsig), funcaddr));
-                        }
-                        else
-                        {
-                            panic!("unrecognized identifier {}", name);
-                        }
-                    }
-                    "funcargs_head" =>
-                    {
-                        //println!("compiling func call");
-                        compile(env, node.child(0).unwrap(), WantPointer::None);
-                        let (type_, funcaddr) = env.stack.pop().unwrap();
-                        match type_.data
-                        {
-                            TypeData::FuncPointer(funcsig) =>
-                            {
-                                let sig = funcsig.to_signature(&env.module);
-                                let sigref = env.builder.import_signature(sig);
-                                
-                                compile(env, node.child(1).unwrap(), WantPointer::None);
-                                let num_args = node.child(1).unwrap().child_count().unwrap();
-                                
-                                let mut args = Vec::new();
-                                for (i, arg_type) in funcsig.args.iter().rev().enumerate()
-                                {
-                                    let (type_, val) = env.stack.pop().unwrap();
-                                    if type_ != *arg_type
-                                    {
-                                        panic!("mismatched types for parameter {} in call to function: expected `{}`, got `{}`", i+1, arg_type.to_string(), type_.to_string());
-                                    }
-                                    args.push(val);
-                                }
-                                
-                                args.reverse();
-                                
-                                //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
-                                let inst = env.builder.ins().call_indirect(sigref, funcaddr, &args);
-                                let results = env.builder.inst_results(inst);
-                                //println!("number of results {}", results.len());
-                                for (result, type_) in results.iter().zip([funcsig.return_type])
-                                {
-                                    env.stack.push((type_.clone(), *result));
-                                }
-                            }
-                            _ => panic!("tried to fall non-function expression as a function")
-                        }
-                        //println!("done compiling func call");
-                    }
-                    "funcargs" =>
-                    {
-                        for child in node.get_children().unwrap()
-                        {
-                            compile(env, child, WantPointer::None);
-                        }
-                    }
-                    "float" =>
-                    {
-                        let text = &node.child(0).unwrap().text;
-                        let location = text.rfind("f").unwrap();
-                        let parts = text.split_at(location);
-                        let text = parts.0;
-                        match parts.1
-                        {
-                            "f32" =>
-                            {
-                                let val : f32 = text.parse().unwrap();
-                                let res = env.builder.ins().f32const(val);
-                                env.stack.push((env.types.get("f32").unwrap().clone(), res));
-                            }
-                            "f64" =>
-                            {
-                                let val : f64 = text.parse().unwrap();
-                                let res = env.builder.ins().f64const(val);
-                                env.stack.push((env.types.get("f64").unwrap().clone(), res));
-                            }
-                            _ => panic!("unknown float suffix pattern {}", parts.1)
-                        }
-                    }
-                    "integer" =>
-                    {
-                        let text = &node.child(0).unwrap().text;
-                        let mut location = text.rfind("i");
-                        if location.is_none()
-                        {
-                            location = text.rfind("u");
-                        }
-                        if location.is_none()
-                        {
-                            panic!("internal error: unknown integer type literal suffix");
-                        }
-                        let location = location.unwrap();
-                        let parts = text.split_at(location);
-                        let text = parts.0;
-                        let res = match parts.1
-                        {
-                            // FIXME: check if we need to use sign extension (probably don't)
-                            "u8"  => env.builder.ins().iconst(types::I8 , text.parse::<u8>() .unwrap() as i64),
-                            "u16" => env.builder.ins().iconst(types::I16, text.parse::<u16>().unwrap() as i64),
-                            "u32" => env.builder.ins().iconst(types::I32, text.parse::<u32>().unwrap() as i64),
-                            "u64" => env.builder.ins().iconst(types::I64, text.parse::<u64>().unwrap() as i64),
-                            "i8"  => env.builder.ins().iconst(types::I8 , text.parse::<i8>() .unwrap() as i64),
-                            "i16" => env.builder.ins().iconst(types::I16, text.parse::<i16>().unwrap() as i64),
-                            "i32" => env.builder.ins().iconst(types::I32, text.parse::<i32>().unwrap() as i64),
-                            "i64" => env.builder.ins().iconst(types::I64, text.parse::<i64>().unwrap() as i64),
-                            _ => panic!("unknown float suffix pattern {}", parts.1)
-                        };
-                        env.stack.push((env.types.get(parts.1).unwrap().clone(), res));
-                    }
-                    "unary" =>
-                    {
-                        let op = &node.child(0).unwrap().child(0).unwrap().text;
-                        //println!("---- compiling unary operator `{}`", op);
-                        if op.as_str() == "&"
-                        {
-                            compile(env, node.child(1).unwrap(), WantPointer::Real);
-                            let (type_, val) = env.stack.pop().unwrap();
-                            if !type_.is_pointer()
-                            {
-                                panic!("error: tried to get address of non-variable");
-                            }
-                            env.stack.push((type_, val));
-                        }
-                        else
-                        {
-                            compile(env, node.child(1).unwrap(), WantPointer::None);
-                            let (type_, val) = env.stack.pop().unwrap();
-                            match type_.name.as_str()
-                            {
-                                "ptr" =>
-                                {
-                                    if want_pointer == WantPointer::Virtual
-                                    {
-                                        if op.as_str() != "*"
-                                        {
-                                            panic!("error: can't use operator `{}` on type `{}`", op, type_.name);
-                                        }
-                                        env.stack.push((type_.deref_ptr().to_vptr(), val));
-                                        //println!("---- * operator is virtual");
-                                    }
-                                    else
-                                    {
-                                        //println!("---- * operator is real");
-                                        let inner_type = type_.deref_ptr();
-                                        if inner_type.is_void()
-                                        {
-                                            panic!("can't dereference void pointers");
-                                        }
-                                        let res = match op.as_str()
-                                        {
-                                            "*" => env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), val, 0),
-                                            _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
-                                        };
-                                        env.stack.push((inner_type, res));
-                                    }
-                                }
-                                "f32" | "f64" =>
-                                {
-                                    let res = match op.as_str()
-                                    {
-                                        "+" => val,
-                                        "-" => env.builder.ins().fneg(val),
-                                        _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
-                                    };
-                                    env.stack.push((type_.clone(), res));
-                                }
-                                "i8" | "i16" | "i32" | "i64" |
-                                "u8" | "u16" | "u32" | "u64" =>
-                                {
-                                    let res = match op.as_str()
-                                    {
-                                        "+" => val,
-                                        "-" => env.builder.ins().ineg(val),
-                                        "!" => env.builder.ins().icmp_imm(IntCC::Equal, val, 0),
-                                        "~" => env.builder.ins().bnot(val),
-                                        _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
-                                    };
-                                    env.stack.push((type_.clone(), res));
-                                }
-                                _ => panic!("error: type `{}` is not supported by unary operators", type_.name)
-                            }
-                        }
-                    }
-                    "label" =>
-                    {
-                        let label = &node.child(0).unwrap().child(0).unwrap().text;
-                        if let Some(block) = env.blocks.get(label)
-                        {
-                            env.builder.ins().jump(*block, &[]);
-                            env.builder.switch_to_block(*block);
-                        }
-                        else
-                        {
-                            panic!("error: no such block {}", label);
-                        }
-                    }
-                    "ifcondition" =>
-                    {
-                        compile(env, node.child(0).unwrap(), WantPointer::None);
-                        let (type_, val)  = env.stack.pop().unwrap();
-                        let label = &node.child(1).unwrap().child(0).unwrap().text;
-                        // anonymous block for "else" case
-                        let else_block = env.builder.create_block();
-                        if let Some(then_block) = env.blocks.get(label)
-                        {
-                            env.builder.ins().brif(val, *then_block, &[], else_block, &[]);
-                            env.builder.switch_to_block(else_block);
-                        }
-                        else
-                        {
-                            panic!("error: no such label {}", label);
-                        }
-                    }
-                    "goto" =>
-                    {
-                        let label = &node.child(0).unwrap().child(0).unwrap().text;
-                        // anonymous block for any dead code between here and the next label
-                        let dead_block = env.builder.create_block();
-                        if let Some(block) = env.blocks.get(label)
-                        {
-                            env.builder.ins().jump(*block, &[]);
-                            env.builder.switch_to_block(dead_block);
-                        }
-                        else
-                        {
-                            panic!("error: no such label {}", label);
-                        }
-                    }
-                    "bitcast" =>
-                    {
-                        compile(env, node.child(0).unwrap(), WantPointer::None);
-                        let (left_type, left_val)  = env.stack.pop().unwrap();
-                        
-                        let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
-                        
-                        let target_cranetype = right_type.to_cranetype().unwrap();
-                        
-                        // FIXME: platform-specific pointer size
-                        if left_type.size() == right_type.size() || (right_type.size() == 8 && left_type.is_composite())
-                        {
-                            let ret = env.builder.ins().bitcast(target_cranetype, MemFlags::new(), left_val);
-                            env.stack.push((right_type, ret));
-                        }
-                        else
-                        {
-                            panic!("error: unsupported bitcast from type {} to type {} (types must have the same size to be bitcasted)", left_type.to_string(), right_type.to_string());
-                        }
-                    }
-                    "cast" =>
-                    {
-                        compile(env, node.child(0).unwrap(), WantPointer::None);
-                        let (left_type, left_val) = env.stack.pop().unwrap();
-                        
-                        let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
-                        
-                        let target_cranetype = right_type.to_cranetype().unwrap();
-                        // cast as own type (do nothing)
-                        if left_type.name == right_type.name
-                        {
-                            env.stack.push((right_type, left_val));
-                        }
-                        // cast from pointer to pointer
-                        else if left_type.is_pointer() && right_type.is_pointer()
-                        {
-                            env.stack.push((right_type, left_val));
-                        }
-                        // cast between float types"
-                        else if left_type.name == "f32" && right_type.name == "f64"
-                        {
-                            let ret = env.builder.ins().fpromote(target_cranetype, left_val);
-                            env.stack.push((right_type, ret));
-                        }
-                        else if left_type.name == "f64" && right_type.name == "f32"
-                        {
-                            let ret = env.builder.ins().fdemote(target_cranetype, left_val);
-                            env.stack.push((right_type, ret));
-                        }
-                        // cast between types of same size, non-float. bitcast.
-                        else if !left_type.is_float() && !right_type.is_float() && left_type.size() == right_type.size()
-                        {
-                            let ret = env.builder.ins().bitcast(target_cranetype, MemFlags::new(), left_val);
-                            env.stack.push((right_type, ret));
-                        }
-                        // cast from float to int (must be int, not pointer)
-                        else if left_type.is_int_signed() && right_type.is_float()
-                        {
-                            let ret = env.builder.ins().fcvt_from_sint(target_cranetype, left_val);
-                            env.stack.push((right_type, ret));
-                        }
-                        else if left_type.is_int_unsigned() && right_type.is_float()
-                        {
-                            let ret = env.builder.ins().fcvt_from_uint(target_cranetype, left_val);
-                            env.stack.push((right_type, ret));
-                        }
-                        // cast from int to float (must be int, not pointer)
-                        else if left_type.is_float() && right_type.is_int_signed()
-                        {
-                            let ret = env.builder.ins().fcvt_to_sint(target_cranetype, left_val);
-                            env.stack.push((right_type, ret));
-                        }
-                        else if left_type.is_float() && right_type.is_int_unsigned()
-                        {
-                            let ret = env.builder.ins().fcvt_to_uint(target_cranetype, left_val);
-                            env.stack.push((right_type, ret));
-                        }
-                        // cast from smaller signed to larger unsigned
-                        else if left_type.size() < right_type.size() && left_type.is_int_signed() && right_type.is_int_unsigned()
-                        {
-                            let ret = env.builder.ins().sextend(target_cranetype, left_val);
-                            env.stack.push((right_type, ret));
-                        }
-                        // cast from smaller signed to larger unsigned
-                        else if left_type.size() < right_type.size() && left_type.is_int_unsigned() && right_type.is_int_signed()
-                        {
-                            let ret = env.builder.ins().uextend(target_cranetype, left_val);
-                            env.stack.push((right_type, ret));
-                        }
-                        // cast to smaller int type
-                        else if left_type.size() < right_type.size() && left_type.is_int() && right_type.is_int()
-                        {
-                            let ret = env.builder.ins().ireduce(target_cranetype, left_val);
-                            env.stack.push((right_type, ret));
-                        }
-                        else
-                        {
-                            panic!("unsupported cast from type {} to type {}", left_type.to_string(), right_type.to_string());
-                        }
-                    }
-                    text => 
-                    {
-                        if text.starts_with("binexpr")
-                        {
-                            compile(env, node.child(0).unwrap(), WantPointer::None);
-                            compile(env, node.child(2).unwrap(), WantPointer::None);
-                            let op = &node.child(1).unwrap().child(0).unwrap().text;
-                            let (right_type, right_val)  = env.stack.pop().unwrap();
-                            let (left_type , left_val )  = env.stack.pop().unwrap();
-                            
-                            let is_u = left_type.name.starts_with("u");
-                            
-                            match (left_type.name.as_str(), right_type.name.as_str())
-                            {
-                                ("f32", "f32") | ("f64", "f64") =>
-                                {
-                                    match op.as_str()
-                                    {
-                                        "+" | "-" | "*" | "/" | "%" =>
-                                        {
-                                            let res = match op.as_str()
-                                            {
-                                                "+" => env.builder.ins().fadd(left_val, right_val),
-                                                "-" => env.builder.ins().fsub(left_val, right_val),
-                                                "*" => env.builder.ins().fmul(left_val, right_val),
-                                                "/" => env.builder.ins().fdiv(left_val, right_val),
-                                                "%" =>
-                                                {
-                                                    let times = env.builder.ins().fdiv(left_val, right_val);
-                                                    let floored = env.builder.ins().floor(times);
-                                                    let n = env.builder.ins().fmul(floored, right_val);
-                                                    env.builder.ins().fsub(left_val, n)
-                                                }
-                                                _ => panic!("internal error: operator mismatch")
-                                            };
-                                            env.stack.push((left_type.clone(), res));
-                                        }
-                                        
-                                        ">" | "<" | ">=" | "<=" | "==" | "!=" =>
-                                        {
-                                            let cond = match op.as_str()
-                                            {
-                                                "==" => FloatCC::Equal,
-                                                "!=" => FloatCC::NotEqual,
-                                                "<"  => FloatCC::LessThan,
-                                                "<=" => FloatCC::LessThanOrEqual,
-                                                ">"  => FloatCC::GreaterThan,
-                                                ">=" => FloatCC::GreaterThanOrEqual,
-                                                _ => panic!("internal error: operator mismatch")
-                                            };
-                                            let res = env.builder.ins().fcmp(cond, left_val, right_val);
-                                            env.stack.push((env.types.get("u8").unwrap().clone(), res));
-                                        }
-                                        
-                                        _ => panic!("operator {} not supported on type {}", op, left_type.name)
-                                    }
-                                }
-                                ("i8", "i8") | ("i16", "i16") | ("i32", "i32") | ("i64", "i64") |
-                                ("u8", "u8") | ("u16", "u16") | ("u32", "u32") | ("u64", "u64") =>
-                                {
-                                    match op.as_str()
-                                    {
-                                        "&&" | "||" | "and" | "or" =>
-                                        {
-                                            let left_bool  = env.builder.ins().icmp_imm(IntCC::NotEqual, left_val , 0);
-                                            let right_bool = env.builder.ins().icmp_imm(IntCC::NotEqual, right_val, 0);
-                                            
-                                            let res = match op.as_str()
-                                            {
-                                                "||" | "or"  => env.builder.ins().bor (left_bool, right_bool),
-                                                "&&" | "and" => env.builder.ins().band(left_bool, right_bool),
-                                                _ => panic!("internal error: operator mismatch")
-                                            };
-                                            env.stack.push((env.types.get("u8").unwrap().clone(), res));
-                                        }
-                                        "|" | "&" | "^" =>
-                                        {
-                                            let res = match op.as_str()
-                                            {
-                                                "|" => env.builder.ins().bor(left_val , right_val),
-                                                "&" => env.builder.ins().band(left_val, right_val),
-                                                "^" => env.builder.ins().bxor(left_val, right_val),
-                                                _ => panic!("internal error: operator mismatch")
-                                            };
-                                            env.stack.push((left_type.clone(), res));
-                                        }
-                                        "+" | "-" | "*" | "/" | "%" =>
-                                        {
-                                            let res = match op.as_str()
-                                            {
-                                                "+" => env.builder.ins().iadd(left_val, right_val),
-                                                "-" => env.builder.ins().isub(left_val, right_val),
-                                                "*" => env.builder.ins().imul(left_val, right_val),
-                                                "/" => if is_u
-                                                {
-                                                    env.builder.ins().udiv(left_val, right_val)
-                                                }
-                                                else
-                                                {
-                                                    env.builder.ins().sdiv(left_val, right_val)
-                                                },
-                                                "%" =>
-                                                {
-                                                    let times = if is_u
-                                                    {
-                                                        env.builder.ins().udiv(left_val, right_val)
-                                                    }
-                                                    else
-                                                    {
-                                                        env.builder.ins().sdiv(left_val, right_val)
-                                                    };
-                                                    let n = env.builder.ins().imul(times, right_val);
-                                                    env.builder.ins().isub(left_val, n)
-                                                }
-                                                _ => panic!("internal error: operator mismatch")
-                                            };
-                                            env.stack.push((left_type.clone(), res));
-                                        }
-                                        
-                                        ">" | "<" | ">=" | "<=" | "==" | "!=" =>
-                                        {
-                                            let cond = match op.as_str()
-                                            {
-                                                "==" => IntCC::Equal,
-                                                "!=" => IntCC::NotEqual,
-                                                "<"  => IntCC::SignedLessThan,
-                                                "<=" => IntCC::SignedLessThanOrEqual,
-                                                ">"  => IntCC::SignedGreaterThan,
-                                                ">=" => IntCC::SignedGreaterThanOrEqual,
-                                                _ => panic!("internal error: operator mismatch")
-                                            };
-                                            let res = env.builder.ins().icmp(cond, left_val, right_val);
-                                            env.stack.push((env.types.get("u8").unwrap().clone(), res));
-                                        }
-                                        
-                                        _ => panic!("operator {} not supported on type {}", op, left_type.name)
-                                    }
-                                }
-                                _ => panic!("unhandled type pair `{}`, `{}`", left_type.name, right_type.name)
-                            }
-                        }
-                        else
-                        {
-                            panic!("unhandled AST node {}", text);
-                        }
-                    }
-                }
-            }
-            else
-            {
-                /*
-                match node.text.as_str()
-                {
-                    "name" =>
-                    {
-                        let var = variables[node.child(0).unwrap()]
-                        builder.use_var()
-                    }
-                }*/
-            }
-        }
+        
         compile(&mut env, &function.body, WantPointer::None);
         
         builder.seal_all_blocks();
@@ -1560,7 +1565,24 @@ fn main()
         {
             panic!("{}", errors);
         }
-        //println!("function {} compiled with no errors!", function.name);
+        println!("function {} compiled with no errors!", function.name);
+        
+        let bytes = ctx.compiled_code().unwrap().code_buffer().clone();
+        let s = ctx.compiled_code().unwrap().code_info().total_size;
+        func_sizes.insert(f_name.clone(), s);
+        
+        let mut cs = module.isa().clone().to_capstone().unwrap();
+        cs.set_syntax(capstone::Syntax::Intel);
+        let dis = ctx.compiled_code().unwrap().disassemble(None, &cs).unwrap().clone();
+        func_disasm.insert(f_name.clone(), dis);
+        
+        println!("size... {}", s);
+        
+        for c in bytes
+        {
+            print!("{:02X}", c);
+        }
+        println!("");
         
         module.clear_context(&mut ctx);
     }
@@ -1619,11 +1641,14 @@ fn main()
         unsafe
         {
             let mut ptr : *mut u8 = core::mem::transmute::<_, _>(gravity);
-            while true
+            let size = *func_sizes.get("func_gravity").unwrap();
+            let bytes = std::slice::from_raw_parts(ptr, size as usize);
+            for c in bytes
             {
-                print!("{:02X}", *ptr);
-                ptr = ptr.offset(1);
+                print!("{:02X}", c);
             }
+            println!("");
+            println!("{}", func_disasm.get("func_gravity").unwrap());
         }
     }
 }
