@@ -12,3 +12,7 @@ cranelift-module = "0.97.1"
 cranelift-codegen = {version="0.97.1", features=["disas"]}
 regex = "1.7.1"
 capstone = "0.9"
+
+[profile.release]
+opt-level = 2
+debug = true

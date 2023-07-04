@@ -23,20 +23,17 @@ funcptr(f32, (f32)) r_add_one()
 
 f32 add(f32 a, f32 b)
 {
-    //Vec2 vec;
-    //vec.x = a;
-    //vec.y = b;
-    //a = vec.x + vec.y - 1.0f32;
-    f32 z;
-    
-    z = b;
+    Vec2 vec;
+    vec.x = a;
+    vec.y = b;
+    a = vec.x + vec.y - 1.0f32;
     
     array(f32, 2) list;
     list[0i64] = a;
     *(&(list[1i64])) = b;
     
-    return r_add_one()(list[0i64] + list[1i64]);
-    //return r_add_one()(a + b);
+    f32 asdf = r_add_one()(list[0i64] + list[1i64]);
+    return r_add_one()(a + b);
 }
 
 
@@ -58,17 +55,11 @@ loop_head:
 
 f32 func_gravity()
 {
-    u64 i;
-    f64 yvel;
-    f64 y;
-    f64 gravity;
-    f64 delta;
-    
-    i = 0u64;
-    yvel = 0.0f64;
-    y = 0.0f64;
-    delta = 0.0001f64;
-    gravity = 9.8f64;
+    u64 i = 0u64;
+    f64 yvel = 0.0f64;
+    f64 y = 0.0f64;
+    const f64 gravity = 9.8f64;
+    const f64 delta = 0.001f64;
     
 head:
     yvel = yvel + delta*gravity*0.5f64;
@@ -91,6 +82,15 @@ void returns_void(f32 a)
 
 void void_ptr_arg(ptr(void) a)
 {
+    return;
+}
+
+void array_literal()
+{
+    array(u8, 10) funtime = [16u8, 201u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8];
+    print_bytes((funtime bit_as ptr(u8)), 10u64);
+    funtime = [61u8, 1u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 42u8];
+    print_bytes((funtime bit_as ptr(u8)), 10u64);
     return;
 }
 

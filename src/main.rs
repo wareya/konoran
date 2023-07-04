@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
@@ -65,6 +65,10 @@ impl Type
             TypeData::FuncPointer(sig) => sig.to_string_rusttype(),
         }
     }
+    fn to_array(&self, count : usize) -> Type
+    {
+        Type { name : "array".to_string(), data : TypeData::Array(Box::new(self.clone()), count as usize) }
+    }
     fn to_ptr(&self) -> Type
     {
         Type { name : "ptr".to_string(), data : TypeData::Pointer(Box::new(self.clone())) }
@@ -107,7 +111,7 @@ impl Type
             }
             _ => {}
         }
-        panic!("error: attempted to get dereference array type `{}`", self.to_string());
+        panic!("error: attempted to use indexing on non-array type `{}`", self.to_string());
     }
     fn is_struct(&self) -> bool
     {
@@ -180,7 +184,7 @@ impl Type
             {
                 TypeData::Array(inner, count) =>
                 {
-                    inner.size() * *count as u32
+                    inner.aligned_size() * *count as u32
                 }
                 TypeData::Struct(subs) =>
                 {
@@ -195,22 +199,32 @@ impl Type
             }
         }
     }
-    fn align_size(&self) -> u32
+    fn align(&self) -> u32
     {
-        match &self.data
+        let align_size = match &self.data
         {
-            TypeData::Array(inner, _) => inner.align_size(),
+            TypeData::Array(inner, _) => inner.align(),
             TypeData::Struct(subs) =>
             {
                 let mut maximum = 0;
                 for (_, sub, _) in subs
                 {
-                    maximum = maximum.max(sub.align_size());
+                    maximum = maximum.max(sub.align());
                 }
                 maximum
             }
             _ => self.size()
-        }
+        };
+        2_u32.pow(if align_size > 1 { (align_size-1).ilog2() + 1 } else { 0 })
+    }
+    fn aligned_size(&self) -> u32
+    {
+        let mut size = self.size();
+        let mut align = self.align();
+        size += align - 1;
+        size /= align;
+        size *= align;
+        size
     }
     fn to_cranetype(&self) -> Option<cranelift::prelude::Type>
     {
@@ -301,11 +315,11 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
             {
                 let count_text = &node.child(1).unwrap().child(0).unwrap().text;
                 let count : u64 = count_text.parse().unwrap();
-                if count * type_.size() as u64 == 0
+                if count * type_.aligned_size() as u64 == 0
                 {
                     return Err(format!("error: zero-size arrays are not allowed"));
                 }
-                Ok(Type { name : "array".to_string(), data : TypeData::Array(Box::new(type_.clone()), count as usize) })
+                Ok(type_.to_array(count as usize))
             }
             else
             {
@@ -447,8 +461,7 @@ impl Program
                         {
                             panic!("error: void struct properties are not allowed");
                         }
-                        let align_size = prop_type.align_size();
-                        let align = (2_u32.pow(if align_size > 1 { (align_size-1).ilog2() + 1 } else { 1 })) as usize;
+                        let align = prop_type.align() as usize;
                         
                         if offset%align != 0
                         {
@@ -513,7 +526,8 @@ struct Environment<'a, 'b, 'c, 'e>
     types      : &'a BTreeMap<String, Type>,
     blocks     : &'a BTreeMap<String, Block>,
     next_block : &'a BTreeMap<Block, Block>,
-    //const_buff : &'a BTreeMap<, Value>,
+    const_vars : BTreeMap<String, (Type, Option<Value>)>,
+    //placement  : Option<(Value, usize)>, // address, offset FIXME need to do type analysis before we can do this
 }
 
 impl<'a, 'b, 'c, 'e> Environment<'a, 'b, 'c, 'e>
@@ -646,6 +660,66 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             {
                 return;
             }
+            "fulldeclaration" =>
+            {
+                let name = &node.child(1).unwrap().child(0).unwrap().text;
+                if env.variables.contains_key(name)
+                {
+                    let (type_var, slot, _) = env.variables[name].clone();
+                    
+                    compile(env, node.child(2).unwrap(), WantPointer::None);
+                    let (type_val, val) = env.stack_pop().unwrap();
+                    
+                    assert!(type_val == type_var);
+                    
+                    if !type_var.is_composite()
+                    {
+                        env.builder.ins().stack_store(val, slot, 0);
+                    }
+                    else
+                    {
+                        let slot_addr = env.builder.ins().stack_addr(types::I64, slot, 0);
+                        let config = env.module.target_config();
+                        //println!("uh... {:?} {}", type_val, type_val.size());
+                        let size = env.builder.ins().iconst(types::I64, type_val.size() as i64);
+                        env.builder.call_memcpy(config, slot_addr, val, size);
+                        //let align = type_val.array_to_inner().align() as u8;
+                        //env.builder.emit_small_memory_copy(config, slot_addr, val, type_val.size() as u64, align, align, true, MemFlags::trusted());
+                    }
+                }
+                else
+                {
+                    panic!("internal error: failed to find variable in full declaration");
+                }
+            }
+            "constdeclaration" =>
+            {
+                let name = &node.child(1).unwrap().child(0).unwrap().text;
+                if env.const_vars.contains_key(name)
+                {
+                    let (type_var, _) = env.const_vars[name].clone();
+                    if type_var.is_struct() || type_var.is_array()
+                    {
+                        panic!("error: cannot declare arrays or structs as const; use a normal non-const variable");
+                    }
+                    
+                    compile(env, node.child(2).unwrap(), WantPointer::None);
+                    let (type_val, val) = env.stack_pop().unwrap();
+                    
+                    assert!(type_val == type_var);
+                    
+                    // store-cycle the value in an anonymous/dummy stack slot to prevent cranelift from recalculating it on every use
+                    let slot = env.builder.create_sized_stack_slot(StackSlotData { kind : StackSlotKind::ExplicitSlot, size : type_var.size() });
+                    env.builder.ins().stack_store(val, slot, 0);
+                    let val = env.builder.ins().stack_load(type_var.to_cranetype().unwrap(), slot, 0);
+                    
+                    env.const_vars.get_mut(name).as_mut().unwrap().1 = Some(val);
+                }
+                else
+                {
+                    panic!("internal error: failed to find variable in const declaration");
+                }
+            }
             "binstate" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
@@ -654,13 +728,35 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let (type_val, val) = env.stack_pop().unwrap();
                 let (type_left_incomplete, left_addr, left_slot) = env.stack.pop().unwrap();
                 
-                //println!("{:?}", (&type_val, &val, &type_left_ptr, &left_addr));
+                for name in env.variables.keys()
+                {
+                    let slot = env.variables[name].1;
+                    if left_slot.is_some() && slot == left_slot.unwrap()
+                    {
+                        if env.const_vars.contains_key(name)
+                        {
+                            panic!("error: can't reassign to const variables");
+                        }
+                        break;
+                    }
+                }
                 
                 if left_addr.is_some() && type_left_incomplete.is_virtual_pointer()
                 {
+                    println!("storing to virtual pointer!!!");
                     let type_left = type_left_incomplete.deref_vptr();
                     assert!(type_val == type_left);
                     env.builder.ins().store(MemFlags::trusted(), val, left_addr.unwrap(), 0);
+                }
+                else if left_addr.is_some() && type_left_incomplete.is_composite()
+                {
+                    println!("storing to composite!!!");
+                    let type_left = type_left_incomplete;
+                    assert!(type_val == type_left);
+                    
+                    let config = env.module.target_config();
+                    let size = env.builder.ins().iconst(types::I64, type_left.size() as i64);
+                    env.builder.call_memcpy(config, left_addr.unwrap(), val, size);
                 }
                 else if left_addr.is_none() && left_slot.is_some()
                 {
@@ -671,7 +767,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("tried to assign to fully evaluated expression (not a variable or pointer)");
+                    panic!("tried to assign to fully evaluated expression (not a variable or pointer) {:?}", type_left_incomplete);
                 }
             }
             "lvar" =>
@@ -704,10 +800,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         env.stack_push((type_.to_ptr(), addr.unwrap()));
                     }
-                    else if want_pointer == WantPointer::Virtual && (type_.is_struct() || type_.is_array())
-                    {
-                        env.stack_push((type_.to_vptr(), addr.unwrap()));
-                    }
                     else if type_.is_struct() || type_.is_array()
                     {
                         env.stack_push((type_.clone(), addr.unwrap()));
@@ -717,6 +809,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         println!("slot!!!!!");
                         env.stack.push((type_.clone(), None, Some(*slot)));
                     }
+                }
+                else if env.const_vars.contains_key(name)
+                {
+                    panic!("error: can't reassign to constant variable `{}`", name);
                 }
                 else
                 {
@@ -761,6 +857,22 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         env.stack_push((type_.clone(), val));
                     }
                 }
+                else if env.const_vars.contains_key(name)
+                {
+                    let (type_, val) = &env.const_vars[name];
+                    if want_pointer != WantPointer::None
+                    {
+                        panic!("error: tried to access a const variable in a way that involves its address; use a non-const variable");
+                    }
+                    else if val.is_some()
+                    {
+                        env.stack_push((type_.clone(), val.unwrap()));
+                    }
+                    else
+                    {
+                        panic!("error: tried to read from const variable before it has been assigned");
+                    }
+                }
                 else if env.funcrefs.contains_key(name)
                 {
                     let (funcsig, funcref) = env.funcrefs.get(name).unwrap();
@@ -784,7 +896,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     // TODO: do multi-level accesses in a single load operation instead of several
                     // FIXME: double check that nested types work properly
                     let inner_type = base_type.array_to_inner();
-                    let inner_size = inner_type.size();
+                    let inner_size = inner_type.aligned_size();
                     let inner_offset = env.builder.ins().imul_imm(offset_val, inner_size as i64);
                     let inner_addr = env.builder.ins().iadd(base_addr, inner_offset);
                     
@@ -897,7 +1009,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             env.stack.push((type_.clone(), Some(*result), None));
                         }
                     }
-                    _ => panic!("tried to fall non-function expression as a function")
+                    _ => panic!("error: tried to use non-function expression as a function")
                 }
                 //println!("done compiling func call");
             }
@@ -906,6 +1018,63 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 for child in node.get_children().unwrap()
                 {
                     compile(env, child, WantPointer::None);
+                }
+            }
+            "array_literal" =>
+            {
+                let stack_size = env.stack.len();
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::None);
+                }
+                let array_length = env.stack.len() - stack_size;
+                println!("array length: {}", array_length);
+                let mut vals = Vec::new();
+                let mut element_type = None;
+                
+                for _ in 0..array_length
+                {
+                    let (type_, val) = env.stack_pop().unwrap();
+                    if element_type.is_none()
+                    {
+                        element_type = Some(type_.clone());
+                    }
+                    if Some(type_.clone()) != element_type
+                    {
+                        panic!("error: array literals must entirely be of a single type");
+                    }
+                    vals.insert(0, val);
+                }
+                if element_type.is_some()
+                {
+                    let element_type = element_type.unwrap();
+                    let array_type = element_type.to_array(array_length);
+                    let size = array_type.size();
+                    let slot = env.builder.create_sized_stack_slot(StackSlotData { kind : StackSlotKind::ExplicitSlot, size });
+                    let mut offset = 0;
+                    for val in vals
+                    {
+                        // FIXME: this is unsustainable
+                        if element_type.is_composite()
+                        {
+                            let config = env.module.target_config();
+                            let size = env.builder.ins().iconst(types::I64, element_type.size() as i64);
+                            let slot_addr = env.builder.ins().stack_addr(types::I64, slot, offset);
+                            env.builder.call_memcpy(config, slot_addr, val, size);
+                        }
+                        else
+                        {
+                            env.builder.ins().stack_store(val, slot, offset);
+                        }
+                        offset += element_type.aligned_size() as i32;
+                    }
+                    
+                    let addr = env.builder.ins().stack_addr(types::I64, slot, 0);
+                    env.stack_push((array_type, addr));
+                }
+                else
+                {
+                    panic!("error: zero-length array literals are not allowed");
                 }
             }
             "float" =>
@@ -1426,7 +1595,7 @@ fn main()
     import_function::<unsafe extern "C" fn(*mut u8, u64) -> ()>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
     
     let settings = [
-        ("opt_level", "speed"),
+        ("opt_level", "speed_and_size"),
         ("machine_code_cfg_info", "true"),
     ];
     
@@ -1478,6 +1647,7 @@ fn main()
         builder.switch_to_block(block);
         
         let mut variables = BTreeMap::new();
+        let mut const_vars = BTreeMap::new();
         
         // declare arguments
         let mut i = 0;
@@ -1490,10 +1660,15 @@ fn main()
             let tmp = builder.block_params(block)[j];
             builder.ins().stack_store(tmp, slot, 0);
             
-            if variables.contains_key(&var_name)
+            if variables.contains_key(&var_name) || func_decs.contains_key(&var_name) || const_vars.contains_key(&var_name)
             {
                 panic!("error: parameter {} redeclared", var_name);
             }
+            if var_type.is_void()
+            {
+                panic!("error: void variables are not allowed");
+            }
+            
             variables.insert(var_name, (var_type, slot, None));
             
             i += 1;
@@ -1502,21 +1677,30 @@ fn main()
         // declare variables
         function.body.visit(&mut |node : &ASTNode|
         {
-            if node.is_parent() && node.text == "declaration"
+            if node.is_parent() && (node.text == "declaration" || node.text == "fulldeclaration" || node.text == "constdeclaration")
             {
                 let var_type = parse_type(&types, &node.child(0).unwrap()).unwrap();
                 let var_name = node.child(1).unwrap().child(0).unwrap().text.clone();
                 let slot = builder.create_sized_stack_slot(StackSlotData { kind : StackSlotKind::ExplicitSlot, size : var_type.size() });
                 
+                if variables.contains_key(&var_name) || func_decs.contains_key(&var_name) || const_vars.contains_key(&var_name)
+                {
+                    panic!("error: variable or function {} shadowed or redeclared", var_name)
+                }
                 if var_type.is_void()
                 {
                     panic!("error: void variables are not allowed");
                 }
-                if variables.contains_key(&var_name) || func_decs.contains_key(&var_name)
+                
+                if node.text == "constdeclaration"
                 {
-                    panic!("error: variable or function {} shadowed or redeclared", var_name)
+                    const_vars.insert(var_name, (var_type, None));
                 }
-                variables.insert(var_name, (var_type, slot, None));
+                else
+                {
+                    variables.insert(var_name.clone(), (var_type, slot, None));
+                }
+                
                 i += 1;
             }
             false
@@ -1568,7 +1752,7 @@ fn main()
         
         let mut stack = Vec::new();
         
-        let mut env = Environment { stack : &mut stack, variables : &mut variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types, blocks : &blocks, next_block : &next_block };
+        let mut env = Environment { stack : &mut stack, variables : &mut variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types, blocks : &blocks, next_block : &next_block, const_vars };
         
         println!("compiling function {}...", function.name);
         compile(&mut env, &function.body, WantPointer::None);
@@ -1653,6 +1837,17 @@ fn main()
     
     let print_garbage = get_funcptr!("print_garbage", unsafe extern "C" fn() -> ());
     
+    
+    let array_literal = get_funcptr!("array_literal", unsafe extern "C" fn() -> ());
+    
+    unsafe
+    {
+        println!("array_literal...");
+        array_literal();
+        println!("");
+        println!("{}", func_disasm.get("array_literal").unwrap());
+    }
+    
     unsafe
     {
         println!("printing garbage...");
@@ -1668,17 +1863,14 @@ fn main()
         let elapsed_time = start.elapsed();
         println!("time: {}", elapsed_time.as_secs_f64());
         
-        unsafe
+        let mut ptr : *mut u8 = core::mem::transmute::<_, _>(gravity);
+        let size = *func_sizes.get("func_gravity").unwrap();
+        let bytes = std::slice::from_raw_parts(ptr, size as usize);
+        for c in bytes
         {
-            let mut ptr : *mut u8 = core::mem::transmute::<_, _>(gravity);
-            let size = *func_sizes.get("func_gravity").unwrap();
-            let bytes = std::slice::from_raw_parts(ptr, size as usize);
-            for c in bytes
-            {
-                print!("{:02X}", c);
-            }
-            println!("");
-            println!("{}", func_disasm.get("func_gravity").unwrap());
+            print!("{:02X}", c);
         }
+        println!("");
+        println!("{}", func_disasm.get("func_gravity").unwrap());
     }
 }
