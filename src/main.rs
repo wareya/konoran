@@ -65,45 +65,6 @@ impl Type
             TypeData::FuncPointer(sig) => sig.to_string_rusttype(),
         }
     }
-    
-    pub (crate) fn visit(&self, f : &mut dyn FnMut(&Type) -> bool)
-    {
-        if !f(self)
-        {
-            match &self.data
-            {
-                TypeData::Void => {}
-                TypeData::Primitive => {}
-                TypeData::Pointer(inner) =>
-                {
-                    inner.visit(f);
-                }
-                TypeData::VirtualPointer(inner) =>
-                {
-                    inner.visit(f);
-                }
-                TypeData::Array(inner, _) =>
-                {
-                    inner.visit(f);
-                }
-                TypeData::Struct(subs) =>
-                {
-                    for (_, sub, _) in subs
-                    {
-                        sub.visit(f);
-                    }
-                }
-                TypeData::FuncPointer(sig) =>
-                {
-                    sig.return_type.visit(f);
-                    for arg in &sig.args
-                    {
-                        arg.visit(f);
-                    }
-                }
-            }
-        }
-    }
     fn to_ptr(&self) -> Type
     {
         Type { name : "ptr".to_string(), data : TypeData::Pointer(Box::new(self.clone())) }
@@ -542,26 +503,32 @@ unsafe extern "C" fn print_bytes(bytes : *mut u8, count : u64) -> ()
     }
 }
 
-unsafe extern "C" fn malloc(size : u64) -> ()
-{
-    unsafe
-    {
-        let align = (2_u64.pow(if size > 1 { (size-1).ilog2() + 1 } else { 1 })) as usize;
-        std::alloc::Layout::from_size_align(size as usize, align);
-    }
-}
-
 struct Environment<'a, 'b, 'c, 'e>
 {
-    stack      : &'a mut Vec<(Type, Value)>,
-    variables  : &'a BTreeMap<String, (Type, StackSlot)>,
+    stack      : &'a mut Vec<(Type, Option<Value>, Option<StackSlot>)>,
+    variables  : &'a mut BTreeMap<String, (Type, StackSlot, Option<Value>)>,
     builder    : &'b mut FunctionBuilder<'c>,
     module     : &'e mut JITModule,
     funcrefs   : &'a BTreeMap<String, (FunctionSig, FuncRef)>,
     types      : &'a BTreeMap<String, Type>,
     blocks     : &'a BTreeMap<String, Block>,
     next_block : &'a BTreeMap<Block, Block>,
+    //const_buff : &'a BTreeMap<, Value>,
 }
+
+impl<'a, 'b, 'c, 'e> Environment<'a, 'b, 'c, 'e>
+{
+    fn stack_push(&mut self, stuff : (Type, Value))
+    {
+        self.stack.push((stuff.0, Some(stuff.1), None))
+    }
+    fn stack_pop(&mut self) -> Option<(Type, Value)>
+    {
+        let stuff = self.stack.pop().unwrap();
+        Some((stuff.0, stuff.1.unwrap()))
+    }
+}
+
 
 #[derive(Clone, Debug, Copy, PartialEq)]
 enum WantPointer {
@@ -589,15 +556,15 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 compile(env, node.child(1).unwrap(), WantPointer::None);
                 compile(env, node.child(2).unwrap(), WantPointer::None);
                 
-                let (  len_type,   len_val) = env.stack.pop().unwrap();
-                let (right_type, right_val) = env.stack.pop().unwrap();
-                let ( left_type,  left_val) = env.stack.pop().unwrap();
+                let (  len_type,   len_val) = env.stack_pop().unwrap();
+                let (right_type, right_val) = env.stack_pop().unwrap();
+                let ( left_type,  left_val) = env.stack_pop().unwrap();
                 
                 if left_type.is_pointer() && right_type.is_pointer() && len_type.name == "u64"
                 {
                     let config = env.module.target_config();
                     let value = env.builder.call_memcmp(config, left_val, right_val, len_val);
-                    env.stack.push((env.types.get("i32").unwrap().clone(), value));
+                    env.stack_push((env.types.get("i32").unwrap().clone(), value));
                 }
                 else
                 {
@@ -610,9 +577,9 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 compile(env, node.child(1).unwrap(), WantPointer::None);
                 compile(env, node.child(2).unwrap(), WantPointer::None);
                 
-                let (  val_type,   val_val) = env.stack.pop().unwrap();
-                let (right_type, right_val) = env.stack.pop().unwrap();
-                let ( left_type,  left_val) = env.stack.pop().unwrap();
+                let (  val_type,   val_val) = env.stack_pop().unwrap();
+                let (right_type, right_val) = env.stack_pop().unwrap();
+                let ( left_type,  left_val) = env.stack_pop().unwrap();
                 
                 if left_type.is_pointer() && right_type.is_pointer() && val_type.name == "u8"
                 {
@@ -630,9 +597,9 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 compile(env, node.child(1).unwrap(), WantPointer::None);
                 compile(env, node.child(2).unwrap(), WantPointer::None);
                 
-                let ( size_type,  size_val) = env.stack.pop().unwrap();
-                let (right_type, right_val) = env.stack.pop().unwrap();
-                let ( left_type,  left_val) = env.stack.pop().unwrap();
+                let ( size_type,  size_val) = env.stack_pop().unwrap();
+                let (right_type, right_val) = env.stack_pop().unwrap();
+                let ( left_type,  left_val) = env.stack_pop().unwrap();
                 
                 if left_type.is_pointer() && right_type.is_pointer() && size_type.name == "u64"
                 {
@@ -650,9 +617,9 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 compile(env, node.child(1).unwrap(), WantPointer::None);
                 compile(env, node.child(2).unwrap(), WantPointer::None);
                 
-                let ( size_type,  size_val) = env.stack.pop().unwrap();
-                let (right_type, right_val) = env.stack.pop().unwrap();
-                let ( left_type,  left_val) = env.stack.pop().unwrap();
+                let ( size_type,  size_val) = env.stack_pop().unwrap();
+                let (right_type, right_val) = env.stack_pop().unwrap();
+                let ( left_type,  left_val) = env.stack_pop().unwrap();
                 
                 if left_type.is_pointer() && right_type.is_pointer() && size_type.name == "u64"
                 {
@@ -671,13 +638,41 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 for child in node.get_children().unwrap()
                 {
                     compile(env, child, WantPointer::None);
-                    returns.push(env.stack.pop().unwrap().1);
+                    returns.push(env.stack_pop().unwrap().1);
                 }
                 env.builder.ins().return_(&returns);
             }
             "declaration" =>
             {
                 return;
+            }
+            "binstate" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                compile(env, node.child(2).unwrap(), WantPointer::None);
+                
+                let (type_val, val) = env.stack_pop().unwrap();
+                let (type_left_incomplete, left_addr, left_slot) = env.stack.pop().unwrap();
+                
+                //println!("{:?}", (&type_val, &val, &type_left_ptr, &left_addr));
+                
+                if left_addr.is_some() && type_left_incomplete.is_virtual_pointer()
+                {
+                    let type_left = type_left_incomplete.deref_vptr();
+                    assert!(type_val == type_left);
+                    env.builder.ins().store(MemFlags::trusted(), val, left_addr.unwrap(), 0);
+                }
+                else if left_addr.is_none() && left_slot.is_some()
+                {
+                    println!("storing direct to stack!!!");
+                    let type_left = type_left_incomplete;
+                    assert!(type_val == type_left);
+                    env.builder.ins().stack_store(val, left_slot.unwrap(), 0);
+                }
+                else
+                {
+                    panic!("tried to assign to fully evaluated expression (not a variable or pointer)");
+                }
             }
             "lvar" =>
             {
@@ -691,19 +686,36 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let name = &node.child(0).unwrap().child(0).unwrap().text;
                 if env.variables.contains_key(name)
                 {
-                    let (type_, slot) = &env.variables[name];
-                    let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
+                    let type_ = env.variables[name].0.clone();
+                    let will_want_addr =
+                        want_pointer == WantPointer::Real ||
+                        (want_pointer == WantPointer::Virtual && (type_.is_struct() || type_.is_array())
+                        ) ||
+                        type_.is_struct() || type_.is_array()
+                    ;
+                    if will_want_addr && env.variables[name].2.is_none()
+                    {
+                        let addr = env.builder.ins().stack_addr(types::I64, env.variables[name].1, 0);
+                        env.variables.get_mut(name).as_mut().unwrap().2 = Some(addr);
+                    }
+                    let (_, slot, addr) = &env.variables[name];
+                    
                     if want_pointer == WantPointer::Real
                     {
-                        env.stack.push((type_.to_ptr(), addr));
+                        env.stack_push((type_.to_ptr(), addr.unwrap()));
                     }
-                    else if want_pointer == WantPointer::Virtual
+                    else if want_pointer == WantPointer::Virtual && (type_.is_struct() || type_.is_array())
                     {
-                        env.stack.push((type_.to_vptr(), addr));
+                        env.stack_push((type_.to_vptr(), addr.unwrap()));
+                    }
+                    else if type_.is_struct() || type_.is_array()
+                    {
+                        env.stack_push((type_.clone(), addr.unwrap()));
                     }
                     else
                     {
-                        panic!("internal error: lvar expression tried to return fully-evaluated form");
+                        println!("slot!!!!!");
+                        env.stack.push((type_.clone(), None, Some(*slot)));
                     }
                 }
                 else
@@ -711,12 +723,61 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     panic!("error: unrecognized variable `{}`", name);
                 }
             }
+            "rvarname" =>
+            {
+                let name = &node.child(0).unwrap().text;
+                //println!("{}", name);
+                if env.variables.contains_key(name)
+                {
+                    let type_ = env.variables[name].0.clone();
+                    let will_want_addr =
+                        want_pointer == WantPointer::Real ||
+                        want_pointer == WantPointer::Virtual ||
+                        type_.is_struct() || type_.is_array()
+                    ;
+                    if will_want_addr && env.variables[name].2.is_none()
+                    {
+                        let addr = env.builder.ins().stack_addr(types::I64, env.variables[name].1, 0);
+                        env.variables.get_mut(name).as_mut().unwrap().2 = Some(addr);
+                    }
+                    let (_, slot, addr) = &env.variables[name];
+                    
+                    // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
+                    if want_pointer == WantPointer::Real
+                    {
+                        env.stack_push((type_.to_ptr(), addr.unwrap()));
+                    }
+                    else if want_pointer == WantPointer::Virtual
+                    {
+                        env.stack_push((type_.to_vptr(), addr.unwrap()));
+                    }
+                    else if type_.is_struct() || type_.is_array()
+                    {
+                        env.stack_push((type_.clone(), addr.unwrap()));
+                    }
+                    else
+                    {
+                        let val = env.builder.ins().stack_load(type_.to_cranetype().unwrap(), *slot, 0);
+                        env.stack_push((type_.clone(), val));
+                    }
+                }
+                else if env.funcrefs.contains_key(name)
+                {
+                    let (funcsig, funcref) = env.funcrefs.get(name).unwrap();
+                    let funcaddr = env.builder.ins().func_addr(types::I64, *funcref);
+                    env.stack_push((Type::from_functionsig(funcsig), funcaddr));
+                }
+                else
+                {
+                    panic!("unrecognized identifier {}", name);
+                }
+            }
             "arrayindex_head" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 compile(env, node.child(1).unwrap(), WantPointer::None);
-                let (offset_type, offset_val) = env.stack.pop().unwrap();
-                let (base_type, base_addr) = env.stack.pop().unwrap();
+                let (offset_type, offset_val) = env.stack_pop().unwrap();
+                let (base_type, base_addr) = env.stack_pop().unwrap();
                 
                 if offset_type.name == "i64"
                 {
@@ -730,20 +791,20 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
                     if want_pointer == WantPointer::Real
                     {
-                        env.stack.push((inner_type.to_ptr(), inner_addr));
+                        env.stack_push((inner_type.to_ptr(), inner_addr));
                     }
                     else if want_pointer == WantPointer::Virtual
                     {
-                        env.stack.push((inner_type.to_vptr(), inner_addr));
+                        env.stack_push((inner_type.to_vptr(), inner_addr));
                     }
                     else if inner_type.is_struct() || inner_type.is_array()
                     {
-                        env.stack.push((inner_type.clone(), inner_addr));
+                        env.stack_push((inner_type.clone(), inner_addr));
                     }
                     else
                     {
                         let val = env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), inner_addr, 0);
-                        env.stack.push((inner_type.clone(), val));
+                        env.stack_push((inner_type.clone(), val));
                     }
                 }
                 else
@@ -754,7 +815,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             "indirection_head" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
-                let (struct_type, struct_addr) = env.stack.pop().unwrap();
+                let (struct_type, struct_addr) = env.stack_pop().unwrap();
                 
                 let right_name = &node.child(1).unwrap().child(0).unwrap().text;
                 
@@ -774,24 +835,24 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
                         let inner_addr = env.builder.ins().iadd(struct_addr, offset);
-                        env.stack.push((inner_type.to_ptr(), inner_addr));
+                        env.stack_push((inner_type.to_ptr(), inner_addr));
                     }
                     else if want_pointer == WantPointer::Virtual
                     {
                         let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
                         let inner_addr = env.builder.ins().iadd(struct_addr, offset);
-                        env.stack.push((inner_type.to_vptr(), inner_addr));
+                        env.stack_push((inner_type.to_vptr(), inner_addr));
                     }
                     else if inner_type.is_struct() || inner_type.is_array()
                     {
                         let offset = env.builder.ins().iconst(types::I64, found.2 as i64);
                         let inner_addr = env.builder.ins().iadd(struct_addr, offset);
-                        env.stack.push((inner_type.clone(), inner_addr));
+                        env.stack_push((inner_type.clone(), inner_addr));
                     }
                     else
                     {
                         let val = env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), struct_addr, found.2 as i32);
-                        env.stack.push((inner_type.clone(), val));
+                        env.stack_push((inner_type.clone(), val));
                     }
                 }
                 else
@@ -799,68 +860,11 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     panic!("error: no such property {} in struct type {}", right_name, struct_type.name);
                 }
             }
-            "binstate" =>
-            {
-                compile(env, node.child(0).unwrap(), WantPointer::Virtual);
-                compile(env, node.child(2).unwrap(), WantPointer::None);
-                
-                let (type_val, val) = env.stack.pop().unwrap();
-                let (type_left_ptr, left_addr) = env.stack.pop().unwrap();
-                
-                //println!("{:?}", (&type_val, &val, &type_left_ptr, &left_addr));
-                
-                if !type_left_ptr.is_virtual_pointer()
-                {
-                    panic!("tried to assign to fully evaluated expression (not a variable or pointer)");
-                }
-                let type_left = type_left_ptr.deref_vptr();
-                assert!(type_val == type_left);
-                env.builder.ins().store(MemFlags::trusted(), val, left_addr, 0);
-            }
-            "rvarname" =>
-            {
-                let name = &node.child(0).unwrap().text;
-                //println!("{}", name);
-                if env.variables.contains_key(name)
-                {
-                    let (type_, slot) = &env.variables[name];
-                    //println!("{:?}", (type_, slot));
-                    let addr = env.builder.ins().stack_addr(types::I64, *slot, 0);
-                    // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
-                    if want_pointer == WantPointer::Real
-                    {
-                        env.stack.push((type_.to_ptr(), addr));
-                    }
-                    else if want_pointer == WantPointer::Virtual
-                    {
-                        env.stack.push((type_.to_vptr(), addr));
-                    }
-                    else if type_.is_struct() || type_.is_array()
-                    {
-                        env.stack.push((type_.clone(), addr));
-                    }
-                    else
-                    {
-                        let val = env.builder.ins().load(type_.to_cranetype().unwrap(), MemFlags::trusted(), addr, 0);
-                        env.stack.push((type_.clone(), val));
-                    }
-                }
-                else if env.funcrefs.contains_key(name)
-                {
-                    let (funcsig, funcref) = env.funcrefs.get(name).unwrap();
-                    let funcaddr = env.builder.ins().func_addr(types::I64, *funcref);
-                    env.stack.push((Type::from_functionsig(funcsig), funcaddr));
-                }
-                else
-                {
-                    panic!("unrecognized identifier {}", name);
-                }
-            }
             "funcargs_head" =>
             {
                 //println!("compiling func call");
                 compile(env, node.child(0).unwrap(), WantPointer::None);
-                let (type_, funcaddr) = env.stack.pop().unwrap();
+                let (type_, funcaddr) = env.stack_pop().unwrap();
                 match type_.data
                 {
                     TypeData::FuncPointer(funcsig) =>
@@ -874,7 +878,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         let mut args = Vec::new();
                         for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                         {
-                            let (type_, val) = env.stack.pop().unwrap();
+                            let (type_, val) = env.stack_pop().unwrap();
                             if type_ != *arg_type
                             {
                                 panic!("mismatched types for parameter {} in call to function: expected `{}`, got `{}`", i+1, arg_type.to_string(), type_.to_string());
@@ -890,7 +894,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         //println!("number of results {}", results.len());
                         for (result, type_) in results.iter().zip([funcsig.return_type])
                         {
-                            env.stack.push((type_.clone(), *result));
+                            env.stack.push((type_.clone(), Some(*result), None));
                         }
                     }
                     _ => panic!("tried to fall non-function expression as a function")
@@ -916,13 +920,13 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         let val : f32 = text.parse().unwrap();
                         let res = env.builder.ins().f32const(val);
-                        env.stack.push((env.types.get("f32").unwrap().clone(), res));
+                        env.stack_push((env.types.get("f32").unwrap().clone(), res));
                     }
                     "f64" =>
                     {
                         let val : f64 = text.parse().unwrap();
                         let res = env.builder.ins().f64const(val);
-                        env.stack.push((env.types.get("f64").unwrap().clone(), res));
+                        env.stack_push((env.types.get("f64").unwrap().clone(), res));
                     }
                     _ => panic!("unknown float suffix pattern {}", parts.1)
                 }
@@ -955,7 +959,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     "i64" => env.builder.ins().iconst(types::I64, text.parse::<i64>().unwrap() as i64),
                     _ => panic!("unknown float suffix pattern {}", parts.1)
                 };
-                env.stack.push((env.types.get(parts.1).unwrap().clone(), res));
+                env.stack_push((env.types.get(parts.1).unwrap().clone(), res));
             }
             "unary" =>
             {
@@ -964,17 +968,17 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 if op.as_str() == "&"
                 {
                     compile(env, node.child(1).unwrap(), WantPointer::Real);
-                    let (type_, val) = env.stack.pop().unwrap();
+                    let (type_, val) = env.stack_pop().unwrap();
                     if !type_.is_pointer()
                     {
                         panic!("error: tried to get address of non-variable");
                     }
-                    env.stack.push((type_, val));
+                    env.stack_push((type_, val));
                 }
                 else
                 {
                     compile(env, node.child(1).unwrap(), WantPointer::None);
-                    let (type_, val) = env.stack.pop().unwrap();
+                    let (type_, val) = env.stack_pop().unwrap();
                     match type_.name.as_str()
                     {
                         "ptr" =>
@@ -985,7 +989,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 {
                                     panic!("error: can't use operator `{}` on type `{}`", op, type_.name);
                                 }
-                                env.stack.push((type_.deref_ptr().to_vptr(), val));
+                                env.stack_push((type_.deref_ptr().to_vptr(), val));
                                 //println!("---- * operator is virtual");
                             }
                             else
@@ -1001,7 +1005,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                     "*" => env.builder.ins().load(inner_type.to_cranetype().unwrap(), MemFlags::trusted(), val, 0),
                                     _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
                                 };
-                                env.stack.push((inner_type, res));
+                                env.stack_push((inner_type, res));
                             }
                         }
                         "f32" | "f64" =>
@@ -1012,7 +1016,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 "-" => env.builder.ins().fneg(val),
                                 _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
                             };
-                            env.stack.push((type_.clone(), res));
+                            env.stack_push((type_.clone(), res));
                         }
                         "i8" | "i16" | "i32" | "i64" |
                         "u8" | "u16" | "u32" | "u64" =>
@@ -1025,7 +1029,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 "~" => env.builder.ins().bnot(val),
                                 _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
                             };
-                            env.stack.push((type_.clone(), res));
+                            env.stack_push((type_.clone(), res));
                         }
                         _ => panic!("error: type `{}` is not supported by unary operators", type_.name)
                     }
@@ -1047,7 +1051,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             "ifcondition" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
-                let (type_, val)  = env.stack.pop().unwrap();
+                let (type_, val)  = env.stack_pop().unwrap();
                 let label = &node.child(1).unwrap().child(0).unwrap().text;
                 // anonymous block for "else" case
                 let else_block = env.builder.create_block();
@@ -1079,7 +1083,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             "bitcast" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
-                let (left_type, left_val)  = env.stack.pop().unwrap();
+                let (left_type, left_val)  = env.stack_pop().unwrap();
                 
                 let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
                 
@@ -1089,7 +1093,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 if left_type.size() == right_type.size() || (right_type.size() == 8 && left_type.is_composite())
                 {
                     let ret = env.builder.ins().bitcast(target_cranetype, MemFlags::new(), left_val);
-                    env.stack.push((right_type, ret));
+                    env.stack_push((right_type, ret));
                 }
                 else
                 {
@@ -1099,7 +1103,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             "cast" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
-                let (left_type, left_val) = env.stack.pop().unwrap();
+                let (left_type, left_val) = env.stack_pop().unwrap();
                 
                 let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
                 
@@ -1107,69 +1111,81 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 // cast as own type (do nothing)
                 if left_type.name == right_type.name
                 {
-                    env.stack.push((right_type, left_val));
+                    env.stack_push((right_type, left_val));
                 }
                 // cast from pointer to pointer
                 else if left_type.is_pointer() && right_type.is_pointer()
                 {
-                    env.stack.push((right_type, left_val));
+                    env.stack_push((right_type, left_val));
                 }
                 // cast between float types"
                 else if left_type.name == "f32" && right_type.name == "f64"
                 {
                     let ret = env.builder.ins().fpromote(target_cranetype, left_val);
-                    env.stack.push((right_type, ret));
+                    env.stack_push((right_type, ret));
                 }
                 else if left_type.name == "f64" && right_type.name == "f32"
                 {
                     let ret = env.builder.ins().fdemote(target_cranetype, left_val);
-                    env.stack.push((right_type, ret));
+                    env.stack_push((right_type, ret));
                 }
                 // cast between types of same size, non-float. bitcast.
                 else if !left_type.is_float() && !right_type.is_float() && left_type.size() == right_type.size()
                 {
                     let ret = env.builder.ins().bitcast(target_cranetype, MemFlags::new(), left_val);
-                    env.stack.push((right_type, ret));
+                    env.stack_push((right_type, ret));
                 }
                 // cast from float to int (must be int, not pointer)
                 else if left_type.is_int_signed() && right_type.is_float()
                 {
                     let ret = env.builder.ins().fcvt_from_sint(target_cranetype, left_val);
-                    env.stack.push((right_type, ret));
+                    env.stack_push((right_type, ret));
                 }
                 else if left_type.is_int_unsigned() && right_type.is_float()
                 {
                     let ret = env.builder.ins().fcvt_from_uint(target_cranetype, left_val);
-                    env.stack.push((right_type, ret));
+                    env.stack_push((right_type, ret));
                 }
                 // cast from int to float (must be int, not pointer)
                 else if left_type.is_float() && right_type.is_int_signed()
                 {
                     let ret = env.builder.ins().fcvt_to_sint(target_cranetype, left_val);
-                    env.stack.push((right_type, ret));
+                    env.stack_push((right_type, ret));
                 }
                 else if left_type.is_float() && right_type.is_int_unsigned()
                 {
                     let ret = env.builder.ins().fcvt_to_uint(target_cranetype, left_val);
-                    env.stack.push((right_type, ret));
+                    env.stack_push((right_type, ret));
                 }
                 // cast from smaller signed to larger unsigned
                 else if left_type.size() < right_type.size() && left_type.is_int_signed() && right_type.is_int_unsigned()
                 {
                     let ret = env.builder.ins().sextend(target_cranetype, left_val);
-                    env.stack.push((right_type, ret));
+                    env.stack_push((right_type, ret));
                 }
                 // cast from smaller signed to larger unsigned
                 else if left_type.size() < right_type.size() && left_type.is_int_unsigned() && right_type.is_int_signed()
                 {
                     let ret = env.builder.ins().uextend(target_cranetype, left_val);
-                    env.stack.push((right_type, ret));
+                    env.stack_push((right_type, ret));
+                }
+                // cast to larger int type, signed
+                else if left_type.size() < right_type.size() && left_type.is_int_signed() && right_type.is_int_signed()
+                {
+                    let ret = env.builder.ins().sextend(target_cranetype, left_val);
+                    env.stack_push((right_type, ret));
+                }
+                // cast to larger int type, unsigned
+                else if left_type.size() < right_type.size() && left_type.is_int_unsigned() && right_type.is_int_unsigned()
+                {
+                    let ret = env.builder.ins().uextend(target_cranetype, left_val);
+                    env.stack_push((right_type, ret));
                 }
                 // cast to smaller int type
-                else if left_type.size() < right_type.size() && left_type.is_int() && right_type.is_int()
+                else if left_type.size() > right_type.size() && left_type.is_int() && right_type.is_int()
                 {
                     let ret = env.builder.ins().ireduce(target_cranetype, left_val);
-                    env.stack.push((right_type, ret));
+                    env.stack_push((right_type, ret));
                 }
                 else
                 {
@@ -1183,8 +1199,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     compile(env, node.child(0).unwrap(), WantPointer::None);
                     compile(env, node.child(2).unwrap(), WantPointer::None);
                     let op = &node.child(1).unwrap().child(0).unwrap().text;
-                    let (right_type, right_val)  = env.stack.pop().unwrap();
-                    let (left_type , left_val )  = env.stack.pop().unwrap();
+                    let (right_type, right_val)  = env.stack_pop().unwrap();
+                    let (left_type , left_val )  = env.stack_pop().unwrap();
                     
                     let is_u = left_type.name.starts_with("u");
                     
@@ -1211,7 +1227,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         }
                                         _ => panic!("internal error: operator mismatch")
                                     };
-                                    env.stack.push((left_type.clone(), res));
+                                    env.stack_push((left_type.clone(), res));
                                 }
                                 
                                 ">" | "<" | ">=" | "<=" | "==" | "!=" =>
@@ -1227,7 +1243,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         _ => panic!("internal error: operator mismatch")
                                     };
                                     let res = env.builder.ins().fcmp(cond, left_val, right_val);
-                                    env.stack.push((env.types.get("u8").unwrap().clone(), res));
+                                    env.stack_push((env.types.get("u8").unwrap().clone(), res));
                                 }
                                 
                                 _ => panic!("operator {} not supported on type {}", op, left_type.name)
@@ -1249,7 +1265,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         "&&" | "and" => env.builder.ins().band(left_bool, right_bool),
                                         _ => panic!("internal error: operator mismatch")
                                     };
-                                    env.stack.push((env.types.get("u8").unwrap().clone(), res));
+                                    env.stack_push((env.types.get("u8").unwrap().clone(), res));
                                 }
                                 "|" | "&" | "^" =>
                                 {
@@ -1260,7 +1276,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         "^" => env.builder.ins().bxor(left_val, right_val),
                                         _ => panic!("internal error: operator mismatch")
                                     };
-                                    env.stack.push((left_type.clone(), res));
+                                    env.stack_push((left_type.clone(), res));
                                 }
                                 "+" | "-" | "*" | "/" | "%" =>
                                 {
@@ -1292,7 +1308,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         }
                                         _ => panic!("internal error: operator mismatch")
                                     };
-                                    env.stack.push((left_type.clone(), res));
+                                    env.stack_push((left_type.clone(), res));
                                 }
                                 
                                 ">" | "<" | ">=" | "<=" | "==" | "!=" =>
@@ -1308,7 +1324,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         _ => panic!("internal error: operator mismatch")
                                     };
                                     let res = env.builder.ins().icmp(cond, left_val, right_val);
-                                    env.stack.push((env.types.get("u8").unwrap().clone(), res));
+                                    env.stack_push((env.types.get("u8").unwrap().clone(), res));
                                 }
                                 
                                 _ => panic!("operator {} not supported on type {}", op, left_type.name)
@@ -1409,7 +1425,12 @@ fn main()
     }
     import_function::<unsafe extern "C" fn(*mut u8, u64) -> ()>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
     
-    let mut builder = JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
+    let settings = [
+        ("opt_level", "speed"),
+        ("machine_code_cfg_info", "true"),
+    ];
+    
+    let mut builder = JITBuilder::with_flags(&settings, cranelift_module::default_libcall_names()).unwrap();
     
     for (f_name, (pointer, funcsig)) in &imports
     {
@@ -1473,7 +1494,7 @@ fn main()
             {
                 panic!("error: parameter {} redeclared", var_name);
             }
-            variables.insert(var_name, (var_type, slot));
+            variables.insert(var_name, (var_type, slot, None));
             
             i += 1;
         }
@@ -1495,7 +1516,7 @@ fn main()
                 {
                     panic!("error: variable or function {} shadowed or redeclared", var_name)
                 }
-                variables.insert(var_name, (var_type, slot));
+                variables.insert(var_name, (var_type, slot, None));
                 i += 1;
             }
             false
@@ -1547,8 +1568,9 @@ fn main()
         
         let mut stack = Vec::new();
         
-        let mut env = Environment { stack : &mut stack, variables : &variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types, blocks : &blocks, next_block : &next_block };
+        let mut env = Environment { stack : &mut stack, variables : &mut variables, builder : &mut builder, module : &mut module, funcrefs : &funcrefs, types : &types, blocks : &blocks, next_block : &next_block };
         
+        println!("compiling function {}...", function.name);
         compile(&mut env, &function.body, WantPointer::None);
         
         builder.seal_all_blocks();
@@ -1558,8 +1580,15 @@ fn main()
         
         module.define_function(id, &mut ctx).unwrap();
         
-        let flags = settings::Flags::new(settings::builder());
+        let mut b = settings::builder();
+        for p in &settings
+        {
+            b.set(p.0, p.1);
+        }
+        let flags = settings::Flags::new(b);
         let res = verify_function(&ctx.func, &flags);
+        
+        println!("{}", ctx.func.display());
         
         if let Err(errors) = res
         {
@@ -1573,6 +1602,7 @@ fn main()
         
         let mut cs = module.isa().clone().to_capstone().unwrap();
         cs.set_syntax(capstone::Syntax::Intel);
+        //let dis = ctx.compiled_code().unwrap().disassemble(None, &cs).unwrap().clone();
         let dis = ctx.compiled_code().unwrap().disassemble(None, &cs).unwrap().clone();
         func_disasm.insert(f_name.clone(), dis);
         

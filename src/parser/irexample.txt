@@ -71,7 +71,6 @@ f32 func_gravity()
     gravity = 9.8f64;
     
 head:
-    
     yvel = yvel + delta*gravity*0.5f64;
     y = y + yvel*delta;
     yvel = yvel + delta*gravity*0.5f64;
