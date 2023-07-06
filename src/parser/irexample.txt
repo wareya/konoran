@@ -61,15 +61,15 @@ loop_head:
     
     return x;
 }
-
+*/
 
 f32 func_gravity()
 {
     u64 i = 0u64;
     f64 yvel = 0.0f64;
     f64 y = 0.0f64;
-    const f64 gravity = 9.8f64;
-    const f64 delta = 0.001f64;
+    f64 gravity = 9.8f64;
+    f64 delta = 0.001f64;
     
 head:
     yvel = yvel + delta*gravity*0.5f64;
@@ -83,6 +83,7 @@ head:
     
     return (y as f32);
 }
+/*
 
 void returns_void(f32 a)
 {

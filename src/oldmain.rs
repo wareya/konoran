@@ -506,7 +506,6 @@ enum WantPointer {
     Real,
     Virtual,
 }
-
 fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : WantPointer)
 {
     if node.is_parent()

@@ -7,6 +7,7 @@ use inkwell::context::Context;
 use inkwell::execution_engine::JitFunction;
 use inkwell::OptimizationLevel;
 use inkwell::types::{AnyType, BasicType};
+use inkwell::values::{AnyValue, BasicValue};
 
 use parser::ast::ASTNode;
 
@@ -363,7 +364,9 @@ impl Function
     
 fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, type_ : &Type) -> inkwell::types::AnyTypeEnum<'c>
 {
-    if let Some(backend_type) = backend_types.get(&type_.name)
+    let key = type_.to_string();
+    
+    if let Some(backend_type) = backend_types.get(&key)
     {
         *backend_type
     }
@@ -386,9 +389,9 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                 }
                 else
                 {
-                    panic!("error: can't build pointers of type {}", type_.name)
+                    panic!("error: can't build pointers of type {}", key)
                 }.into();
-                backend_types.insert(type_.name.clone(), ptr_type);
+                backend_types.insert(key, ptr_type);
                 ptr_type
             }
             TypeData::Array(inner, size) => panic!("TODO"),
@@ -401,7 +404,8 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
 fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, sig : &FunctionSig) -> inkwell::types::FunctionType<'c>
 {
     let sig_type = Type::from_functionsig(sig);
-    if let Some(backend_type) = backend_types.get(&sig_type.name)
+    let key = sig_type.to_string();
+    if let Some(backend_type) = backend_types.get(&key)
     {
         return backend_type.into_function_type();
     }
@@ -426,6 +430,8 @@ fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::A
     
     let return_type = get_backend_type(backend_types, &sig.return_type);
     
+    println!("testing return type {:?} for {:?}...", return_type, sig.return_type);
+    
     let func_type = if let Ok(basic) = inkwell::types::BasicTypeEnum::try_from(return_type)
     {
         basic.fn_type(&params, false)
@@ -439,7 +445,9 @@ fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::A
         panic!("error: can't build functions that return type {}", sig.return_type.name)
     };
     
-    backend_types.insert(sig_type.name, func_type.into());
+    println!("func type is  {:?}", func_type);
+    
+    backend_types.insert(key, func_type.into());
     
     func_type
 }
@@ -518,45 +526,647 @@ impl Program
 
 struct Environment<'a, 'b, 'c, 'd>
 {
-    builder    : &'b inkwell::builder::Builder<'c>,
-    module     : &'d inkwell::module::Module<'c>,
-    types      : &'a BTreeMap<String, Type>,
+    context       : &'c inkwell::context::Context,
+    stack         : Vec<(Type, inkwell::values::BasicValueEnum<'c>)>,
+    variables     : BTreeMap<String, (Type, inkwell::values::PointerValue<'c>)>,
+    builder       : &'b inkwell::builder::Builder<'c>,
+    module        : &'d inkwell::module::Module<'c>,
+    func_decs     : &'a BTreeMap<String, (inkwell::values::FunctionValue<'c>, FunctionSig)>,
+    types         : &'a BTreeMap<String, Type>,
+    backend_types : &'a mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>,
+    func_val      : inkwell::values::FunctionValue<'c>,
+    blocks        : HashMap<String, inkwell::basic_block::BasicBlock<'c>>,
+    next_block    : HashMap<inkwell::basic_block::BasicBlock<'c>, inkwell::basic_block::BasicBlock<'c>>,
 }
 
-impl<'a, 'b, 'c, 'd> Environment<'a, 'b, 'c, 'd>
+#[derive(Clone, Debug, Copy, PartialEq)]
+enum WantPointer {
+    None,
+    Real,
+    Virtual,
+}
+fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : WantPointer)
 {
-    /*
-    fn stack_push(&mut self, stuff : (Type, Value))
+    if node.is_parent()
     {
-        self.stack.push((stuff.0, Some(stuff.1), None))
+        match node.text.as_str()
+        {
+            "statementlist" | "statement" | "instruction" | "parenexpr" | "arrayindex" =>
+            {
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, want_pointer);
+                }
+            }
+            "return" =>
+            {
+                let mut returns = Vec::new();
+                // FIXME: check types
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::None);
+                    returns.push(env.stack.pop().unwrap().1);
+                }
+                if let Some(val) = returns.get(0)
+                {
+                    env.builder.build_return(Some(val));
+                }
+                else
+                {
+                    env.builder.build_return(None);
+                }
+            }
+            "declaration" =>
+            {
+                return;
+            }
+            "fulldeclaration" =>
+            {
+                let name = &node.child(1).unwrap().child(0).unwrap().text;
+                if env.variables.contains_key(name)
+                {
+                    let (type_var, slot) = env.variables[name].clone();
+                    
+                    compile(env, node.child(2).unwrap(), WantPointer::None);
+                    let (type_val, val) = env.stack.pop().unwrap();
+                    
+                    assert!(type_val == type_var);
+                    
+                    let instval = env.builder.build_store(slot, val);
+                    let v = instval.get_volatile();
+                    if false
+                    {
+                        println!("volatile: {:?}", v);
+                    }
+                }
+                else
+                {
+                    panic!("internal error: failed to find variable in full declaration");
+                }
+            }
+            "binstate" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                compile(env, node.child(2).unwrap(), WantPointer::None);
+                
+                let (type_val, val) = env.stack.pop().unwrap();
+                let (type_left_incomplete, left_addr) = env.stack.pop().unwrap();
+                
+                /*
+                for name in env.variables.keys()
+                {
+                    let slot = env.variables[name].1;
+                    if left_slot.is_some() && slot == left_slot.unwrap()
+                    {
+                        if env.const_vars.contains_key(name)
+                        {
+                            panic!("error: can't reassign to const variables");
+                        }
+                        break;
+                    }
+                }
+                */
+                
+                let type_left = if type_left_incomplete.is_pointer()
+                {
+                    type_left_incomplete.deref_ptr()
+                }
+                else
+                {
+                    panic!("tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
+                };
+                assert!(type_val == type_left);
+                
+                if let Ok(addr) = inkwell::values::PointerValue::try_from(left_addr)
+                {
+                    let instval = env.builder.build_store(addr, val);
+                    let v = instval.get_volatile();
+                    if false
+                    {
+                        println!("volatile: {:?}", v);
+                    }
+                }
+                else
+                {
+                    panic!("tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
+                }
+            }
+            "lvar" =>
+            {
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::Real);
+                }
+            }
+            "lvar_name" =>
+            {
+                let name = &node.child(0).unwrap().child(0).unwrap().text;
+                if env.variables.contains_key(name)
+                {
+                    let (type_, slot) = env.variables[name].clone();
+                    
+                    if want_pointer == WantPointer::Real
+                    {
+                        env.stack.push((type_.to_ptr(), slot.into()));
+                    }
+                    else
+                    {
+                        println!("INTERNAL ERROR: FIXME!!!!!");
+                    }
+                }
+                /*
+                else if env.const_vars.contains_key(name)
+                {
+                    panic!("error: can't reassign to constant variable `{}`", name);
+                }
+                */
+                else
+                {
+                    panic!("error: unrecognized variable `{}`", name);
+                }
+            }
+            "rvarname" =>
+            {
+                let name = &node.child(0).unwrap().text;
+                //println!("{}", name);
+                if env.variables.contains_key(name)
+                {
+                    let (type_, slot) = env.variables[name].clone();
+                    
+                    // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
+                    if want_pointer == WantPointer::Real
+                    {
+                        env.stack.push((type_.to_ptr(), slot.into()));
+                    }
+                    else if want_pointer == WantPointer::Virtual
+                    {
+                        env.stack.push((type_.to_vptr(), slot.into()));
+                    }
+                    else
+                    {
+                        let backend_type = get_backend_type(&mut env.backend_types, &type_);
+                        if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
+                        {
+                            let val = env.builder.build_load(basic_type, slot, "");
+                            
+                            let instval = val.as_instruction_value().unwrap();
+                            let v = instval.get_volatile();
+                            if false
+                            {
+                                println!("volatile: {:?}", v);
+                            }
+                            
+                            env.stack.push((type_.clone(), val));
+                        }
+                        else
+                        {
+                            panic!("error: values of type {} are not allowed", type_.name);
+                        }
+                    }
+                }
+                /*
+                else if env.const_vars.contains_key(name)
+                {
+                    let (type_, val) = &env.const_vars[name];
+                    if want_pointer != WantPointer::None
+                    {
+                        panic!("error: tried to access a const variable in a way that involves its address; use a non-const variable");
+                    }
+                    else if val.is_some()
+                    {
+                        env.stack_push((type_.clone(), val.unwrap()));
+                    }
+                    else
+                    {
+                        panic!("error: tried to read from const variable before it has been assigned");
+                    }
+                }
+                else if env.funcrefs.contains_key(name)
+                {
+                    let (funcsig, funcref) = env.funcrefs.get(name).unwrap();
+                    let funcaddr = env.builder.ins().func_addr(types::I64, *funcref);
+                    env.stack_push((Type::from_functionsig(funcsig), funcaddr));
+                }
+                */
+                else
+                {
+                    panic!("unrecognized identifier {}", name);
+                }
+            }
+            "float" =>
+            {
+                let text = &node.child(0).unwrap().text;
+                let location = text.rfind("f").unwrap();
+                let parts = text.split_at(location);
+                let text = parts.0;
+                if let Some(type_) = env.types.get(parts.1)
+                {
+                    let backend_type = get_backend_type(&mut env.backend_types, &type_);
+                    if let Ok(float_type) = inkwell::types::FloatType::try_from(backend_type)
+                    {
+                        match parts.1
+                        {
+                            "f32" =>
+                            {
+                                let val : f32 = text.parse().unwrap();
+                                let res = float_type.const_float(val as f64);
+                                env.stack.push((type_.clone(), res.into()));
+                            }
+                            "f64" =>
+                            {
+                                let val : f64 = text.parse().unwrap();
+                                let res = float_type.const_float(val);
+                                env.stack.push((type_.clone(), res.into()));
+                            }
+                            _ => panic!("unknown float suffix pattern {}", parts.1)
+                        }
+                    }
+                    else
+                    {
+                        panic!("unknown float suffix pattern {}", parts.1)
+                    }
+                }
+                else
+                {
+                    panic!("unknown float suffix pattern {}", parts.1)
+                }
+            }
+            "integer" =>
+            {
+                let text = &node.child(0).unwrap().text;
+                let mut location = text.rfind("i");
+                if location.is_none()
+                {
+                    location = text.rfind("u");
+                }
+                if location.is_none()
+                {
+                    panic!("internal error: unknown integer type literal suffix");
+                }
+                let location = location.unwrap();
+                let parts = text.split_at(location);
+                let text = parts.0;
+                if let Some(type_) = env.types.get(parts.1)
+                {
+                    let backend_type = get_backend_type(&mut env.backend_types, &type_);
+                    if let Ok(int_type) = inkwell::types::IntType::try_from(backend_type)
+                    {
+                        let res = match parts.1
+                        {
+                            // FIXME: check if we need to use sign extension (probably don't)
+                            "u8"  => int_type.const_int(text.parse::< u8>().unwrap() as u64, false),
+                            "u16" => int_type.const_int(text.parse::<u16>().unwrap() as u64, false),
+                            "u32" => int_type.const_int(text.parse::<u32>().unwrap() as u64, false),
+                            "u64" => int_type.const_int(text.parse::<u64>().unwrap() as u64, false),
+                            "i8"  => int_type.const_int(text.parse::< i8>().unwrap() as u64, true),
+                            "i16" => int_type.const_int(text.parse::<i16>().unwrap() as u64, true),
+                            "i32" => int_type.const_int(text.parse::<i32>().unwrap() as u64, true),
+                            "i64" => int_type.const_int(text.parse::<i64>().unwrap() as u64, true),
+                            _ => panic!("unknown int suffix pattern {}", parts.1)
+                        };
+                        env.stack.push((type_.clone(), res.into()));
+                    }
+                    else
+                    {
+                        panic!("unknown int suffix pattern {}", parts.1)
+                    }
+                }
+                else
+                {
+                    panic!("unknown int suffix pattern {}", parts.1)
+                }
+            }
+            "label" =>
+            {
+                let label = &node.child(0).unwrap().child(0).unwrap().text;
+                if let Some(block) = env.blocks.get(label)
+                {
+                    env.builder.build_unconditional_branch(*block);
+                    env.builder.position_at_end(*block);
+                }
+                else
+                {
+                    panic!("error: no such block {}", label);
+                }
+            }
+            "ifcondition" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                let (type_, val) = env.stack.pop().unwrap();
+                let label = &node.child(1).unwrap().child(0).unwrap().text;
+                // anonymous block for "else" case
+                let else_block = env.context.append_basic_block(env.func_val, "");
+                if let Some(then_block) = env.blocks.get(label)
+                {
+                    let backend_type = get_backend_type(&mut env.backend_types, &type_);
+                    if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
+                    {
+                        let zero = int_type.const_int(0, true);
+                        let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "");
+                        env.builder.build_conditional_branch(int_val, *then_block, else_block);
+                        env.builder.position_at_end(else_block);
+                    }
+                    else
+                    {
+                        panic!("error: tried to branch on non-integer expression");
+                    }
+                }
+                else
+                {
+                    panic!("error: no such label {}", label);
+                }
+            }
+            "cast" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                let (left_type, left_val) = env.stack.pop().unwrap();
+                
+                let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
+                let target_backend_type = get_backend_type(&mut env.backend_types, &right_type);
+                
+                // cast as own type (replace type, aka do nothing)
+                if left_type.name == right_type.name
+                {
+                    env.stack.push((right_type, left_val));
+                }
+                // cast from pointer to pointer (replace type)
+                else if left_type.is_pointer() && right_type.is_pointer()
+                {
+                    env.stack.push((right_type, left_val));
+                }
+                // cast between float types"
+                else if (left_type.name == "f32" && right_type.name == "f64") || (left_type.name == "f64" && right_type.name == "f32")
+                {
+                    if let (Ok(left_val), Ok(float_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::FloatType::try_from(target_backend_type))
+                    {
+                        let ret = env.builder.build_float_cast(left_val, float_type, "");
+                        env.stack.push((right_type, ret.into()));
+                    }
+                    else
+                    {
+                        panic!("internal error: float cast internal and backend type mismatch");
+                    }
+                }
+                /*
+                // cast between types of same size, non-float. bitcast.
+                else if !left_type.is_float() && !right_type.is_float() && left_type.size() == right_type.size()
+                {
+                    let ret = env.builder.ins().bitcast(target_cranetype, MemFlags::new(), left_val);
+                    env.stack_push((right_type, ret));
+                }
+                // cast from float to int (must be int, not pointer)
+                else if left_type.is_int_signed() && right_type.is_float()
+                {
+                    let ret = env.builder.ins().fcvt_from_sint(target_cranetype, left_val);
+                    env.stack_push((right_type, ret));
+                }
+                else if left_type.is_int_unsigned() && right_type.is_float()
+                {
+                    let ret = env.builder.ins().fcvt_from_uint(target_cranetype, left_val);
+                    env.stack_push((right_type, ret));
+                }
+                // cast from int to float (must be int, not pointer)
+                else if left_type.is_float() && right_type.is_int_signed()
+                {
+                    let ret = env.builder.ins().fcvt_to_sint(target_cranetype, left_val);
+                    env.stack_push((right_type, ret));
+                }
+                else if left_type.is_float() && right_type.is_int_unsigned()
+                {
+                    let ret = env.builder.ins().fcvt_to_uint(target_cranetype, left_val);
+                    env.stack_push((right_type, ret));
+                }
+                // cast from smaller signed to larger unsigned
+                else if left_type.size() < right_type.size() && left_type.is_int_signed() && right_type.is_int_unsigned()
+                {
+                    let ret = env.builder.ins().sextend(target_cranetype, left_val);
+                    env.stack_push((right_type, ret));
+                }
+                // cast from smaller signed to larger unsigned
+                else if left_type.size() < right_type.size() && left_type.is_int_unsigned() && right_type.is_int_signed()
+                {
+                    let ret = env.builder.ins().uextend(target_cranetype, left_val);
+                    env.stack_push((right_type, ret));
+                }
+                // cast to larger int type, signed
+                else if left_type.size() < right_type.size() && left_type.is_int_signed() && right_type.is_int_signed()
+                {
+                    let ret = env.builder.ins().sextend(target_cranetype, left_val);
+                    env.stack_push((right_type, ret));
+                }
+                // cast to larger int type, unsigned
+                else if left_type.size() < right_type.size() && left_type.is_int_unsigned() && right_type.is_int_unsigned()
+                {
+                    let ret = env.builder.ins().uextend(target_cranetype, left_val);
+                    env.stack_push((right_type, ret));
+                }
+                // cast to smaller int type
+                else if left_type.size() > right_type.size() && left_type.is_int() && right_type.is_int()
+                {
+                    let ret = env.builder.ins().ireduce(target_cranetype, left_val);
+                    env.stack_push((right_type, ret));
+                }
+                */
+                else
+                {
+                    panic!("unsupported cast from type {} to type {}", left_type.to_string(), right_type.to_string());
+                }
+            }
+            text => 
+            {
+                if text.starts_with("binexpr")
+                {
+                    compile(env, node.child(0).unwrap(), WantPointer::None);
+                    compile(env, node.child(2).unwrap(), WantPointer::None);
+                    let op = &node.child(1).unwrap().child(0).unwrap().text;
+                    let (right_type, right_val)  = env.stack.pop().unwrap();
+                    let (left_type , left_val )  = env.stack.pop().unwrap();
+                    
+                    let is_u = left_type.name.starts_with("u");
+                    
+                    match (left_type.name.as_str(), right_type.name.as_str())
+                    {
+                        ("f32", "f32") | ("f64", "f64") =>
+                        {
+                            let left_val = left_val.into_float_value();
+                            let right_val = right_val.into_float_value();
+                            match op.as_str()
+                            {
+                                "+" | "-" | "*" | "/" | "%" =>
+                                {
+                                    let res = match op.as_str()
+                                    {
+                                        "+" => env.builder.build_float_add(left_val, right_val, ""),
+                                        "-" => env.builder.build_float_sub(left_val, right_val, ""),
+                                        "*" => env.builder.build_float_mul(left_val, right_val, ""),
+                                        "/" => env.builder.build_float_div(left_val, right_val, ""),
+                                        /*
+                                        "%" =>
+                                        {
+                                            let times = env.builder.ins().fdiv(left_val, right_val);
+                                            let floored = env.builder.ins().floor(times);
+                                            let n = env.builder.ins().fmul(floored, right_val);
+                                            env.builder.ins().fsub(left_val, n)
+                                        }
+                                        */
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    env.stack.push((left_type.clone(), res.into()));
+                                }
+                                
+                                /*
+                                ">" | "<" | ">=" | "<=" | "==" | "!=" =>
+                                {
+                                    let cond = match op.as_str()
+                                    {
+                                        "==" => FloatCC::Equal,
+                                        "!=" => FloatCC::NotEqual,
+                                        "<"  => FloatCC::LessThan,
+                                        "<=" => FloatCC::LessThanOrEqual,
+                                        ">"  => FloatCC::GreaterThan,
+                                        ">=" => FloatCC::GreaterThanOrEqual,
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    let res = env.builder.ins().fcmp(cond, left_val, right_val);
+                                    env.stack_push((env.types.get("u8").unwrap().clone(), res));
+                                }
+                                */
+                                _ => panic!("operator {} not supported on type pair {}, {}", op, left_type.name, right_type.name)
+                            }
+                        }
+                        ("i8", "i8") | ("i16", "i16") | ("i32", "i32") | ("i64", "i64") |
+                        ("u8", "u8") | ("u16", "u16") | ("u32", "u32") | ("u64", "u64") =>
+                        {
+                            let left_val = left_val.into_int_value();
+                            let right_val = right_val.into_int_value();
+                            match op.as_str()
+                            {
+                                /*
+                                "&&" | "||" | "and" | "or" =>
+                                {
+                                    let left_bool  = env.builder.ins().icmp_imm(IntCC::NotEqual, left_val , 0);
+                                    let right_bool = env.builder.ins().icmp_imm(IntCC::NotEqual, right_val, 0);
+                                    
+                                    let res = match op.as_str()
+                                    {
+                                        "||" | "or"  => env.builder.ins().bor (left_bool, right_bool),
+                                        "&&" | "and" => env.builder.ins().band(left_bool, right_bool),
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    env.stack_push((env.types.get("u8").unwrap().clone(), res));
+                                }
+                                "|" | "&" | "^" =>
+                                {
+                                    let res = match op.as_str()
+                                    {
+                                        "|" => env.builder.ins().bor(left_val , right_val),
+                                        "&" => env.builder.ins().band(left_val, right_val),
+                                        "^" => env.builder.ins().bxor(left_val, right_val),
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    env.stack_push((left_type.clone(), res));
+                                }
+                                */
+                                "+" | "-" | "*" | "/" | "%" =>
+                                {
+                                    let res = match op.as_str()
+                                    {
+                                        "+" => env.builder.build_int_add(left_val, right_val, ""),
+                                        "-" => env.builder.build_int_sub(left_val, right_val, ""),
+                                        "*" => env.builder.build_int_mul(left_val, right_val, ""),
+                                        "/" => if is_u
+                                        {
+                                            env.builder.build_int_unsigned_div(left_val, right_val, "")
+                                        }
+                                        else
+                                        {
+                                            env.builder.build_int_signed_div(left_val, right_val, "")
+                                        },
+                                        /*
+                                        "%" =>
+                                        {
+                                            let times = if is_u
+                                            {
+                                                env.builder.ins().udiv(left_val, right_val)
+                                            }
+                                            else
+                                            {
+                                                env.builder.ins().sdiv(left_val, right_val)
+                                            };
+                                            let n = env.builder.ins().imul(times, right_val);
+                                            env.builder.ins().isub(left_val, n)
+                                        }
+                                        */
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    env.stack.push((left_type.clone(), res.into()));
+                                }
+                                
+                                ">" | "<" | ">=" | "<=" | "==" | "!=" =>
+                                {
+                                    let op = match op.as_str()
+                                    {
+                                        "==" => inkwell::IntPredicate::EQ,
+                                        "!=" => inkwell::IntPredicate::NE,
+                                        "<"  => if left_type.is_int_signed() { inkwell::IntPredicate::SLT } else  { inkwell::IntPredicate::ULT },
+                                        "<=" => if left_type.is_int_signed() { inkwell::IntPredicate::SLE } else  { inkwell::IntPredicate::ULE },
+                                        ">"  => if left_type.is_int_signed() { inkwell::IntPredicate::SGT } else  { inkwell::IntPredicate::UGT },
+                                        ">=" => if left_type.is_int_signed() { inkwell::IntPredicate::SGE } else  { inkwell::IntPredicate::UGE },
+                                        _ => panic!("internal error: operator mismatch")
+                                    };
+                                    let res = env.builder.build_int_compare(op, left_val, right_val, "");
+                                    let res = env.builder.build_int_cast_sign_flag(res, env.backend_types.get("u8").unwrap().into_int_type(), false, "");
+                                    env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
+                                }
+                                
+                                _ => panic!("operator {} not supported on type {}", op, left_type.name)
+                            }
+                        }
+                        _ => panic!("unhandled type pair `{}`, `{}`", left_type.name, right_type.name)
+                    }
+                }
+                else
+                {
+                    panic!("unhandled AST node {}", text);
+                }
+            }
+        }
     }
-    fn stack_pop(&mut self) -> Option<(Type, Value)>
+    else
     {
-        let stuff = self.stack.pop().unwrap();
-        Some((stuff.0, stuff.1.unwrap()))
+        panic!("unhandled variable access");
+        /*
+        match node.text.as_str()
+        {
+            "name" =>
+            {
+                let var = variables[node.child(0).unwrap()]
+                builder.use_var()
+            }
+        }*/
     }
-    */
 }
 
 fn main()
 {
     let mut context = inkwell::context::Context::create();
     
+    
     let type_table = [
-        ("void".to_string(), Type { name : "void".to_string(), data : TypeData::Void }, context.void_type().as_any_type_enum()),
+        ("void".to_string(), Type { name : "void".to_string(), data : TypeData::Void }, context.void_type().into()),
         
-        ("u8" .to_string(), Type { name : "u8" .to_string(), data : TypeData::Primitive }, context. i8_type().as_any_type_enum()),
-        ("u16".to_string(), Type { name : "u16".to_string(), data : TypeData::Primitive }, context.i16_type().as_any_type_enum()),
-        ("u32".to_string(), Type { name : "u32".to_string(), data : TypeData::Primitive }, context.i32_type().as_any_type_enum()),
-        ("u64".to_string(), Type { name : "u64".to_string(), data : TypeData::Primitive }, context.i64_type().as_any_type_enum()),
+        ("u8" .to_string(), Type { name : "u8" .to_string(), data : TypeData::Primitive }, context. i8_type().into()),
+        ("u16".to_string(), Type { name : "u16".to_string(), data : TypeData::Primitive }, context.i16_type().into()),
+        ("u32".to_string(), Type { name : "u32".to_string(), data : TypeData::Primitive }, context.i32_type().into()),
+        ("u64".to_string(), Type { name : "u64".to_string(), data : TypeData::Primitive }, context.i64_type().into()),
         
-        ("i8" .to_string(), Type { name : "i8" .to_string(), data : TypeData::Primitive }, context. i8_type().as_any_type_enum()),
-        ("i16".to_string(), Type { name : "i16".to_string(), data : TypeData::Primitive }, context.i16_type().as_any_type_enum()),
-        ("i32".to_string(), Type { name : "i32".to_string(), data : TypeData::Primitive }, context.i32_type().as_any_type_enum()),
-        ("i64".to_string(), Type { name : "i64".to_string(), data : TypeData::Primitive }, context.i64_type().as_any_type_enum()),
+        ("i8" .to_string(), Type { name : "i8" .to_string(), data : TypeData::Primitive }, context. i8_type().into()),
+        ("i16".to_string(), Type { name : "i16".to_string(), data : TypeData::Primitive }, context.i16_type().into()),
+        ("i32".to_string(), Type { name : "i32".to_string(), data : TypeData::Primitive }, context.i32_type().into()),
+        ("i64".to_string(), Type { name : "i64".to_string(), data : TypeData::Primitive }, context.i64_type().into()),
         
-        ("f32".to_string(), Type { name : "f32".to_string(), data : TypeData::Primitive }, context.f32_type().as_any_type_enum()),
-        ("f64".to_string(), Type { name : "f64".to_string(), data : TypeData::Primitive }, context.f64_type().as_any_type_enum()),
+        ("f32".to_string(), Type { name : "f32".to_string(), data : TypeData::Primitive }, context.f32_type().into()),
+        ("f64".to_string(), Type { name : "f64".to_string(), data : TypeData::Primitive }, context.f64_type().into()),
     ];
     
     // only holds frontend types, and only for primitives and structs, not pointers or arrays, those are constructed dynamically
@@ -595,7 +1205,6 @@ fn main()
             x.replace("{}", "None").replace(" {", ":").replace("children: Some(", "children:")
         ).collect::<Vec<_>>().join("\n");
     
-    
     let mut imports : BTreeMap<String, (*const u8, FunctionSig)> = BTreeMap::new();
     fn import_function<T>(types: &BTreeMap<String, Type>, parser : &mut parser::Parser, imports : &mut BTreeMap<String, (*const u8, FunctionSig)>, name : &str, pointer : T, pointer_usize : usize, type_string : &str)
     {
@@ -618,7 +1227,15 @@ fn main()
             panic!("type string must be function type");
         }
     }
+    unsafe extern "C" fn wah()
+    {
+        println!("wah...!!");
+    }
+    import_function::<unsafe extern "C" fn() -> ()>(&types, &mut parser, &mut imports, "wah", wah, wah as usize, "funcptr(void, ())");
     //import_function::<unsafe extern "C" fn(*mut u8, u64) -> ()>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
+    
+    let start = std::time::Instant::now();
+    println!("compiling...");
     
     let context = Context::create();
     let module = context.create_module("main");
@@ -647,6 +1264,7 @@ fn main()
     {
         let funcsig = function.to_sig();
         let func_type = get_function_type(&mut backend_types, &funcsig);
+        println!("{}: {:?} {:?}", f_name, funcsig, func_type);
         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
         func_decs.insert(f_name.clone(), (func_val, funcsig));
     }
@@ -684,7 +1302,7 @@ fn main()
                 {
                     panic!("error: parameter {} redeclared", var_name);
                 }
-                variables.insert(var_name, (var_type, slot, None::<inkwell::values::BasicValueEnum>));
+                variables.insert(var_name, (var_type, slot));
             }
             else
             {
@@ -711,7 +1329,7 @@ fn main()
                     {
                         panic!("error: parameter {} redeclared", var_name);
                     }
-                    variables.insert(var_name, (var_type, slot, None));
+                    variables.insert(var_name, (var_type, slot));
                 }
                 else
                 {
@@ -750,12 +1368,106 @@ fn main()
             false
         });
         
-        //let mut stack = Vec::new();
-        
-        let mut env = Environment { builder : &builder, module : &module, types : &types };
+        let stack = Vec::new();
+        let mut env = Environment { context : &context, stack, variables, builder : &builder, module : &module, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, next_block };
         
         println!("compiling function {}...", function.name);
+        compile(&mut env, &function.body, WantPointer::None);
     }
     
+    
+    // set up IR-level optimization pass manager
+    let pass_manager = {
+        let config = inkwell::targets::InitializationConfig::default();
+        inkwell::targets::Target::initialize_native(&config).unwrap();
+        
+        let builder = inkwell::passes::PassManagerBuilder::create();
+        builder.set_optimization_level(OptimizationLevel::Aggressive);
+        
+        let pass_manager = inkwell::passes::PassManager::create(());
+        builder.populate_module_pass_manager(&pass_manager);
+        
+        pass_manager
+    };
+    
+    
+        
     println!("module:\n{}", module.to_string());
+    
+    let elapsed_time = start.elapsed();
+    println!("time: {}", elapsed_time.as_secs_f64());
+    
+    println!("adding global mappings...");
+    let mut executor = module.create_jit_execution_engine(OptimizationLevel::Aggressive).unwrap();
+    for (f_name, (pointer, funcsig)) in &imports
+    {
+        executor.add_global_mapping(&func_decs.get(f_name).unwrap().0, *pointer as usize);
+    }
+    
+    println!("doing IR optimizations...");
+    pass_manager.run_on(&module);
+    println!("done doing IR optimizations");
+    
+    println!("module after doing IR optimizations:\n{}", module.to_string());
+    
+    macro_rules! get_func
+    {
+        ($name:expr, $T:ty) =>
+        {
+            {
+                let dec = func_decs.get(&$name.to_string()).unwrap();
+                let type_string = dec.1.to_string_rusttype();
+                
+                let want_type_string = std::any::type_name::<$T>(); // FIXME: not guaranteed to be stable across rust versions
+                assert!(want_type_string == type_string, "types do not match:\n{}\n{}\n", want_type_string, type_string);
+                assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
+                
+                executor.get_function::<$T>(&$name).unwrap()
+            }
+        }
+    }
+    unsafe
+    {
+        println!("calling return_literal...");
+        let f = get_func!("return_literal", unsafe extern "C" fn() -> f32);
+        f.call();
+        
+        
+        let f = get_func!("func_gravity", unsafe extern "C" fn() -> f32);
+        
+        println!("running func_gravity...");
+        let start = std::time::Instant::now();
+        
+        let out = f.call();
+        
+        println!("func_gravity() = {}", out);
+        let elapsed_time = start.elapsed();
+        println!("time: {}", elapsed_time.as_secs_f64());
+    }
+    
+    /*
+    {
+        use inkwell::targets::*;
+        
+        Target::initialize_native(&InitializationConfig::default()).expect("Failed to initialize native target");
+        
+        let triple = TargetMachine::get_default_triple();
+        let cpu = TargetMachine::get_host_cpu_name().to_string();
+        let features = TargetMachine::get_host_cpu_features().to_string();
+        
+        let target = Target::from_triple(&triple).unwrap();
+        let machine = target
+            .create_target_machine(
+                &triple,
+                &cpu,
+                &features,
+                OptimizationLevel::Aggressive,
+                RelocMode::Default,
+                CodeModel::Default,
+            )
+            .unwrap();
+        
+        machine.write_to_file(&module, FileType::Assembly, "out.asm".as_ref()).unwrap();
+    }
+    */
 }
