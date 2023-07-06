@@ -555,8 +555,8 @@ fn main()
         ("i32".to_string(), Type { name : "i32".to_string(), data : TypeData::Primitive }, context. i8_type().as_any_type_enum()),
         ("i64".to_string(), Type { name : "i64".to_string(), data : TypeData::Primitive }, context.i16_type().as_any_type_enum()),
         
-        ("f32".to_string(), Type { name : "f32".to_string(), data : TypeData::Primitive }, context.i32_type().as_any_type_enum()),
-        ("f64".to_string(), Type { name : "f64".to_string(), data : TypeData::Primitive }, context.i64_type().as_any_type_enum()),
+        ("f32".to_string(), Type { name : "f32".to_string(), data : TypeData::Primitive }, context.f32_type().as_any_type_enum()),
+        ("f64".to_string(), Type { name : "f64".to_string(), data : TypeData::Primitive }, context.f64_type().as_any_type_enum()),
     ];
     
     // only holds frontend types, and only for primitives and structs, not pointers or arrays, those are constructed dynamically
