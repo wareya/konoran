@@ -6,12 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cranelift = "0.97.1"
-cranelift-jit = "0.97.1"
-cranelift-module = "0.97.1"
-cranelift-codegen = {version="0.97.1", features=["disas"]}
 regex = "1.7.1"
-capstone = "0.9"
+inkwell = { version = "0.2.0", features = ["llvm16-0"] }
 
 [profile.release]
 opt-level = 2
