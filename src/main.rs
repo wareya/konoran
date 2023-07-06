@@ -545,15 +545,15 @@ fn main()
     let type_table = [
         ("void".to_string(), Type { name : "void".to_string(), data : TypeData::Void }, context.void_type().as_any_type_enum()),
         
-        ("u8" .to_string(), Type { name : "u8" .to_string(), data : TypeData::Primitive }, context.f32_type().as_any_type_enum()),
-        ("u16".to_string(), Type { name : "u16".to_string(), data : TypeData::Primitive }, context.f64_type().as_any_type_enum()),
-        ("u32".to_string(), Type { name : "u32".to_string(), data : TypeData::Primitive }, context. i8_type().as_any_type_enum()),
-        ("u64".to_string(), Type { name : "u64".to_string(), data : TypeData::Primitive }, context.i16_type().as_any_type_enum()),
+        ("u8" .to_string(), Type { name : "u8" .to_string(), data : TypeData::Primitive }, context. i8_type().as_any_type_enum()),
+        ("u16".to_string(), Type { name : "u16".to_string(), data : TypeData::Primitive }, context.i16_type().as_any_type_enum()),
+        ("u32".to_string(), Type { name : "u32".to_string(), data : TypeData::Primitive }, context.i32_type().as_any_type_enum()),
+        ("u64".to_string(), Type { name : "u64".to_string(), data : TypeData::Primitive }, context.i64_type().as_any_type_enum()),
         
-        ("i8" .to_string(), Type { name : "i8" .to_string(), data : TypeData::Primitive }, context.i32_type().as_any_type_enum()),
-        ("i16".to_string(), Type { name : "i16".to_string(), data : TypeData::Primitive }, context.i64_type().as_any_type_enum()),
-        ("i32".to_string(), Type { name : "i32".to_string(), data : TypeData::Primitive }, context. i8_type().as_any_type_enum()),
-        ("i64".to_string(), Type { name : "i64".to_string(), data : TypeData::Primitive }, context.i16_type().as_any_type_enum()),
+        ("i8" .to_string(), Type { name : "i8" .to_string(), data : TypeData::Primitive }, context. i8_type().as_any_type_enum()),
+        ("i16".to_string(), Type { name : "i16".to_string(), data : TypeData::Primitive }, context.i16_type().as_any_type_enum()),
+        ("i32".to_string(), Type { name : "i32".to_string(), data : TypeData::Primitive }, context.i32_type().as_any_type_enum()),
+        ("i64".to_string(), Type { name : "i64".to_string(), data : TypeData::Primitive }, context.i64_type().as_any_type_enum()),
         
         ("f32".to_string(), Type { name : "f32".to_string(), data : TypeData::Primitive }, context.f32_type().as_any_type_enum()),
         ("f64".to_string(), Type { name : "f64".to_string(), data : TypeData::Primitive }, context.f64_type().as_any_type_enum()),
