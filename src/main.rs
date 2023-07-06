@@ -863,7 +863,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         let zero = int_type.const_int(0, true);
                         let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "");
-                        env.builder.build_conditional_branch(int_val, *then_block, else_block);
+                        let instval = env.builder.build_conditional_branch(int_val, *then_block, else_block);
+                        //instval.
                         env.builder.position_at_end(else_block);
                     }
                     else
@@ -1014,23 +1015,22 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                     env.stack.push((left_type.clone(), res.into()));
                                 }
                                 
-                                /*
                                 ">" | "<" | ">=" | "<=" | "==" | "!=" =>
                                 {
-                                    let cond = match op.as_str()
+                                    let op = match op.as_str()
                                     {
-                                        "==" => FloatCC::Equal,
-                                        "!=" => FloatCC::NotEqual,
-                                        "<"  => FloatCC::LessThan,
-                                        "<=" => FloatCC::LessThanOrEqual,
-                                        ">"  => FloatCC::GreaterThan,
-                                        ">=" => FloatCC::GreaterThanOrEqual,
+                                        "==" => inkwell::FloatPredicate::OEQ,
+                                        "!=" => inkwell::FloatPredicate::ONE,
+                                        "<"  => inkwell::FloatPredicate::OLT,
+                                        "<=" => inkwell::FloatPredicate::OLE,
+                                        ">"  => inkwell::FloatPredicate::OGT,
+                                        ">=" => inkwell::FloatPredicate::OGE,
                                         _ => panic!("internal error: operator mismatch")
                                     };
-                                    let res = env.builder.ins().fcmp(cond, left_val, right_val);
-                                    env.stack_push((env.types.get("u8").unwrap().clone(), res));
+                                    let res = env.builder.build_float_compare(op, left_val, right_val, "");
+                                    let res = env.builder.build_int_cast_sign_flag(res, env.backend_types.get("u8").unwrap().into_int_type(), false, "");
+                                    env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
                                 }
-                                */
                                 _ => panic!("operator {} not supported on type pair {}, {}", op, left_type.name, right_type.name)
                             }
                         }
@@ -1147,10 +1147,14 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
     }
 }
 
+const VERBOSE : bool = false;
+
 fn main()
 {
-    let mut context = inkwell::context::Context::create();
+    println!("startup...");
     
+    let start = std::time::Instant::now();
+    let mut context = inkwell::context::Context::create();
     
     let type_table = [
         ("void".to_string(), Type { name : "void".to_string(), data : TypeData::Void }, context.void_type().into()),
@@ -1189,6 +1193,7 @@ fn main()
     
     let program = Program::new(&mut types, &ast).unwrap();
     
+    /*
     let mut ast_debug = format!("{:#?}", program);
     ast_debug = ast_debug.replace("    ", " ");
     ast_debug = ast_debug.split("\n").filter(|x|
@@ -1204,6 +1209,7 @@ fn main()
         ).map(|x|
             x.replace("{}", "None").replace(" {", ":").replace("children: Some(", "children:")
         ).collect::<Vec<_>>().join("\n");
+    */
     
     let mut imports : BTreeMap<String, (*const u8, FunctionSig)> = BTreeMap::new();
     fn import_function<T>(types: &BTreeMap<String, Type>, parser : &mut parser::Parser, imports : &mut BTreeMap<String, (*const u8, FunctionSig)>, name : &str, pointer : T, pointer_usize : usize, type_string : &str)
@@ -1227,12 +1233,16 @@ fn main()
             panic!("type string must be function type");
         }
     }
+    /*
     unsafe extern "C" fn wah()
     {
         println!("wah...!!");
     }
     import_function::<unsafe extern "C" fn() -> ()>(&types, &mut parser, &mut imports, "wah", wah, wah as usize, "funcptr(void, ())");
+    */
     //import_function::<unsafe extern "C" fn(*mut u8, u64) -> ()>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
+    
+    println!("startup done! time: {}", start.elapsed().as_secs_f64());
     
     let start = std::time::Instant::now();
     println!("compiling...");
@@ -1371,10 +1381,18 @@ fn main()
         let stack = Vec::new();
         let mut env = Environment { context : &context, stack, variables, builder : &builder, module : &module, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, next_block };
         
-        println!("compiling function {}...", function.name);
+        if VERBOSE
+        {
+            println!("compiling function {}...", function.name);
+        }
         compile(&mut env, &function.body, WantPointer::None);
     }
     
+    println!("compilation time: {}", start.elapsed().as_secs_f64());
+    
+    println!("features: {}", inkwell::targets::TargetMachine::get_host_cpu_features());
+    
+    let start = std::time::Instant::now();
     
     // set up IR-level optimization pass manager
     let pass_manager = {
@@ -1389,26 +1407,35 @@ fn main()
         
         pass_manager
     };
+    println!("pass manager build time: {}", start.elapsed().as_secs_f64());
     
     
-        
-    println!("module:\n{}", module.to_string());
+    if VERBOSE
+    {
+        println!("module:\n{}", module.to_string());
+        println!("adding global mappings...");
+    }
     
-    let elapsed_time = start.elapsed();
-    println!("time: {}", elapsed_time.as_secs_f64());
-    
-    println!("adding global mappings...");
+    let start = std::time::Instant::now();
     let mut executor = module.create_jit_execution_engine(OptimizationLevel::Aggressive).unwrap();
     for (f_name, (pointer, funcsig)) in &imports
     {
         executor.add_global_mapping(&func_decs.get(f_name).unwrap().0, *pointer as usize);
     }
+    println!("executor build time: {}", start.elapsed().as_secs_f64());
     
-    println!("doing IR optimizations...");
+    let start = std::time::Instant::now();
+    if VERBOSE
+    {
+        println!("doing IR optimizations...");
+    }
     pass_manager.run_on(&module);
-    println!("done doing IR optimizations");
     
-    println!("module after doing IR optimizations:\n{}", module.to_string());
+    println!("done doing IR optimizations. time: {}", start.elapsed().as_secs_f64());
+    if VERBOSE
+    {
+        println!("module after doing IR optimizations:\n{}", module.to_string());
+    }
     
     macro_rules! get_func
     {
@@ -1426,30 +1453,33 @@ fn main()
             }
         }
     }
+    
     unsafe
     {
-        println!("calling return_literal...");
+        /*
+        if VERBOSE
+        {
+            println!("calling return_literal...");
+        }
         let f = get_func!("return_literal", unsafe extern "C" fn() -> f32);
         f.call();
+        */
         
         
         let f = get_func!("func_gravity", unsafe extern "C" fn() -> f32);
         
-        println!("running func_gravity...");
-        let start = std::time::Instant::now();
         
+        let start = std::time::Instant::now();
+        println!("running func_gravity...");
         let out = f.call();
+        let elapsed_time = start.elapsed();
         
         println!("func_gravity() = {}", out);
-        let elapsed_time = start.elapsed();
         println!("time: {}", elapsed_time.as_secs_f64());
     }
     
-    /*
     {
         use inkwell::targets::*;
-        
-        Target::initialize_native(&InitializationConfig::default()).expect("Failed to initialize native target");
         
         let triple = TargetMachine::get_default_triple();
         let cpu = TargetMachine::get_host_cpu_name().to_string();
@@ -1469,5 +1499,4 @@ fn main()
         
         machine.write_to_file(&module, FileType::Assembly, "out.asm".as_ref()).unwrap();
     }
-    */
 }

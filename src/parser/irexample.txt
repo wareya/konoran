@@ -5,12 +5,14 @@
 
 
 
+/*
 f32 return_literal()
 {
     f32 x;
 exit:
     return 16.1f32;
 }
+*/
 
 
 /*
@@ -78,7 +80,7 @@ head:
     
     i = i + 1u64;
     
-    if (i < 5000000u64)
+    if (i < 500000000u64)
         goto head;
     
     return (y as f32);
