@@ -396,19 +396,20 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
             }
             TypeData::Array(inner, size) =>
             {
-                let backend_inner = get_backend_type(backend_types, &inner);
-                let ptr_type = if let Ok(basic) = inkwell::types::BasicTypeEnum::try_from(backend_inner)
-                {
-                    basic.array_type(*size as u32)
-                }
-                else
-                {
-                    panic!("error: can't build arrays of type {}", key)
-                }.into();
+                let backend_inner = get_backend_type_sized(backend_types, &inner);
+                let ptr_type = backend_inner.array_type(*size as u32).into();
                 backend_types.insert(key, ptr_type);
                 ptr_type
             }
-            TypeData::Struct(struct_data) => panic!("TODO"),
+            TypeData::Struct(struct_data) =>
+            {
+                //let mut types = Vec::new();
+                for (name, type_, offset) in struct_data
+                {
+                    
+                }
+                panic!("TODO");
+            }
             TypeData::FuncPointer(sig) => panic!("TODO"),
         }
     }
@@ -649,21 +650,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let (type_val, val) = env.stack.pop().unwrap();
                 let (type_left_incomplete, left_addr) = env.stack.pop().unwrap();
                 
-                /*
-                for name in env.variables.keys()
-                {
-                    let slot = env.variables[name].1;
-                    if left_slot.is_some() && slot == left_slot.unwrap()
-                    {
-                        if env.const_vars.contains_key(name)
-                        {
-                            panic!("error: can't reassign to const variables");
-                        }
-                        break;
-                    }
-                }
-                */
-                
                 let type_left = if type_left_incomplete.is_pointer()
                 {
                     type_left_incomplete.deref_ptr()
@@ -717,12 +703,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         println!("INTERNAL ERROR: FIXME!!!!!");
                     }
                 }
-                /*
-                else if env.const_vars.contains_key(name)
-                {
-                    panic!("error: can't reassign to constant variable `{}`", name);
-                }
-                */
                 else
                 {
                     panic!("error: unrecognized variable `{}`", name);
@@ -765,24 +745,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         }
                     }
                 }
-                /*
-                else if env.const_vars.contains_key(name)
-                {
-                    let (type_, val) = &env.const_vars[name];
-                    if want_pointer != WantPointer::None
-                    {
-                        panic!("error: tried to access a const variable in a way that involves its address; use a non-const variable");
-                    }
-                    else if val.is_some()
-                    {
-                        env.stack_push((type_.clone(), val.unwrap()));
-                    }
-                    else
-                    {
-                        panic!("error: tried to read from const variable before it has been assigned");
-                    }
-                }
-                */
                 else if let Some((func_val, funcsig)) = env.func_decs.get(name)
                 {
                     let func_ptr = func_val.as_global_value().as_pointer_value();
@@ -1584,7 +1546,7 @@ fn main()
         // declare variables
         function.body.visit(&mut |node : &ASTNode|
         {
-            if node.is_parent() && (node.text == "declaration" || node.text == "fulldeclaration" || node.text == "constdeclaration")
+            if node.is_parent() && (node.text == "declaration" || node.text == "fulldeclaration")
             {
                 let var_type = parse_type(&types, &node.child(0).unwrap()).unwrap();
                 let var_name = node.child(1).unwrap().child(0).unwrap().text.clone();

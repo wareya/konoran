@@ -78,20 +78,22 @@ bitcast: HIDELITERALS
 array_literal: HIDELITERALS
 [ $expr$..., ]
 
+struct_literal: HIDELITERALS
+{ $expr$..., }
+
 supersimplexpr: SIMPLIFY
+$array_literal$
+$struct_literal$
 $parenexpr$
 $float$
 $integer$
 $rvarname$
 $cast$
 $bitcast$
-$array_literal$
-
-intrinsic_memcmp: HIDELITERALS
-intrinsic_memcmp ( $expr$ , $expr$ , $expr$ )
 
 simplexpr: SIMPLIFY
-$intrinsic_memcmp$
+$array_literal$
+$struct_literal$
 $rhunexpr$
 $parenexpr$
 $float$
@@ -99,7 +101,6 @@ $integer$
 $rvarname$
 $cast$
 $bitcast$
-$array_literal$
 
 expr: SIMPLIFY
 $binexpr_0$
@@ -242,15 +243,11 @@ $type$ $name$ ;
 fulldeclaration: HIDELITERALS
 $type$ $name$ = $expr$ ;
 
-constdeclaration: HIDELITERALS
-const $type$ $name$ = $expr$ ;
-
 statement: HIDELITERALS
 $instruction$
 $statementlist$
 $declaration$
 $fulldeclaration$
-$constdeclaration$
 $ifcondition$
 $binstate$
 $label$

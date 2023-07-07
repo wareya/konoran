@@ -16,6 +16,28 @@ pub struct ASTNode {
 }
 
 impl ASTNode {
+    pub (crate) fn pretty_debug(&self) -> String
+    {
+        let mut ast_debug = format!("{:#?}", self);
+        ast_debug = ast_debug.replace("    ", " ");
+        ast_debug = ast_debug.split("\n").filter(|x|
+               !x.contains(" position:")
+            && !x.contains(" line:")
+            && !x.contains(" children: None")
+            && !x.contains(" ),")
+            && !x.contains(" },")
+            && !x.contains(" ],")
+            && !x.ends_with(" [")
+            && !x.ends_with(" (")
+            && *x != "}"
+            ).map(|x|
+                x.replace("{}", "None").replace(" {", ":").replace("children: Some(", "children:")
+            ).collect::<Vec<_>>().join("\n");
+        ast_debug
+    }
+}
+
+impl ASTNode {
     pub (crate) fn last_child(&'_ self) -> Result<&'_ ASTNode, String>
     {
         let count = self.child_count()?;

@@ -74,6 +74,22 @@ pub (crate) fn build_best_error(myself : &mut Option<ParseError>, other : Option
     }
 }
 
+pub (crate) fn build_latest_node(myself : &mut Option<ASTNode>, other : Option<ASTNode>)
+{
+    match (myself.as_mut(), other)
+    {
+        (Some(myself), Some(other)) =>
+        {
+            if other.line > myself.line || (other.line == myself.line && other.position > myself.position)
+            {
+                *myself = other;
+            }
+        }
+        (None, Some(other)) => *myself = Some(other),
+        _ => {}
+    }
+}
+
 #[derive(Clone)]
 pub (crate) struct GrammarPoint {
     pub (crate) name: String,
@@ -112,8 +128,8 @@ fn plainerr<T>(mystr : &str) -> Result<T, String>
     Err(minierr(mystr))
 }
 
-type ParseInfo = (Option<ASTNode>, usize, Option<ParseError>);
-type ParseVecInfo = (Option<Vec<ASTNode>>, usize, Option<ParseError>);
+type ParseInfo = (Option<ASTNode>, usize, Option<ParseError>, Option<ASTNode>);
+type ParseVecInfo = (Option<Vec<ASTNode>>, usize, Option<ParseError>, Option<ASTNode>);
 
 impl Default for Parser {
     fn default() -> Parser
@@ -346,13 +362,14 @@ impl Parser {
     {
         if tokens.len() == 0
         {
-            return Ok((None, 0, None));
+            return Ok((None, 0, None, None));
         }
         
         let mut nodes = Vec::new();
         let mut totalconsumed = 0;
         
         let mut latesterror = None;
+        let mut latestnode = None;
         
         let mut defaultreturn = (None, 0);
         
@@ -367,7 +384,8 @@ impl Parser {
                 {
                     let kind = self.nodetypemap.get(text).ok_or_else(|| minierr(&format!("internal error: failed to find node type {} used by some grammar form", text)))?;
                     
-                    let (bit, consumed, error) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    let (bit, consumed, error, newlatest) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    build_latest_node(&mut latestnode, newlatest);
                     build_best_error(&mut latesterror, error);
                     if let Some(node) = bit
                     {
@@ -376,14 +394,15 @@ impl Parser {
                     }
                     else
                     {
-                        return Ok((defaultreturn.0, defaultreturn.1, latesterror));
+                        return Ok((defaultreturn.0, defaultreturn.1, latesterror, latestnode));
                     }
                 }
                 GrammarToken::OptionalName(text) =>
                 {
                     let kind = self.nodetypemap.get(text).ok_or_else(|| minierr(&format!("internal error: failed to find node type {} used by some grammar form", text)))?;
                     
-                    let (bit, consumed, error) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    let (bit, consumed, error, newlatest) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    build_latest_node(&mut latestnode, newlatest);
                     build_best_error(&mut latesterror, error);
                     if let Some(node) = bit
                     {
@@ -395,7 +414,8 @@ impl Parser {
                 {
                     let kind = self.nodetypemap.get(text).ok_or_else(|| minierr(&format!("internal error: failed to find node type {} used by some grammar form", text)))?;
                     
-                    let (mut bit, mut consumed, mut error) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    let (mut bit, mut consumed, mut error, mut newlatest) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    build_latest_node(&mut latestnode, newlatest);
                     build_best_error(&mut latesterror, error);
                     
                     while let Some(node) = bit
@@ -407,15 +427,18 @@ impl Parser {
                         bit = tuple.0;
                         consumed = tuple.1;
                         error = tuple.2;
+                        newlatest = tuple.3;
                         
                         build_best_error(&mut latesterror, error);
+                        build_latest_node(&mut latestnode, newlatest);
                     }
                 }
                 GrammarToken::SpecialNameList{text, subtype} =>
                 {
                     let kind = self.nodetypemap.get(text).ok_or_else(|| minierr(&format!("internal error: failed to find node type {} used by some grammar form", text)))?;
                     
-                    let (mut bit, mut consumed, mut error) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    let (mut bit, mut consumed, mut error, mut newlatest) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    build_latest_node(&mut latestnode, newlatest);
                     build_best_error(&mut latesterror, error);
                     
                     while let Some(node) = bit
@@ -427,25 +450,28 @@ impl Parser {
                         bit = tuple.0;
                         consumed = tuple.1;
                         error = tuple.2;
+                        newlatest = tuple.3;
                         
                         build_best_error(&mut latesterror, error);
+                        build_latest_node(&mut latestnode, newlatest);
                     }
                     
                     if nodes.len() == 0 || nodes.last().unwrap().child(0).unwrap().text != *subtype
                     {
                         println!("{:#?}", nodes.last().unwrap());
-                        return Ok((defaultreturn.0, defaultreturn.1, latesterror));
+                        return Ok((defaultreturn.0, defaultreturn.1, latesterror, latestnode));
                     }
                 }
                 GrammarToken::SeparatorNameList{text, separator} =>
                 {
                     let kind = self.nodetypemap.get(text).ok_or_else(|| minierr(&format!("internal error: failed to find node type {} used by some grammar form", text)))?;
                     
-                    let (mut bit, mut consumed, mut error) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    let (mut bit, mut consumed, mut error, mut newlatest) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    build_latest_node(&mut latestnode, newlatest);
                     build_best_error(&mut latesterror, error);
                     if bit.is_none()
                     {
-                        return Ok((defaultreturn.0, defaultreturn.1, latesterror));
+                        return Ok((defaultreturn.0, defaultreturn.1, latesterror, latestnode));
                     }
                     while let Some(node) = bit
                     {
@@ -462,8 +488,10 @@ impl Parser {
                                 bit = tuple.0;
                                 consumed = tuple.1;
                                 error = tuple.2;
+                                newlatest = tuple.3;
                                 
                                 build_best_error(&mut latesterror, error);
+                                build_latest_node(&mut latestnode, newlatest);
                                 
                                 // undo separator drain if right-hand rule parse failed
                                 if bit.is_none()
@@ -488,7 +516,8 @@ impl Parser {
                         }
                     }
                     build_new_error(&mut latesterror, index+totalconsumed, &text);
-                    return Ok((defaultreturn.0, defaultreturn.1, latesterror));
+                    //build_latest_node(&mut latestnode, newlatest);
+                    return Ok((defaultreturn.0, defaultreturn.1, latesterror, latestnode));
                 }
                 GrammarToken::Regex(text) =>
                 {
@@ -502,7 +531,7 @@ impl Parser {
                         }
                     }
                     build_new_error(&mut latesterror, index+totalconsumed, formname.unwrap_or(&text));
-                    return Ok((defaultreturn.0, defaultreturn.1, latesterror));
+                    return Ok((defaultreturn.0, defaultreturn.1, latesterror, latestnode));
                 }
                 GrammarToken::RestIsOptional =>
                 {
@@ -511,7 +540,9 @@ impl Parser {
             }
         }
         
-        Ok((Some(nodes), totalconsumed, latesterror))
+        build_latest_node(&mut latestnode, nodes.last().cloned());
+        
+        Ok((Some(nodes), totalconsumed, latesterror, latestnode))
     }
 
     // attempts to parse a token list as each form of a grammar point in order and uses the first valid one
@@ -519,33 +550,31 @@ impl Parser {
     {
         if tokens.len() == 0
         {
-            return Ok((Some(ASTNode{text : "program".to_string(), line : 0, position : 0, children : Some(Vec::new()) }), 0, None));
+            return Ok((Some(ASTNode{text : "program".to_string(), line : 0, position : 0, children : Some(Vec::new()) }), 0, None, None));
         }
         
         let mut latesterror : Option<ParseError> = None;
+        let mut latestnode : Option<ASTNode> = None;
         
         for form in &nodetype.forms
         {
-            let sentname =
-            if nodetype.istoken
+            let sentname = if nodetype.istoken { Some(nodetype.name.as_str()) } else { None };
+            let (nodes, consumed, error, newlatest) = self.parse_form(&tokens, index, form, sentname)?;
+            build_latest_node(&mut latestnode, newlatest);
+            if let Some(nodes) = &nodes
             {
-                Some(nodetype.name.as_str())
+                build_latest_node(&mut latestnode, nodes.last().cloned());
             }
-            else
-            {
-                None
-            };
-            let (nodes, consumed, error) = self.parse_form(&tokens, index, form, sentname)?;
             build_best_error(&mut latesterror, error);
             if let Some(token) = tokens.get(index)
             {
                 if let Some(nodes) = nodes
                 {
-                    return Ok((Some(ASTNode{text : nodetype.name.clone(), line : token.line, position : token.position, children : Some(nodes) }), consumed, latesterror));
+                    return Ok((Some(ASTNode{text : nodetype.name.clone(), line : token.line, position : token.position, children : Some(nodes) }), consumed, latesterror, latestnode));
                 }
             }
         }
-        Ok((None, 0, latesterror))
+        Ok((None, 0, latesterror, latestnode))
     }
     fn rotate(ast : &mut ASTNode) -> Result<(), String>
     {
@@ -727,7 +756,7 @@ impl Parser {
         }
         if let Some(program_type) = self.nodetypemap.get(root)
         {
-            let (raw_ast, consumed, latesterror) = self.parse(&tokens, 0, program_type)?;
+            let (raw_ast, consumed, latesterror, latestnode) = self.parse(&tokens, 0, program_type)?;
             if !silent
             {
                 println!("successfully parsed {} out of {} tokens", consumed, tokens.len());
@@ -771,6 +800,8 @@ impl Parser {
                         if let Some(line) = lines.get(linenum-1)
                         {
                             println!("context on line {}:\n{}\n{}^", linenum, line, " ".repeat(position-1));
+                            println!("latest AST node: {:?}", latestnode);
+                            println!("latest AST node (pretty):\n{}", latestnode.unwrap().pretty_debug());
                         }
                         else
                         {
