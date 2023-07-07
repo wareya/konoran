@@ -414,6 +414,19 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
     }
 }
 
+fn get_backend_type_sized<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, type_ : &Type) -> inkwell::types::BasicTypeEnum<'c>
+{
+    let backend_type = get_backend_type(backend_types, &type_);
+    if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
+    {
+        basic_type
+    }
+    else
+    {
+        panic!("error: tried to use a non-sized type in a context where only sized types are allowed");
+    }
+}
+
 fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, sig : &FunctionSig) -> inkwell::types::FunctionType<'c>
 {
     let sig_type = Type::from_functionsig(sig);
@@ -681,6 +694,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     if want_pointer == WantPointer::Real
                     {
+                        println!("pushing lvar pointer... for {}", name);
                         env.stack.push((type_.to_ptr(), slot.into()));
                     }
                     else
@@ -718,6 +732,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else if type_.is_composite()
                     {
+                        println!("pushing composite rvar... for {}", name);
+                        println!("value: {:?}", slot);
                         env.stack.push((type_.clone(), slot.into()));
                     }
                     else
@@ -764,6 +780,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             }
             "arrayindex_head" =>
             {
+                println!("compiling arrayindex head");
+                
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 compile(env, node.child(1).unwrap(), WantPointer::None);
                 let (offset_type, offset_val) = env.stack.pop().unwrap();
@@ -772,22 +790,17 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 if offset_type.name == "i64"
                 {
                     // FIXME: double check that nested types work properly
-                    
                     println!("\ntype: {:?}", base_type);
                     println!("\nval: {:?}\n", base_addr);
                     
-                    let offset_val = offset_val.into_int_value();
-                    let offset_type : inkwell::types::IntType = get_backend_type(&mut env.backend_types, &offset_type).into_int_type();
                     let inner_type = base_type.array_to_inner();
-                    let ptr_int_type = env.ptr_int_type;
-                    let base_addr = env.builder.build_ptr_to_int(base_addr.into_pointer_value(), ptr_int_type, "");
+                    let inner_backend_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
+                    let inner_addr = unsafe
+                    {
+                        env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "")
+                    };
                     
-                    let inner_size = inner_type.aligned_size();
-                    let inner_offset = env.builder.build_int_mul(offset_val, offset_type.const_int(inner_size as u64, true), "");
-                    let inner_addr = env.builder.build_int_add(base_addr, inner_offset, "");
-                    
-                    let ptr_type = get_backend_type(&mut env.backend_types, &inner_type.to_ptr()).into_pointer_type();
-                    let inner_addr = env.builder.build_int_to_ptr(inner_addr, ptr_type, "");
+                    println!("\noffset val: {:?}\n", inner_addr);
                     
                     if want_pointer == WantPointer::Real
                     {
@@ -862,6 +875,68 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     compile(env, child, WantPointer::None);
                 }
             }
+            /*
+            "array_literal" =>
+            {
+                let stack_size = env.stack.len();
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::None);
+                }
+                let array_length = env.stack.len() - stack_size;
+                println!("array length: {}", array_length);
+                let mut vals = Vec::new();
+                let mut element_type = None;
+                
+                for _ in 0..array_length
+                {
+                    let (type_, val) = env.stack.pop().unwrap();
+                    if element_type.is_none()
+                    {
+                        element_type = Some(type_.clone());
+                    }
+                    if Some(type_.clone()) != element_type
+                    {
+                        panic!("error: array literals must entirely be of a single type");
+                    }
+                    vals.insert(0, val);
+                }
+                
+                if element_type.is_some()
+                {
+                    let element_type = element_type.unwrap();
+                    let array_type = element_type.to_array(array_length);
+                    let backend_type = get_backend_type_sized(&mut env.backend_types, &array_type);
+                    let slot = builder.build_alloca(basic_type, &var_name);
+                    
+                    let mut offset = 0;
+                    for val in vals
+                    {
+                        // FIXME: this is unsustainable
+                        if element_type.is_composite()
+                        {
+                            //let config = env.module.target_config();
+                            //let size = env.builder.ins().iconst(types::I64, element_type.size() as i64);
+                            //let slot_addr = env.builder.ins().stack_addr(types::I64, slot, offset);
+                            //env.builder.call_memcpy(config, slot_addr, val, size);
+                            panic!("FIXME unimplemented nested composite type in array");
+                        }
+                        else
+                        {
+                            env.builder.build_store(val, slot);
+                        }
+                        offset += element_type.aligned_size() as i32;
+                    }
+                    
+                    let addr = env.builder.ins().stack_addr(types::I64, slot, 0);
+                    env.stack_push((array_type, addr));
+                }
+                else
+                {
+                    panic!("error: zero-length array literals are not allowed");
+                }
+            }
+            */
             "float" =>
             {
                 let text = &node.child(0).unwrap().text;
@@ -1467,7 +1542,16 @@ fn main()
             let backend_type = get_backend_type(&mut backend_types, &var_type);
             if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
             {
-                let slot = builder.build_alloca(basic_type, &var_name);
+                let slot = if let TypeData::Array(inner_type, size) = &var_type.data
+                {
+                    let size = get_backend_type_sized(&mut backend_types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
+                    let inner_basic_type = get_backend_type_sized(&mut backend_types, &inner_type);
+                    builder.build_array_alloca(inner_basic_type, size, &var_name)
+                }
+                else
+                {
+                    builder.build_alloca(basic_type, &var_name)
+                };
                 
                 let val = func_val.get_nth_param(j as u32).unwrap();
                 builder.build_store(slot, val);
@@ -1494,21 +1578,24 @@ fn main()
                 let var_type = parse_type(&types, &node.child(0).unwrap()).unwrap();
                 let var_name = node.child(1).unwrap().child(0).unwrap().text.clone();
                 
-                let backend_type = get_backend_type(&mut backend_types, &var_type);
-                if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
+                let basic_type = get_backend_type_sized(&mut backend_types, &var_type);
+                
+                let slot = if let TypeData::Array(inner_type, size) = &var_type.data
                 {
-                    let slot = builder.build_alloca(basic_type, &var_name);
-                    
-                    if variables.contains_key(&var_name) || func_decs.contains_key(&var_name)
-                    {
-                        panic!("error: parameter {} redeclared", var_name);
-                    }
-                    variables.insert(var_name, (var_type, slot));
+                    let size = get_backend_type_sized(&mut backend_types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
+                    let inner_basic_type = get_backend_type_sized(&mut backend_types, &inner_type);
+                    builder.build_array_alloca(inner_basic_type, size, &var_name)
                 }
                 else
                 {
-                    panic!("error: variables of type {} are not allowed", var_type.name);
+                    builder.build_alloca(basic_type, &var_name)
+                };
+                
+                if variables.contains_key(&var_name) || func_decs.contains_key(&var_name)
+                {
+                    panic!("error: parameter {} redeclared", var_name);
                 }
+                variables.insert(var_name, (var_type, slot));
                 
                 i += 1;
             }
