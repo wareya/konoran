@@ -304,6 +304,18 @@ fn size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types :
     target_data.get_store_size(&backend_type) // without alignment padding
     //target_data.get_abi_size() // with alignment padding
 }
+fn whyyyyyy_kgafnagerriawgiugsafbiu438438094<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum<'c>) -> inkwell::context::ContextRef<'c>
+{
+    match sdkawuidsguisagugarewudsga
+    {
+        inkwell::types::BasicTypeEnum::ArrayType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        inkwell::types::BasicTypeEnum::FloatType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        inkwell::types::BasicTypeEnum::IntType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        inkwell::types::BasicTypeEnum::PointerType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        inkwell::types::BasicTypeEnum::StructType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+    }
+}
 fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, type_ : &Type) -> inkwell::types::AnyTypeEnum<'c>
 {
     let key = type_.to_string();
@@ -345,12 +357,23 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
             }
             TypeData::Struct(struct_data) =>
             {
-                //let mut types = Vec::new();
+                let mut types = Vec::new();
                 for (name, type_) in struct_data
                 {
-                    
+                    let backend_type = get_backend_type_sized(backend_types, &type_);
+                    types.push(backend_type);
                 }
-                panic!("TODO");
+                if let Some(first) = types.first()
+                {
+                    let context = whyyyyyy_kgafnagerriawgiugsafbiu438438094(*first);
+                    let ptr_type = context.struct_type(&types, false).into();
+                    backend_types.insert(key, ptr_type);
+                    ptr_type
+                }
+                else
+                {
+                    panic!("error: structs cannot be empty");
+                }
             }
             TypeData::FuncPointer(sig) => panic!("TODO"),
         }
