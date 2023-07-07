@@ -394,7 +394,20 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                 backend_types.insert(key, ptr_type);
                 ptr_type
             }
-            TypeData::Array(inner, size) => panic!("TODO"),
+            TypeData::Array(inner, size) =>
+            {
+                let backend_inner = get_backend_type(backend_types, &inner);
+                let ptr_type = if let Ok(basic) = inkwell::types::BasicTypeEnum::try_from(backend_inner)
+                {
+                    basic.array_type(*size as u32)
+                }
+                else
+                {
+                    panic!("error: can't build arrays of type {}", key)
+                }.into();
+                backend_types.insert(key, ptr_type);
+                ptr_type
+            }
             TypeData::Struct(struct_data) => panic!("TODO"),
             TypeData::FuncPointer(sig) => panic!("TODO"),
         }
@@ -537,6 +550,7 @@ struct Environment<'a, 'b, 'c, 'd>
     func_val      : inkwell::values::FunctionValue<'c>,
     blocks        : HashMap<String, inkwell::basic_block::BasicBlock<'c>>,
     next_block    : HashMap<inkwell::basic_block::BasicBlock<'c>, inkwell::basic_block::BasicBlock<'c>>,
+    ptr_int_type  : inkwell::types::IntType<'c>,
 }
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -702,20 +716,16 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         env.stack.push((type_.to_vptr(), slot.into()));
                     }
+                    else if type_.is_composite()
+                    {
+                        env.stack.push((type_.clone(), slot.into()));
+                    }
                     else
                     {
                         let backend_type = get_backend_type(&mut env.backend_types, &type_);
                         if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
                         {
                             let val = env.builder.build_load(basic_type, slot, "");
-                            
-                            let instval = val.as_instruction_value().unwrap();
-                            let v = instval.get_volatile();
-                            if false
-                            {
-                                println!("volatile: {:?}", v);
-                            }
-                            
                             env.stack.push((type_.clone(), val));
                         }
                         else
@@ -741,16 +751,115 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         panic!("error: tried to read from const variable before it has been assigned");
                     }
                 }
-                else if env.funcrefs.contains_key(name)
-                {
-                    let (funcsig, funcref) = env.funcrefs.get(name).unwrap();
-                    let funcaddr = env.builder.ins().func_addr(types::I64, *funcref);
-                    env.stack_push((Type::from_functionsig(funcsig), funcaddr));
-                }
                 */
+                else if let Some((func_val, funcsig)) = env.func_decs.get(name)
+                {
+                    let func_ptr = func_val.as_global_value().as_pointer_value();
+                    env.stack.push((Type::from_functionsig(funcsig), func_ptr.into()));
+                }
                 else
                 {
                     panic!("unrecognized identifier {}", name);
+                }
+            }
+            "arrayindex_head" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                compile(env, node.child(1).unwrap(), WantPointer::None);
+                let (offset_type, offset_val) = env.stack.pop().unwrap();
+                let (base_type, base_addr) = env.stack.pop().unwrap();
+                
+                if offset_type.name == "i64"
+                {
+                    // FIXME: double check that nested types work properly
+                    
+                    println!("\ntype: {:?}", base_type);
+                    println!("\nval: {:?}\n", base_addr);
+                    
+                    let offset_val = offset_val.into_int_value();
+                    let offset_type : inkwell::types::IntType = get_backend_type(&mut env.backend_types, &offset_type).into_int_type();
+                    let inner_type = base_type.array_to_inner();
+                    let ptr_int_type = env.ptr_int_type;
+                    let base_addr = env.builder.build_ptr_to_int(base_addr.into_pointer_value(), ptr_int_type, "");
+                    
+                    let inner_size = inner_type.aligned_size();
+                    let inner_offset = env.builder.build_int_mul(offset_val, offset_type.const_int(inner_size as u64, true), "");
+                    let inner_addr = env.builder.build_int_add(base_addr, inner_offset, "");
+                    
+                    let ptr_type = get_backend_type(&mut env.backend_types, &inner_type.to_ptr()).into_pointer_type();
+                    let inner_addr = env.builder.build_int_to_ptr(inner_addr, ptr_type, "");
+                    
+                    if want_pointer == WantPointer::Real
+                    {
+                        env.stack.push((inner_type.to_ptr(), inner_addr.into()));
+                    }
+                    else if want_pointer == WantPointer::Virtual
+                    {
+                        env.stack.push((inner_type.to_vptr(), inner_addr.into()));
+                    }
+                    else
+                    {
+                        let backend_type = get_backend_type(&mut env.backend_types, &inner_type);
+                        if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
+                        {
+                            let val = env.builder.build_load(basic_type, inner_addr, "");
+                            env.stack.push((inner_type.clone(), val));
+                        }
+                        else
+                        {
+                            panic!("error: array indexing on type {} is not allowed", inner_type.name);
+                        }
+                    }
+                }
+                else
+                {
+                    panic!("error: can't offset into arrays except with type i64 (used type `{}`)", offset_type.name)
+                }
+            }
+            "funcargs_head" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                let (type_, funcaddr) = env.stack.pop().unwrap();
+                match type_.data
+                {
+                    TypeData::FuncPointer(funcsig) =>
+                    {
+                        let func_type = get_function_type(&mut env.backend_types, &funcsig);
+                        
+                        compile(env, node.child(1).unwrap(), WantPointer::None);
+                        let num_args = node.child(1).unwrap().child_count().unwrap();
+                        
+                        let mut args = Vec::new();
+                        for (i, arg_type) in funcsig.args.iter().rev().enumerate()
+                        {
+                            let (type_, val) = env.stack.pop().unwrap();
+                            if type_ != *arg_type
+                            {
+                                panic!("mismatched types for parameter {} in call to function: expected `{}`, got `{}`", i+1, arg_type.to_string(), type_.to_string());
+                            }
+                            args.push(val.into());
+                        }
+                        
+                        args.reverse();
+                        
+                        //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
+                        let callval = env.builder.build_indirect_call(func_type, funcaddr.into_pointer_value(), &args, "");
+                        let result = callval.try_as_basic_value().left();
+                        //println!("number of results {}", results.len());
+                        for (result, type_) in result.iter().zip([funcsig.return_type])
+                        {
+                            env.stack.push((type_.clone(), *result));
+                        }
+                    }
+                    _ => panic!("error: tried to use non-function expression as a function")
+                }
+                //println!("done compiling func call");
+            }
+            "funcargs" =>
+            {
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::None);
                 }
             }
             "float" =>
@@ -875,6 +984,32 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 else
                 {
                     panic!("error: no such label {}", label);
+                }
+            }
+            "bitcast" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                let (left_type, left_val) = env.stack.pop().unwrap();
+                
+                let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
+                let target_backend_type = get_backend_type(&mut env.backend_types, &right_type);
+                
+                // FIXME: platform-specific pointer size
+                if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(target_backend_type)
+                {
+                    if left_type.size() == right_type.size() || (right_type.size() == 8 && left_type.is_composite())
+                    {
+                        let ret = env.builder.build_bitcast(left_val, basic_type, "");
+                        env.stack.push((right_type, ret));
+                    }
+                    else
+                    {
+                        panic!("error: unsupported bitcast from type {} to type {} (types must have the same size and be sized to be bitcasted)", left_type.to_string(), right_type.to_string());
+                    }
+                }
+                else
+                {
+                    panic!("error: unsupported bitcast from type {} to type {} (types must have the same size and be sized to be bitcasted)", left_type.to_string(), right_type.to_string());
                 }
             }
             "cast" =>
@@ -1240,7 +1375,19 @@ fn main()
     }
     import_function::<unsafe extern "C" fn() -> ()>(&types, &mut parser, &mut imports, "wah", wah, wah as usize, "funcptr(void, ())");
     */
-    //import_function::<unsafe extern "C" fn(*mut u8, u64) -> ()>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
+    
+    unsafe extern "C" fn print_bytes(bytes : *mut u8, count : u64) -> ()
+    {
+        unsafe
+        {
+            for i in 0..count
+            {
+                print!("{:02X} ", *bytes.offset(i as isize));
+            }
+            print!("\n");
+        }
+    }
+    import_function::<unsafe extern "C" fn(*mut u8, u64) -> ()>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
     
     println!("startup done! time: {}", start.elapsed().as_secs_f64());
     
@@ -1248,7 +1395,6 @@ fn main()
     println!("compiling...");
     
     let context = Context::create();
-    let module = context.create_module("main");
     
     //let mut builder = JITBuilder::with_flags(&settings, cranelift_module::default_libcall_names()).unwrap();
     //for (f_name, (pointer, funcsig)) in &imports
@@ -1269,6 +1415,24 @@ fn main()
         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::AvailableExternally));
         func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
     }
+    
+    
+    if VERBOSE
+    {
+        println!("module:\n{}", module.to_string());
+        println!("adding global mappings...");
+    }
+    
+    let start = std::time::Instant::now();
+    let mut executor = module.create_jit_execution_engine(OptimizationLevel::Aggressive).unwrap();
+    let target_data = executor.get_target_data();
+    for (f_name, (pointer, funcsig)) in &imports
+    {
+        executor.add_global_mapping(&func_decs.get(f_name).unwrap().0, *pointer as usize);
+    }
+    let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
+    println!("executor build time: {}", start.elapsed().as_secs_f64());
+    
     
     for (f_name, function) in &program.funcs
     {
@@ -1379,7 +1543,7 @@ fn main()
         });
         
         let stack = Vec::new();
-        let mut env = Environment { context : &context, stack, variables, builder : &builder, module : &module, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, next_block };
+        let mut env = Environment { context : &context, stack, variables, builder : &builder, module : &module, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, next_block, ptr_int_type };
         
         if VERBOSE
         {
@@ -1409,20 +1573,6 @@ fn main()
     };
     println!("pass manager build time: {}", start.elapsed().as_secs_f64());
     
-    
-    if VERBOSE
-    {
-        println!("module:\n{}", module.to_string());
-        println!("adding global mappings...");
-    }
-    
-    let start = std::time::Instant::now();
-    let mut executor = module.create_jit_execution_engine(OptimizationLevel::Aggressive).unwrap();
-    for (f_name, (pointer, funcsig)) in &imports
-    {
-        executor.add_global_mapping(&func_decs.get(f_name).unwrap().0, *pointer as usize);
-    }
-    println!("executor build time: {}", start.elapsed().as_secs_f64());
     
     let start = std::time::Instant::now();
     if VERBOSE
@@ -1465,16 +1615,17 @@ fn main()
         f.call();
         */
         
+        let name = "print_garbage";
         
-        let f = get_func!("func_gravity", unsafe extern "C" fn() -> f32);
+        let f = get_func!(name, unsafe extern "C" fn() -> ());
         
         
         let start = std::time::Instant::now();
-        println!("running func_gravity...");
+        println!("running {}...", name);
         let out = f.call();
         let elapsed_time = start.elapsed();
         
-        println!("func_gravity() = {}", out);
+        println!("{}() = {:?}", name, out);
         println!("time: {}", elapsed_time.as_secs_f64());
     }
     

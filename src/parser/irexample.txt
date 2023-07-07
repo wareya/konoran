@@ -107,6 +107,7 @@ void array_literal()
     return;
 }
 
+*/
 void print_garbage()
 {
     array(u8, 16) garbage;
@@ -130,6 +131,7 @@ void print_garbage()
     
     print_bytes((garbage bit_as ptr(u8)), 16u64);
     
+    /*
     u8 a;
     i32 r;
     
@@ -144,7 +146,7 @@ void print_garbage()
     a = 15u8;
     r = intrinsic_memcmp(&a, &garbage[0i64], 1u64);
     print_bytes((&r bit_as ptr(u8)), 4u64);
+    */
     
     return;
 }
-*/
