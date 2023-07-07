@@ -75,11 +75,14 @@ cast: HIDELITERALS
 bitcast: HIDELITERALS
 ( $expr$ bit_as $type$ )
 
+unusedcomma:
+,
+
 array_literal: HIDELITERALS
-[ $expr$..., ]
+[ $expr$..., $unusedcomma$? ]
 
 struct_literal: HIDELITERALS
-$struct_type$ { $expr$..., }
+$struct_type$ { $expr$..., $unusedcomma$? }
 
 supersimplexpr: SIMPLIFY
 $array_literal$

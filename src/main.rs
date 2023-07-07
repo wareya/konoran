@@ -540,13 +540,21 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
     {
         match node.text.as_str()
         {
-            "statementlist" | "statement" | "instruction" | "parenexpr" | "arrayindex" =>
+            "statementlist" | "statement" | "instruction" =>
+            {
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::None);
+                }
+            }
+            "parenexpr" | "arrayindex" =>
             {
                 for child in node.get_children().unwrap()
                 {
                     compile(env, child, want_pointer);
                 }
             }
+            "unusedcomma" => {},
             "return" =>
             {
                 let mut returns = Vec::new();
@@ -579,8 +587,9 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     compile(env, node.child(2).unwrap(), WantPointer::None);
                     let (type_val, val) = env.stack.pop().unwrap();
                     
-                    assert!(type_val == type_var);
+                    assert!(type_val == type_var, "fulldec type failure, {:?} vs {:?}, line {}", type_val, type_var, node.line);
                     
+                    /*
                     let val = if type_val.is_composite()
                     {
                         let backend_type = get_backend_type_sized(&mut env.backend_types, &type_val);
@@ -590,6 +599,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         val
                     };
+                    */
                     
                     let instval = env.builder.build_store(slot, val);
                     let v = instval.get_volatile();
@@ -608,6 +618,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 compile(env, node.child(2).unwrap(), WantPointer::None);
                 
+                println!("compiling binstate...");
+                
                 let (type_val, val) = env.stack.pop().unwrap();
                 let (type_left_incomplete, left_addr) = env.stack.pop().unwrap();
                 
@@ -623,15 +635,18 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 if let Ok(addr) = inkwell::values::PointerValue::try_from(left_addr)
                 {
+                    /*
                     let val = if type_val.is_composite()
                     {
                         let backend_type = get_backend_type_sized(&mut env.backend_types, &type_val);
+                        println!("!! loading from\n{:?}\nas\n{:?}", val, backend_type);
                         env.builder.build_load(backend_type, val.into_pointer_value(), "")
                     }
                     else
                     {
                         val
                     };
+                    */
                     println!("!! storing\n{:?}\nin\n{:?}", val, addr);
                     env.builder.build_store(addr, val);
                 }
@@ -689,13 +704,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else if want_pointer == WantPointer::Virtual
                     {
+                        println!("pushing rvar pointer... for {}", name);
                         env.stack.push((type_.to_vptr(), slot.into()));
-                    }
-                    else if type_.is_composite()
-                    {
-                        println!("pushing composite rvar... for {}", name);
-                        println!("value: {:?}", slot);
-                        env.stack.push((type_.clone(), slot.into()));
                     }
                     else
                     {
@@ -723,12 +733,14 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             }
             "arrayindex_head" =>
             {
+                compile(env, node.child(0).unwrap(), WantPointer::Virtual);
+                compile(env, node.child(1).unwrap(), WantPointer::None);
+                
                 println!("compiling arrayindex head");
                 
-                compile(env, node.child(0).unwrap(), WantPointer::None);
-                compile(env, node.child(1).unwrap(), WantPointer::None);
                 let (offset_type, offset_val) = env.stack.pop().unwrap();
                 let (base_type, base_addr) = env.stack.pop().unwrap();
+                let base_type = base_type.deref_vptr();
                 
                 if offset_type.name == "i64"
                 {
@@ -774,6 +786,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let right_name = &node.child(1).unwrap().child(0).unwrap().text;
                 
+                println!("compiling indirection_head");
+                
                 if let Some(found) = match &struct_type.data {
                     TypeData::Struct(ref props) => props.iter().enumerate().find(|x| x.1.0 == *right_name),
                     _ => panic!("error: tried to use indirection (.) operator on non-struct"),
@@ -790,6 +804,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), struct_addr, inner_index as u32, "").unwrap()
                     };
                     
+                    println!("got address safely...");
+                    
                     if want_pointer == WantPointer::Real
                     {
                         env.stack.push((inner_type.to_ptr(), index_addr.into()));
@@ -798,16 +814,13 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         env.stack.push((inner_type.to_vptr(), index_addr.into()));
                     }
-                    else if inner_type.is_struct() || inner_type.is_array()
-                    {
-                        env.stack.push((inner_type.clone(), index_addr.into()));
-                    }
                     else
                     {
                         let basic_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
                         let val = env.builder.build_load(basic_type, index_addr, "");
                         env.stack.push((inner_type.clone(), val));
                     }
+                    println!("leaving indirection_head");
                 }
                 else
                 {
@@ -824,8 +837,13 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         let func_type = get_function_type(&mut env.backend_types, &funcsig);
                         
+                        let stack_len_start = env.stack.len();
                         compile(env, node.child(1).unwrap(), WantPointer::None);
+                        let stack_len_end = env.stack.len();
+                        
                         let num_args = node.child(1).unwrap().child_count().unwrap();
+                        assert!(num_args == stack_len_end - stack_len_start);
+                        assert!(num_args == funcsig.args.len(), "incorrect number of arguments to function on line {}", node.line);
                         
                         let mut args = Vec::new();
                         for (i, arg_type) in funcsig.args.iter().rev().enumerate()
@@ -833,7 +851,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             let (type_, val) = env.stack.pop().unwrap();
                             if type_ != *arg_type
                             {
-                                panic!("mismatched types for parameter {} in call to function: expected `{}`, got `{}`", i+1, arg_type.to_string(), type_.to_string());
+                                panic!("mismatched types for parameter {} in call to function {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
                             }
                             args.push(val.into());
                         }
@@ -912,7 +930,20 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         offset += 1;
                     }
                     
-                    env.stack.push((array_type, slot.into()));
+                    if want_pointer == WantPointer::Real
+                    {
+                        env.stack.push((array_type.to_ptr(), slot.into()));
+                    }
+                    else if want_pointer == WantPointer::Virtual
+                    {
+                        env.stack.push((array_type.to_vptr(), slot.into()));
+                    }
+                    else
+                    {
+                        let basic_type = get_backend_type_sized(&mut env.backend_types, &array_type);
+                        let val = env.builder.build_load(basic_type, slot, "");
+                        env.stack.push((array_type.clone(), val));
+                    }
                 }
                 else
                 {
@@ -924,6 +955,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let stack_size = env.stack.len();
                 
                 let struct_type = parse_type(&env.types, &node.child(0).unwrap()).unwrap();
+                let struct_member_types = struct_type.struct_to_info().iter().map(|x| x.1.clone()).collect::<Vec<_>>();
                 println!("struct type: {:?}", struct_type);
                 
                 for child in &node.get_children().unwrap()[1..]
@@ -931,6 +963,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     compile(env, child, WantPointer::None);
                 }
                 let member_count = env.stack.len() - stack_size;
+                assert!(member_count == struct_member_types.len());
                 println!("struct member count: {}", member_count);
                 
                 let mut vals = Vec::new();
@@ -941,12 +974,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 vals.reverse();
                 
-                let struct_member_types = struct_type.struct_to_info().iter().map(|x| x.1.clone()).collect::<Vec<_>>();
-                
-                assert!(struct_member_types == vals.iter().map(|x| x.0.clone()).collect::<Vec<_>>());
+                let stack_val_types = vals.iter().map(|x| x.0.clone()).collect::<Vec<_>>();
+                assert!(struct_member_types == stack_val_types);
                 
                 let backend_type = get_backend_type_sized(&mut env.backend_types, &struct_type);
-                let u64_type = get_backend_type_sized(&mut env.backend_types, env.types.get("u64").unwrap()).into_int_type();
                 
                 //let size = alloc_size_of_type(&env.target_data, env.backend_types, &struct_type);
                 println!("{:?}", backend_type);
@@ -958,10 +989,25 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, index as u32, "").unwrap()
                     };
                     
+                    assert!(type_ == stack_val_types[index]);
+                    
                     env.builder.build_store(index_addr, val);
                 }
                 
-                env.stack.push((struct_type, slot.into()));
+                if want_pointer == WantPointer::Real
+                {
+                    env.stack.push((struct_type.to_ptr(), slot.into()));
+                }
+                else if want_pointer == WantPointer::Virtual
+                {
+                    env.stack.push((struct_type.to_vptr(), slot.into()));
+                }
+                else
+                {
+                    let basic_type = get_backend_type_sized(&mut env.backend_types, &struct_type);
+                    let val = env.builder.build_load(basic_type, slot, "");
+                    env.stack.push((struct_type.clone(), val));
+                }
                 
                 //panic!("TODO");
             }
@@ -1563,6 +1609,18 @@ fn main()
     }
     import_function::<unsafe extern "C" fn(*mut u8, u64) -> ()>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
     
+    unsafe extern "C" fn sqrt(a : f64) -> f64
+    {
+        a.sqrt()
+    }
+    import_function::<unsafe extern "C" fn(f64) -> f64>(&types, &mut parser, &mut imports, "sqrt", sqrt, sqrt as usize, "funcptr(f64, (f64))");
+    
+    unsafe extern "C" fn print_float(a : f64) -> ()
+    {
+        println!("{}", a);
+    }
+    import_function::<unsafe extern "C" fn(f64) -> ()>(&types, &mut parser, &mut imports, "print_float", print_float, print_float as usize, "funcptr(void, (f64))");
+    
     println!("startup done! time: {}", start.elapsed().as_secs_f64());
     
     let start = std::time::Instant::now();
@@ -1597,8 +1655,11 @@ fn main()
         println!("adding global mappings...");
     }
     
+    let opt_level = OptimizationLevel::Aggressive;
+    //let opt_level = OptimizationLevel::None;
+    
     let start = std::time::Instant::now();
-    let mut executor = module.create_jit_execution_engine(OptimizationLevel::Aggressive).unwrap();
+    let mut executor = module.create_jit_execution_engine(opt_level).unwrap();
     let target_data = executor.get_target_data();
     for (f_name, (pointer, funcsig)) in &imports
     {
@@ -1655,7 +1716,7 @@ fn main()
                 let val = func_val.get_nth_param(j as u32).unwrap();
                 builder.build_store(slot, val);
                 
-                if variables.contains_key(&var_name) || func_decs.contains_key(&var_name)
+                if variables.contains_key(&var_name)// || func_decs.contains_key(&var_name)
                 {
                     panic!("error: parameter {} redeclared", var_name);
                 }
@@ -1690,9 +1751,9 @@ fn main()
                     builder.build_alloca(basic_type, &var_name)
                 };
                 
-                if variables.contains_key(&var_name) || func_decs.contains_key(&var_name)
+                if variables.contains_key(&var_name)// || func_decs.contains_key(&var_name)
                 {
-                    panic!("error: parameter {} redeclared", var_name);
+                    panic!("error: variable {} redeclared", var_name);
                 }
                 variables.insert(var_name, (var_type, slot));
                 
@@ -1731,10 +1792,8 @@ fn main()
         let stack = Vec::new();
         let mut env = Environment { context : &context, stack, variables, builder : &builder, module : &module, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, next_block, ptr_int_type, target_data };
         
-        if VERBOSE
-        {
-            println!("compiling function {}...", function.name);
-        }
+        println!("\n\ncompiling function {}...", function.name);
+        //println!("{}", function.body.pretty_debug());
         compile(&mut env, &function.body, WantPointer::None);
     }
     
@@ -1750,7 +1809,7 @@ fn main()
         inkwell::targets::Target::initialize_native(&config).unwrap();
         
         let builder = inkwell::passes::PassManagerBuilder::create();
-        builder.set_optimization_level(OptimizationLevel::Aggressive);
+        builder.set_optimization_level(opt_level);
         
         let pass_manager = inkwell::passes::PassManager::create(());
         builder.populate_module_pass_manager(&pass_manager);
@@ -1801,7 +1860,7 @@ fn main()
         f.call();
         */
         
-        let name = "struct_literal";
+        let name = "nbody_bench";
         
         let f = get_func!(name, unsafe extern "C" fn() -> ());
         
@@ -1828,7 +1887,7 @@ fn main()
                 &triple,
                 &cpu,
                 &features,
-                OptimizationLevel::Aggressive,
+                opt_level,
                 RelocMode::Default,
                 CodeModel::Default,
             )
