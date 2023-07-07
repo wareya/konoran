@@ -79,37 +79,33 @@ impl Type
     {
         match &self.data
         {
-            TypeData::Pointer(inner) =>
-            {
-                return *inner.clone();
-            }
-            _ => {}
+            TypeData::Pointer(inner) => *inner.clone(),
+            _ => panic!("error: attempted to dereference non-pointer type `{}`", self.to_string()),
         }
-        panic!("error: attempted to dereference non-pointer type `{}`", self.to_string());
     }
     fn deref_vptr(&self) -> Type
     {
         match &self.data
         {
-            TypeData::VirtualPointer(inner) =>
-            {
-                return *inner.clone();
-            }
-            _ => {}
+            TypeData::VirtualPointer(inner) => *inner.clone(),
+            _ => panic!("error: attempted to dereference non-pointer type `{}`", self.to_string()),
         }
-        panic!("error: attempted to dereference non-pointer type `{}`", self.to_string());
     }
     fn array_to_inner(&self) -> Type
     {
         match &self.data
         {
-            TypeData::Array(inner, _size) =>
-            {
-                return *inner.clone();
-            }
-            _ => {}
+            TypeData::Array(inner, _size) => *inner.clone(),
+            _ => panic!("error: attempted to use indexing on non-array type `{}`", self.to_string()),
         }
-        panic!("error: attempted to use indexing on non-array type `{}`", self.to_string());
+    }
+    fn struct_to_info(&self) -> Vec<(String, Type)>
+    {
+        match &self.data
+        {
+            TypeData::Struct(info) => info.clone(),
+            _ => panic!("internal error: attempted to access struct info of non-struct type `{}`", self.to_string()),
+        }
     }
     fn is_struct(&self) -> bool
     {
@@ -198,7 +194,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
                     return Ok(named_type.clone());
                 }
             }
-            Err(format!("error: unknown type `{}`", name))
+            Err(format!("error: unknown struct type `{}`", name))
         }
         (true, "array_type") =>
         {
@@ -294,15 +290,23 @@ impl Function
     }
 }
 
-fn size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, type_ : &Type) -> u64
+fn store_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, type_ : &Type) -> u64
 {
     if type_.is_void()
     {
         return 0;
     }
     let backend_type = get_backend_type(backend_types, type_);
-    target_data.get_store_size(&backend_type) // without alignment padding
-    //target_data.get_abi_size() // with alignment padding
+    target_data.get_store_size(&backend_type)
+}
+fn alloc_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, type_ : &Type) -> u64
+{
+    if type_.is_void()
+    {
+        return 0;
+    }
+    let backend_type = get_backend_type(backend_types, type_);
+    target_data.get_abi_size(&backend_type)
 }
 fn whyyyyyy_kgafnagerriawgiugsafbiu438438094<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum<'c>) -> inkwell::context::ContextRef<'c>
 {
@@ -832,8 +836,9 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         panic!("error: array literals must entirely be of a single type");
                     }
-                    vals.insert(0, val);
+                    vals.push(val);
                 }
+                vals.reverse();
                 
                 if element_type.is_some()
                 {
@@ -866,6 +871,55 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     panic!("error: zero-length array literals are not allowed");
                 }
+            }
+            "struct_literal" =>
+            {
+                let stack_size = env.stack.len();
+                
+                let struct_type = parse_type(&env.types, &node.child(0).unwrap()).unwrap();
+                println!("struct type: {:?}", struct_type);
+                
+                for child in &node.get_children().unwrap()[1..]
+                {
+                    compile(env, child, WantPointer::None);
+                }
+                let member_count = env.stack.len() - stack_size;
+                println!("struct member count: {}", member_count);
+                
+                let mut vals = Vec::new();
+                for _ in 0..member_count
+                {
+                    let (type_, val) = env.stack.pop().unwrap();
+                    vals.push((type_, val));
+                }
+                vals.reverse();
+                
+                let struct_member_types = struct_type.struct_to_info().iter().map(|x| x.1.clone()).collect::<Vec<_>>();
+                
+                assert!(struct_member_types == vals.iter().map(|x| x.0.clone()).collect::<Vec<_>>());
+                
+                let backend_type = get_backend_type_sized(&mut env.backend_types, &struct_type);
+                let u64_type = get_backend_type_sized(&mut env.backend_types, env.types.get("u64").unwrap()).into_int_type();
+                
+                //let size = alloc_size_of_type(&env.target_data, env.backend_types, &struct_type);
+                println!("{:?}", backend_type);
+                let slot = env.builder.build_alloca(backend_type, "");
+                for (index, (type_, val)) in vals.into_iter().enumerate()
+                {
+                    let target_type = get_backend_type_sized(&mut env.backend_types, &type_);
+                    let index_addr = unsafe
+                    {
+                        let ret = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, index as u32, "");
+                        println!("{:?}", ret);
+                        ret.unwrap()
+                    };
+                    
+                    env.builder.build_store(index_addr, val);
+                }
+                
+                env.stack.push((struct_type, slot.into()));
+                
+                //panic!("TODO");
             }
             "float" =>
             {
@@ -998,7 +1052,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
                 
-                let (left_size, right_size) = (size_of_type(&env.target_data, env.backend_types, &left_type), size_of_type(&env.target_data, env.backend_types, &right_type));
+                let (left_size, right_size) = (store_size_of_type(&env.target_data, env.backend_types, &left_type), store_size_of_type(&env.target_data, env.backend_types, &right_type));
                 let ptr_size = env.target_data.get_store_size(&env.ptr_int_type);
                 
                 // FIXME: platform-specific pointer size
@@ -1628,7 +1682,7 @@ fn main()
         f.call();
         */
         
-        let name = "array_literal";
+        let name = "struct_literal";
         
         let f = get_func!(name, unsafe extern "C" fn() -> ());
         

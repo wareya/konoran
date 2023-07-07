@@ -79,7 +79,7 @@ array_literal: HIDELITERALS
 [ $expr$..., ]
 
 struct_literal: HIDELITERALS
-{ $expr$..., }
+$struct_type$ { $expr$..., }
 
 supersimplexpr: SIMPLIFY
 $array_literal$

@@ -23,10 +23,12 @@ struct Vec2
 
 void struct_literal()
 {
-    Vec2 val = { 1.0f32, 0.5f32 };
-    print_bytes(((&val) bit_as ptr(u8)), 8u64);
-    val = { 2.0001f32, 0.4999342f32 };
-    print_bytes(((&val) bit_as ptr(u8)), 8u64);
+    Vec2 val = Vec2 { 1.0f32, 0.5f32 };
+    print_bytes((val bit_as ptr(u8)), 8u64);
+    val = Vec2 { 2.0001f32, 0.4999342f32 };
+    print_bytes((val bit_as ptr(u8)), 8u64);
+    
+    return;
 }
 
 /*
