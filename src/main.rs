@@ -619,6 +619,16 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     assert!(type_val == type_var);
                     
+                    let val = if type_val.is_composite()
+                    {
+                        let backend_type = get_backend_type_sized(&mut env.backend_types, &type_val);
+                        env.builder.build_load(backend_type, val.into_pointer_value(), "")
+                    }
+                    else
+                    {
+                        val
+                    };
+                    
                     let instval = env.builder.build_store(slot, val);
                     let v = instval.get_volatile();
                     if false
@@ -666,12 +676,17 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 if let Ok(addr) = inkwell::values::PointerValue::try_from(left_addr)
                 {
-                    let instval = env.builder.build_store(addr, val);
-                    let v = instval.get_volatile();
-                    if false
+                    let val = if type_val.is_composite()
                     {
-                        println!("volatile: {:?}", v);
+                        let backend_type = get_backend_type_sized(&mut env.backend_types, &type_val);
+                        env.builder.build_load(backend_type, val.into_pointer_value(), "")
                     }
+                    else
+                    {
+                        val
+                    };
+                    println!("!! storing\n{:?}\nin\n{:?}", val, addr);
+                    env.builder.build_store(addr, val);
                 }
                 else
                 {
@@ -875,7 +890,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     compile(env, child, WantPointer::None);
                 }
             }
-            /*
             "array_literal" =>
             {
                 let stack_size = env.stack.len();
@@ -907,36 +921,33 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let element_type = element_type.unwrap();
                     let array_type = element_type.to_array(array_length);
                     let backend_type = get_backend_type_sized(&mut env.backend_types, &array_type);
-                    let slot = builder.build_alloca(basic_type, &var_name);
+                    let element_backend_type = get_backend_type_sized(&mut env.backend_types, &element_type);
+                    
+                    let u64_type = get_backend_type_sized(&mut env.backend_types, env.types.get("u64").unwrap()).into_int_type();
+                    
+                    let size = u64_type.const_int(array_length as u64, false);
+                    let slot = env.builder.build_array_alloca(element_backend_type, size, "");
                     
                     let mut offset = 0;
                     for val in vals
                     {
-                        // FIXME: this is unsustainable
-                        if element_type.is_composite()
+                        let offset_val = u64_type.const_int(offset as u64, false);
+                        let offset_addr = unsafe
                         {
-                            //let config = env.module.target_config();
-                            //let size = env.builder.ins().iconst(types::I64, element_type.size() as i64);
-                            //let slot_addr = env.builder.ins().stack_addr(types::I64, slot, offset);
-                            //env.builder.call_memcpy(config, slot_addr, val, size);
-                            panic!("FIXME unimplemented nested composite type in array");
-                        }
-                        else
-                        {
-                            env.builder.build_store(val, slot);
-                        }
-                        offset += element_type.aligned_size() as i32;
+                            env.builder.build_in_bounds_gep(element_backend_type, slot, &[offset_val], "")
+                        };
+                        
+                        env.builder.build_store(offset_addr, val);
+                        offset += 1;
                     }
                     
-                    let addr = env.builder.ins().stack_addr(types::I64, slot, 0);
-                    env.stack_push((array_type, addr));
+                    env.stack.push((array_type, slot.into()));
                 }
                 else
                 {
                     panic!("error: zero-length array literals are not allowed");
                 }
             }
-            */
             "float" =>
             {
                 let text = &node.child(0).unwrap().text;
@@ -1702,7 +1713,7 @@ fn main()
         f.call();
         */
         
-        let name = "print_garbage";
+        let name = "array_literal";
         
         let f = get_func!(name, unsafe extern "C" fn() -> ());
         

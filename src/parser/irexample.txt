@@ -65,6 +65,7 @@ loop_head:
 }
 */
 
+/*
 f32 func_gravity()
 {
     u64 i = 0u64;
@@ -85,6 +86,8 @@ head:
     
     return (y as f32);
 }
+*/
+
 /*
 
 void returns_void(f32 a)
@@ -98,16 +101,16 @@ void void_ptr_arg(ptr(void) a)
     return;
 }
 
+*/
 void array_literal()
 {
     array(u8, 10) funtime = [16u8, 201u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8];
     print_bytes((funtime bit_as ptr(u8)), 10u64);
-    funtime = [61u8, 1u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 42u8];
+    funtime = [61u8, 1u8, 0u8, 0u8, 0u8, 1u8, 2u8, 3u8, 0u8, 42u8];
     print_bytes((funtime bit_as ptr(u8)), 10u64);
     return;
 }
-
-*/
+/*
 void print_garbage()
 {
     array(u8, 16) garbage;
@@ -131,7 +134,6 @@ void print_garbage()
     
     print_bytes((garbage bit_as ptr(u8)), 16u64);
     
-    /*
     u8 a;
     i32 r;
     
@@ -146,7 +148,8 @@ void print_garbage()
     a = 15u8;
     r = intrinsic_memcmp(&a, &garbage[0i64], 1u64);
     print_bytes((&r bit_as ptr(u8)), 4u64);
-    */
     
     return;
 }
+
+*/
