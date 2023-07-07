@@ -14,7 +14,6 @@ exit:
 }
 */
 
-
 struct Vec2
 {
     f32 x;
@@ -155,6 +154,7 @@ void print_garbage()
     u8 a;
     i32 r;
     
+    // memcmp not implemented
     //a = 16u8;
     //r = intrinsic_memcmp(&a, &garbage[0i64], 1u64);
     //print_bytes((&r bit_as ptr(u8)), 4u64);
@@ -240,11 +240,10 @@ void advance(ptr(array(Body, 5)) bodies, f64 delta)
             f64 distance = vec3_length(pos_diff);
             f64 mag = delta / (distance * distance * distance);
             
-            Vector3 accel_a = vec3_mul_f64(pos_diff, mass2 * mag);
-            vel = vec3_sub_vec3(vel, accel_a);
+            vel = vec3_sub_vec3(vel, vec3_mul_f64(pos_diff, mass2 * mag));
+            vel2 = vec3_add_vec3(vel2, vec3_mul_f64(pos_diff, mass * mag));
             
-            Vector3 accel_b = vec3_mul_f64(pos_diff, mass * mag);
-            (*bodies)[j].vel = vec3_add_vec3(vel2, accel_b);
+            (*bodies)[j].vel = vel2;
             
             j = j + 1i64;
             if (j < 5i64)

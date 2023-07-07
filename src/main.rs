@@ -426,7 +426,7 @@ fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::A
     
     let return_type = get_backend_type(backend_types, &sig.return_type);
     
-    println!("testing return type {:?} for {:?}...", return_type, sig.return_type);
+    //println!("testing return type {:?} for {:?}...", return_type, sig.return_type);
     
     let func_type = if let Ok(basic) = inkwell::types::BasicTypeEnum::try_from(return_type)
     {
@@ -441,7 +441,7 @@ fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::A
         panic!("error: can't build functions that return type {}", sig.return_type.name)
     };
     
-    println!("func type is  {:?}", func_type);
+    //println!("func type is  {:?}", func_type);
     
     backend_types.insert(key, func_type.into());
     
@@ -618,7 +618,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 compile(env, node.child(2).unwrap(), WantPointer::None);
                 
-                println!("compiling binstate...");
+                //println!("compiling binstate...");
                 
                 let (type_val, val) = env.stack.pop().unwrap();
                 let (type_left_incomplete, left_addr) = env.stack.pop().unwrap();
@@ -647,7 +647,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         val
                     };
                     */
-                    println!("!! storing\n{:?}\nin\n{:?}", val, addr);
+                    //println!("!! storing\n{:?}\nin\n{:?}", val, addr);
                     env.builder.build_store(addr, val);
                 }
                 else
@@ -671,17 +671,17 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     if want_pointer == WantPointer::Real
                     {
-                        println!("pushing lvar pointer... for {}", name);
+                        //println!("pushing lvar pointer... for {}", name);
                         env.stack.push((type_.to_ptr(), slot.into()));
                     }
                     else if want_pointer == WantPointer::Virtual
                     {
-                        println!("pushing lvar pointer... for {}", name);
+                        //println!("pushing lvar pointer... for {}", name);
                         env.stack.push((type_.to_vptr(), slot.into()));
                     }
                     else
                     {
-                        println!("INTERNAL ERROR: FIXME!!!!!");
+                        panic!("INTERNAL ERROR: FIXME!!!!!");
                     }
                 }
                 else
@@ -704,7 +704,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else if want_pointer == WantPointer::Virtual
                     {
-                        println!("pushing rvar pointer... for {}", name);
+                        //println!("pushing rvar pointer... for {}", name);
                         env.stack.push((type_.to_vptr(), slot.into()));
                     }
                     else
@@ -736,7 +736,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
                 compile(env, node.child(1).unwrap(), WantPointer::None);
                 
-                println!("compiling arrayindex head");
+                //println!("compiling arrayindex head");
                 
                 let (offset_type, offset_val) = env.stack.pop().unwrap();
                 let (base_type, base_addr) = env.stack.pop().unwrap();
@@ -745,8 +745,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 if offset_type.name == "i64"
                 {
                     // FIXME: double check that nested types work properly
-                    println!("\ntype: {:?}", base_type);
-                    println!("\nval: {:?}\n", base_addr);
+                    //println!("\ntype: {:?}", base_type);
+                    //println!("\nval: {:?}\n", base_addr);
                     
                     let inner_type = base_type.array_to_inner();
                     let inner_backend_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
@@ -755,7 +755,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "")
                     };
                     
-                    println!("\noffset val: {:?}\n", inner_addr);
+                    //println!("\noffset val: {:?}\n", inner_addr);
                     
                     if want_pointer == WantPointer::Real
                     {
@@ -786,7 +786,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let right_name = &node.child(1).unwrap().child(0).unwrap().text;
                 
-                println!("compiling indirection_head");
+                //println!("compiling indirection_head");
                 
                 if let Some(found) = match &struct_type.data {
                     TypeData::Struct(ref props) => props.iter().enumerate().find(|x| x.1.0 == *right_name),
@@ -804,7 +804,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), struct_addr, inner_index as u32, "").unwrap()
                     };
                     
-                    println!("got address safely...");
+                    //println!("got address safely...");
                     
                     if want_pointer == WantPointer::Real
                     {
@@ -820,7 +820,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         let val = env.builder.build_load(basic_type, index_addr, "");
                         env.stack.push((inner_type.clone(), val));
                     }
-                    println!("leaving indirection_head");
+                    //println!("leaving indirection_head");
                 }
                 else
                 {
@@ -886,7 +886,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     compile(env, child, WantPointer::None);
                 }
                 let array_length = env.stack.len() - stack_size;
-                println!("array length: {}", array_length);
+                //println!("array length: {}", array_length);
                 let mut vals = Vec::new();
                 let mut element_type = None;
                 
@@ -956,7 +956,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let struct_type = parse_type(&env.types, &node.child(0).unwrap()).unwrap();
                 let struct_member_types = struct_type.struct_to_info().iter().map(|x| x.1.clone()).collect::<Vec<_>>();
-                println!("struct type: {:?}", struct_type);
+                //println!("struct type: {:?}", struct_type);
                 
                 for child in &node.get_children().unwrap()[1..]
                 {
@@ -964,7 +964,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 let member_count = env.stack.len() - stack_size;
                 assert!(member_count == struct_member_types.len());
-                println!("struct member count: {}", member_count);
+                //println!("struct member count: {}", member_count);
                 
                 let mut vals = Vec::new();
                 for _ in 0..member_count
@@ -980,7 +980,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let backend_type = get_backend_type_sized(&mut env.backend_types, &struct_type);
                 
                 //let size = alloc_size_of_type(&env.target_data, env.backend_types, &struct_type);
-                println!("{:?}", backend_type);
+                //println!("{:?}", backend_type);
                 let slot = env.builder.build_alloca(backend_type, "");
                 for (index, (type_, val)) in vals.into_iter().enumerate()
                 {
@@ -1609,11 +1609,13 @@ fn main()
     }
     import_function::<unsafe extern "C" fn(*mut u8, u64) -> ()>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
     
+    /*
     unsafe extern "C" fn sqrt(a : f64) -> f64
     {
         a.sqrt()
     }
     import_function::<unsafe extern "C" fn(f64) -> f64>(&types, &mut parser, &mut imports, "sqrt", sqrt, sqrt as usize, "funcptr(f64, (f64))");
+    */
     
     unsafe extern "C" fn print_float(a : f64) -> ()
     {
@@ -1648,6 +1650,31 @@ fn main()
         func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
     }
     
+    let intrinsic_imports = [
+        ("sqrt", "funcptr(f64, (f64))"),
+    ];
+    
+    for (name, type_name) in intrinsic_imports
+    {
+        let type_lines = vec!(type_name.to_string());
+        let tokens = parser.tokenize(&type_lines, false).unwrap();
+        let type_ast = parser.parse_with_root_node_type(&tokens, &type_lines, false, "type").unwrap().unwrap();
+        let type_ = parse_type(&types, &type_ast).unwrap();
+        if let TypeData::FuncPointer(funcsig) = type_.data
+        {
+            let sqrt_intrinsic = inkwell::intrinsics::Intrinsic::find(&format!("llvm.{}", name)).unwrap();
+            
+            let mut types = Vec::new();
+            for arg_type in &funcsig.args
+            {
+                types.push(get_backend_type_sized(&mut backend_types, &arg_type));
+            }
+            //let f64_type = &types.get("f64").unwrap();
+            let sqrt_function = sqrt_intrinsic.get_declaration(&module, &types).unwrap();
+            
+            func_decs.insert(name.to_string(), (sqrt_function, *funcsig.clone()));
+        }
+    }
     
     if VERBOSE
     {
@@ -1673,7 +1700,7 @@ fn main()
     {
         let funcsig = function.to_sig();
         let func_type = get_function_type(&mut backend_types, &funcsig);
-        println!("{}: {:?} {:?}", f_name, funcsig, func_type);
+        //println!("{}: {:?} {:?}", f_name, funcsig, func_type);
         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
         func_decs.insert(f_name.clone(), (func_val, funcsig));
     }
@@ -1792,14 +1819,14 @@ fn main()
         let stack = Vec::new();
         let mut env = Environment { context : &context, stack, variables, builder : &builder, module : &module, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, next_block, ptr_int_type, target_data };
         
-        println!("\n\ncompiling function {}...", function.name);
+        //println!("\n\ncompiling function {}...", function.name);
         //println!("{}", function.body.pretty_debug());
         compile(&mut env, &function.body, WantPointer::None);
     }
     
     println!("compilation time: {}", start.elapsed().as_secs_f64());
     
-    println!("features: {}", inkwell::targets::TargetMachine::get_host_cpu_features());
+    //println!("features: {}", inkwell::targets::TargetMachine::get_host_cpu_features());
     
     let start = std::time::Instant::now();
     
@@ -1810,6 +1837,8 @@ fn main()
         
         let builder = inkwell::passes::PassManagerBuilder::create();
         builder.set_optimization_level(opt_level);
+        builder.set_inliner_with_threshold(1);
+        builder.set_size_level(2);
         
         let pass_manager = inkwell::passes::PassManager::create(());
         builder.populate_module_pass_manager(&pass_manager);
