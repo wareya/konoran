@@ -18,7 +18,7 @@ enum TypeData
 {
     Void,
     Primitive,
-    Struct(Vec<(String, Type, usize)>), // property name, property type, location within struct
+    Struct(Vec<(String, Type)>), // property name, property type
     Pointer(Box<Type>),
     VirtualPointer(Box<Type>),
     FuncPointer(Box<FunctionSig>),
@@ -155,76 +155,8 @@ impl Type
     {
         Type { name : "funcptr".to_string(), data : TypeData::FuncPointer(Box::new(funcsig.clone())) }
     }
-    fn size(&self) -> u32
-    {
-        match self.name.as_str()
-        {
-            "void" => 0,
-            
-            "u8"  => 1,
-            "u16" => 2,
-            "u32" => 4,
-            "u64" => 8,
-            
-            "i8"  => 1,
-            "i16" => 2,
-            "i32" => 4,
-            "i64" => 8,
-            
-            "f32" => 4,
-            "f64" => 8,
-            
-            // FIXME: target-specific pointer size
-            "ptr" => 8,
-            "funcptr" => 8,
-            
-            _ => match &self.data
-            {
-                TypeData::Array(inner, count) =>
-                {
-                    inner.aligned_size() * *count as u32
-                }
-                TypeData::Struct(subs) =>
-                {
-                    let mut r = 0;
-                    for (_, sub, _) in subs
-                    {
-                        r += sub.size();
-                    }
-                    r
-                }
-                _ => panic!("internal error: failed to cover type when getting size"),
-            }
-        }
-    }
-    fn align(&self) -> u32
-    {
-        let align_size = match &self.data
-        {
-            TypeData::Array(inner, _) => inner.align(),
-            TypeData::Struct(subs) =>
-            {
-                let mut maximum = 0;
-                for (_, sub, _) in subs
-                {
-                    maximum = maximum.max(sub.align());
-                }
-                maximum
-            }
-            _ => self.size()
-        };
-        2_u32.pow(if align_size > 1 { (align_size-1).ilog2() + 1 } else { 0 })
-    }
-    fn aligned_size(&self) -> u32
-    {
-        let mut size = self.size();
-        let mut align = self.align();
-        size += align - 1;
-        size /= align;
-        size *= align;
-        size
-    }
 }
+
 fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, String>
 {
     match (node.is_parent(), node.text.as_str())
@@ -275,7 +207,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
             {
                 let count_text = &node.child(1).unwrap().child(0).unwrap().text;
                 let count : u64 = count_text.parse().unwrap();
-                if count * type_.aligned_size() as u64 == 0
+                if count == 0 || type_.name == "void"
                 {
                     return Err(format!("error: zero-size arrays are not allowed"));
                 }
@@ -361,7 +293,17 @@ impl Function
         FunctionSig { return_type : self.return_type.clone(), args : self.args.iter().map(|x| x.0.clone()).collect() }
     }
 }
-    
+
+fn size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, type_ : &Type) -> u64
+{
+    if type_.is_void()
+    {
+        return 0;
+    }
+    let backend_type = get_backend_type(backend_types, type_);
+    target_data.get_store_size(&backend_type) // without alignment padding
+    //target_data.get_abi_size() // with alignment padding
+}
 fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, type_ : &Type) -> inkwell::types::AnyTypeEnum<'c>
 {
     let key = type_.to_string();
@@ -404,7 +346,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
             TypeData::Struct(struct_data) =>
             {
                 //let mut types = Vec::new();
-                for (name, type_, offset) in struct_data
+                for (name, type_) in struct_data
                 {
                     
                 }
@@ -497,7 +439,6 @@ impl Program
             {
                 let name = child.child(0)?.child(0)?.text.clone();
                 let mut struct_data = Vec::new();
-                let mut offset : usize = 0;
                 for prop in child.child(1)?.get_children()?
                 {
                     let prop_type = parse_type(&types, prop.child(0)?).unwrap();
@@ -508,16 +449,8 @@ impl Program
                         {
                             panic!("error: void struct properties are not allowed");
                         }
-                        let align = prop_type.align() as usize;
-                        
-                        if offset%align != 0
-                        {
-                            panic!("error: property {} of struct type {} is not aligned (should be aligned to {} bytes; actual offset was {}, for a misalignment of {} bytes)\nNOTE: add padding before this property like `array(u8, {}) _;`", prop_name, name, align, offset, offset%align, align - offset%align);
-                        }
-                        
-                        struct_data.push((prop_name, prop_type.clone(), offset));
+                        struct_data.push((prop_name, prop_type.clone()));
                     }
-                    offset += prop_type.size() as usize;
                 }
                 
                 let struct_type = Type { name : name.clone(), data : TypeData::Struct(struct_data) };
@@ -551,7 +484,7 @@ impl Program
     }
 }
 
-struct Environment<'a, 'b, 'c, 'd>
+struct Environment<'a, 'b, 'c, 'd, 'f>
 {
     context       : &'c inkwell::context::Context,
     stack         : Vec<(Type, inkwell::values::BasicValueEnum<'c>)>,
@@ -565,6 +498,7 @@ struct Environment<'a, 'b, 'c, 'd>
     blocks        : HashMap<String, inkwell::basic_block::BasicBlock<'c>>,
     next_block    : HashMap<inkwell::basic_block::BasicBlock<'c>, inkwell::basic_block::BasicBlock<'c>>,
     ptr_int_type  : inkwell::types::IntType<'c>,
+    target_data   : &'f inkwell::targets::TargetData,
 }
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -1040,20 +974,16 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let (left_type, left_val) = env.stack.pop().unwrap();
                 
                 let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
-                let target_backend_type = get_backend_type(&mut env.backend_types, &right_type);
+                
+                let (left_size, right_size) = (size_of_type(&env.target_data, env.backend_types, &left_type), size_of_type(&env.target_data, env.backend_types, &right_type));
+                let ptr_size = env.target_data.get_store_size(&env.ptr_int_type);
                 
                 // FIXME: platform-specific pointer size
-                if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(target_backend_type)
+                let basic_type = get_backend_type_sized(&mut env.backend_types, &right_type);
+                if left_size == right_size || (right_size == ptr_size && left_type.is_composite())
                 {
-                    if left_type.size() == right_type.size() || (right_type.size() == 8 && left_type.is_composite())
-                    {
-                        let ret = env.builder.build_bitcast(left_val, basic_type, "");
-                        env.stack.push((right_type, ret));
-                    }
-                    else
-                    {
-                        panic!("error: unsupported bitcast from type {} to type {} (types must have the same size and be sized to be bitcasted)", left_type.to_string(), right_type.to_string());
-                    }
+                    let ret = env.builder.build_bitcast(left_val, basic_type, "");
+                    env.stack.push((right_type, ret));
                 }
                 else
                 {
@@ -1603,7 +1533,7 @@ fn main()
         });
         
         let stack = Vec::new();
-        let mut env = Environment { context : &context, stack, variables, builder : &builder, module : &module, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, next_block, ptr_int_type };
+        let mut env = Environment { context : &context, stack, variables, builder : &builder, module : &module, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, next_block, ptr_int_type, target_data };
         
         if VERBOSE
         {
