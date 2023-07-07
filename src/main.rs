@@ -611,9 +611,9 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let (type_val, val) = env.stack.pop().unwrap();
                 let (type_left_incomplete, left_addr) = env.stack.pop().unwrap();
                 
-                let type_left = if type_left_incomplete.is_pointer()
+                let type_left = if type_left_incomplete.is_virtual_pointer()
                 {
-                    type_left_incomplete.deref_ptr()
+                    type_left_incomplete.deref_vptr()
                 }
                 else
                 {
@@ -644,7 +644,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             {
                 for child in node.get_children().unwrap()
                 {
-                    compile(env, child, WantPointer::Real);
+                    compile(env, child, WantPointer::Virtual);
                 }
             }
             "lvar_name" =>
@@ -658,6 +658,11 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         println!("pushing lvar pointer... for {}", name);
                         env.stack.push((type_.to_ptr(), slot.into()));
+                    }
+                    else if want_pointer == WantPointer::Virtual
+                    {
+                        println!("pushing lvar pointer... for {}", name);
+                        env.stack.push((type_.to_vptr(), slot.into()));
                     }
                     else
                     {
@@ -750,21 +755,63 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else
                     {
-                        let backend_type = get_backend_type(&mut env.backend_types, &inner_type);
-                        if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
-                        {
-                            let val = env.builder.build_load(basic_type, inner_addr, "");
-                            env.stack.push((inner_type.clone(), val));
-                        }
-                        else
-                        {
-                            panic!("error: array indexing on type {} is not allowed", inner_type.name);
-                        }
+                        let basic_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
+                        let val = env.builder.build_load(basic_type, inner_addr, "");
+                        env.stack.push((inner_type.clone(), val));
                     }
                 }
                 else
                 {
                     panic!("error: can't offset into arrays except with type i64 (used type `{}`)", offset_type.name)
+                }
+            }
+            "indirection_head" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::Virtual);
+                let (struct_type, struct_addr) = env.stack.pop().unwrap();
+                let struct_type = struct_type.deref_vptr();
+                let backend_type = get_backend_type_sized(&mut env.backend_types, &struct_type);
+                
+                let right_name = &node.child(1).unwrap().child(0).unwrap().text;
+                
+                if let Some(found) = match &struct_type.data {
+                    TypeData::Struct(ref props) => props.iter().enumerate().find(|x| x.1.0 == *right_name),
+                    _ => panic!("error: tried to use indirection (.) operator on non-struct"),
+                }
+                {
+                    // TODO: do multi-level struct accesses (e.g. mat.x_vec.x) in a single load operation instead of several
+                    // FIXME: double check that nested structs work properly
+                    let inner_index = found.0;
+                    let inner_type = &found.1.1;
+                    let struct_addr = struct_addr.into_pointer_value();
+                    
+                    let index_addr = unsafe
+                    {
+                        env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), struct_addr, inner_index as u32, "").unwrap()
+                    };
+                    
+                    if want_pointer == WantPointer::Real
+                    {
+                        env.stack.push((inner_type.to_ptr(), index_addr.into()));
+                    }
+                    else if want_pointer == WantPointer::Virtual
+                    {
+                        env.stack.push((inner_type.to_vptr(), index_addr.into()));
+                    }
+                    else if inner_type.is_struct() || inner_type.is_array()
+                    {
+                        env.stack.push((inner_type.clone(), index_addr.into()));
+                    }
+                    else
+                    {
+                        let basic_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
+                        let val = env.builder.build_load(basic_type, index_addr, "");
+                        env.stack.push((inner_type.clone(), val));
+                    }
+                }
+                else
+                {
+                    panic!("error: no such property {} in struct type {}", right_name, struct_type.name);
                 }
             }
             "funcargs_head" =>
@@ -906,12 +953,9 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let slot = env.builder.build_alloca(backend_type, "");
                 for (index, (type_, val)) in vals.into_iter().enumerate()
                 {
-                    let target_type = get_backend_type_sized(&mut env.backend_types, &type_);
                     let index_addr = unsafe
                     {
-                        let ret = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, index as u32, "");
-                        println!("{:?}", ret);
-                        ret.unwrap()
+                        env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, index as u32, "").unwrap()
                     };
                     
                     env.builder.build_store(index_addr, val);
@@ -1002,6 +1046,81 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 else
                 {
                     panic!("unknown int suffix pattern {}", parts.1)
+                }
+            }
+            "unary" =>
+            {
+                let op = &node.child(0).unwrap().child(0).unwrap().text;
+                //println!("---- compiling unary operator `{}`", op);
+                if op.as_str() == "&"
+                {
+                    compile(env, node.child(1).unwrap(), WantPointer::Real);
+                    let (type_, val) = env.stack.pop().unwrap();
+                    if !type_.is_pointer()
+                    {
+                        panic!("error: tried to get address of non-variable");
+                    }
+                    env.stack.push((type_, val));
+                }
+                else
+                {
+                    compile(env, node.child(1).unwrap(), WantPointer::None);
+                    let (type_, val) = env.stack.pop().unwrap();
+                    match type_.name.as_str()
+                    {
+                        "ptr" =>
+                        {
+                            if want_pointer == WantPointer::Virtual
+                            {
+                                if op.as_str() != "*"
+                                {
+                                    panic!("error: can't use operator `{}` on type `{}`", op, type_.name);
+                                }
+                                env.stack.push((type_.deref_ptr().to_vptr(), val));
+                            }
+                            else
+                            {
+                                let inner_type = type_.deref_ptr();
+                                if inner_type.is_void()
+                                {
+                                    panic!("can't dereference void pointers");
+                                }
+                                let basic_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
+                                let res = match op.as_str()
+                                {
+                                    "*" => env.builder.build_load(basic_type, val.into_pointer_value(), ""),
+                                    _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                                };
+                                env.stack.push((inner_type, res));
+                            }
+                        }
+                        "f32" | "f64" =>
+                        {
+                            let res = match op.as_str()
+                            {
+                                "+" => val,
+                                "-" => env.builder.build_float_neg(val.into_float_value(), "").into(),
+                                _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                            };
+                            env.stack.push((type_.clone(), res));
+                        }
+                        /*
+                        "i8" | "i16" | "i32" | "i64" |
+                        "u8" | "u16" | "u32" | "u64" =>
+                        {
+                            let res = match op.as_str()
+                            {
+                                "+" => val,
+                                "-" => env.builder.ins().ineg(val),
+                                "!" => env.builder.ins().icmp_imm(IntCC::Equal, val, 0),
+                                "~" => env.builder.ins().bnot(val),
+                                _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                            };
+                            env.stack.push((type_.clone(), res));
+                        }
+                        */
+                        _ => panic!("error: type `{}` is not supported by unary operators", type_.name)
+                    }
                 }
             }
             "label" =>

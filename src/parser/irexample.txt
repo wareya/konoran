@@ -21,11 +21,22 @@ struct Vec2
     f32 y;
 }
 
+void add_to_x(ptr(Vec2) vec)
+{
+    (*vec).x = (*vec).x + 1.0f32;
+    
+    return;
+}
+
 void struct_literal()
 {
     Vec2 val = Vec2 { 1.0f32, 0.5f32 };
     print_bytes((val bit_as ptr(u8)), 8u64);
+    
     val = Vec2 { 2.0001f32, 0.4999342f32 };
+    print_bytes((val bit_as ptr(u8)), 8u64);
+    
+    add_to_x(&val);
     print_bytes((val bit_as ptr(u8)), 8u64);
     
     return;
