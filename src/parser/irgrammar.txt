@@ -202,8 +202,11 @@ $type$ $name$
 funcdefargs:
 >>? $funcarg$...,
 
+funcbody:
+$statementlist$
+
 funcdef: HIDELITERALS
-$type$ $name$ ( $funcdefargs$ ) $statementlist$
+$type$ $name$ ( $funcdefargs$ ) $funcbody$
 
 structparts:
 $declaration$*

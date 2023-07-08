@@ -536,10 +536,41 @@ enum WantPointer {
 }
 fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : WantPointer)
 {
+    macro_rules! push_val_or_ptr
+    {
+        ($type:expr, $addr:expr) =>
+        {
+            if want_pointer == WantPointer::Real
+            {
+                env.stack.push(($type.to_ptr(), $addr.into()));
+            }
+            else if want_pointer == WantPointer::Virtual
+            {
+                env.stack.push(($type.to_vptr(), $addr.into()));
+            }
+            else
+            {
+                let basic_type = get_backend_type_sized(&mut env.backend_types, &$type);
+                let val = env.builder.build_load(basic_type, $addr, "");
+                env.stack.push(($type.clone(), val));
+            }
+        }
+    }
     if node.is_parent()
     {
         match node.text.as_str()
         {
+            "funcbody" =>
+            {
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::None);
+                }
+                if env.builder.get_insert_block().unwrap().get_terminator().is_none()
+                {
+                    panic!("error: functions must explicitly return, even if they return void\n(on line {})", node.line);
+                }
+            }
             "statementlist" | "statement" | "instruction" =>
             {
                 for child in node.get_children().unwrap()
@@ -589,18 +620,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     assert!(type_val == type_var, "fulldec type failure, {:?} vs {:?}, line {}", type_val, type_var, node.line);
                     
-                    /*
-                    let val = if type_val.is_composite()
-                    {
-                        let backend_type = get_backend_type_sized(&mut env.backend_types, &type_val);
-                        env.builder.build_load(backend_type, val.into_pointer_value(), "")
-                    }
-                    else
-                    {
-                        val
-                    };
-                    */
-                    
                     let instval = env.builder.build_store(slot, val);
                     let v = instval.get_volatile();
                     if false
@@ -618,8 +637,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 compile(env, node.child(2).unwrap(), WantPointer::None);
                 
-                //println!("compiling binstate...");
-                
                 let (type_val, val) = env.stack.pop().unwrap();
                 let (type_left_incomplete, left_addr) = env.stack.pop().unwrap();
                 
@@ -635,19 +652,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 if let Ok(addr) = inkwell::values::PointerValue::try_from(left_addr)
                 {
-                    /*
-                    let val = if type_val.is_composite()
-                    {
-                        let backend_type = get_backend_type_sized(&mut env.backend_types, &type_val);
-                        println!("!! loading from\n{:?}\nas\n{:?}", val, backend_type);
-                        env.builder.build_load(backend_type, val.into_pointer_value(), "")
-                    }
-                    else
-                    {
-                        val
-                    };
-                    */
-                    //println!("!! storing\n{:?}\nin\n{:?}", val, addr);
                     env.builder.build_store(addr, val);
                 }
                 else
@@ -669,20 +673,9 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     let (type_, slot) = env.variables[name].clone();
                     
-                    if want_pointer == WantPointer::Real
-                    {
-                        //println!("pushing lvar pointer... for {}", name);
-                        env.stack.push((type_.to_ptr(), slot.into()));
-                    }
-                    else if want_pointer == WantPointer::Virtual
-                    {
-                        //println!("pushing lvar pointer... for {}", name);
-                        env.stack.push((type_.to_vptr(), slot.into()));
-                    }
-                    else
-                    {
-                        panic!("INTERNAL ERROR: FIXME!!!!!");
-                    }
+                    assert!(want_pointer != WantPointer::None);
+                    
+                    push_val_or_ptr!(type_, slot);
                 }
                 else
                 {
@@ -692,34 +685,11 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             "rvarname" =>
             {
                 let name = &node.child(0).unwrap().text;
-                //println!("{}", name);
                 if env.variables.contains_key(name)
                 {
                     let (type_, slot) = env.variables[name].clone();
                     
-                    // FIXME: make this universal somehow (currently semi duplicated with indirection_head)
-                    if want_pointer == WantPointer::Real
-                    {
-                        env.stack.push((type_.to_ptr(), slot.into()));
-                    }
-                    else if want_pointer == WantPointer::Virtual
-                    {
-                        //println!("pushing rvar pointer... for {}", name);
-                        env.stack.push((type_.to_vptr(), slot.into()));
-                    }
-                    else
-                    {
-                        let backend_type = get_backend_type(&mut env.backend_types, &type_);
-                        if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
-                        {
-                            let val = env.builder.build_load(basic_type, slot, "");
-                            env.stack.push((type_.clone(), val));
-                        }
-                        else
-                        {
-                            panic!("error: values of type {} are not allowed", type_.name);
-                        }
-                    }
+                    push_val_or_ptr!(type_, slot);
                 }
                 else if let Some((func_val, funcsig)) = env.func_decs.get(name)
                 {
@@ -755,22 +725,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "")
                     };
                     
-                    //println!("\noffset val: {:?}\n", inner_addr);
+                    push_val_or_ptr!(inner_type, inner_addr);
                     
-                    if want_pointer == WantPointer::Real
-                    {
-                        env.stack.push((inner_type.to_ptr(), inner_addr.into()));
-                    }
-                    else if want_pointer == WantPointer::Virtual
-                    {
-                        env.stack.push((inner_type.to_vptr(), inner_addr.into()));
-                    }
-                    else
-                    {
-                        let basic_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
-                        let val = env.builder.build_load(basic_type, inner_addr, "");
-                        env.stack.push((inner_type.clone(), val));
-                    }
                 }
                 else
                 {
@@ -786,15 +742,11 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let right_name = &node.child(1).unwrap().child(0).unwrap().text;
                 
-                //println!("compiling indirection_head");
-                
                 if let Some(found) = match &struct_type.data {
                     TypeData::Struct(ref props) => props.iter().enumerate().find(|x| x.1.0 == *right_name),
                     _ => panic!("error: tried to use indirection (.) operator on non-struct"),
                 }
                 {
-                    // TODO: do multi-level struct accesses (e.g. mat.x_vec.x) in a single load operation instead of several
-                    // FIXME: double check that nested structs work properly
                     let inner_index = found.0;
                     let inner_type = &found.1.1;
                     let struct_addr = struct_addr.into_pointer_value();
@@ -804,23 +756,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), struct_addr, inner_index as u32, "").unwrap()
                     };
                     
-                    //println!("got address safely...");
-                    
-                    if want_pointer == WantPointer::Real
-                    {
-                        env.stack.push((inner_type.to_ptr(), index_addr.into()));
-                    }
-                    else if want_pointer == WantPointer::Virtual
-                    {
-                        env.stack.push((inner_type.to_vptr(), index_addr.into()));
-                    }
-                    else
-                    {
-                        let basic_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
-                        let val = env.builder.build_load(basic_type, index_addr, "");
-                        env.stack.push((inner_type.clone(), val));
-                    }
-                    //println!("leaving indirection_head");
+                    push_val_or_ptr!(inner_type, index_addr);
                 }
                 else
                 {
@@ -930,20 +866,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         offset += 1;
                     }
                     
-                    if want_pointer == WantPointer::Real
-                    {
-                        env.stack.push((array_type.to_ptr(), slot.into()));
-                    }
-                    else if want_pointer == WantPointer::Virtual
-                    {
-                        env.stack.push((array_type.to_vptr(), slot.into()));
-                    }
-                    else
-                    {
-                        let basic_type = get_backend_type_sized(&mut env.backend_types, &array_type);
-                        let val = env.builder.build_load(basic_type, slot, "");
-                        env.stack.push((array_type.clone(), val));
-                    }
+                    push_val_or_ptr!(array_type, slot);
                 }
                 else
                 {
@@ -994,22 +917,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     env.builder.build_store(index_addr, val);
                 }
                 
-                if want_pointer == WantPointer::Real
-                {
-                    env.stack.push((struct_type.to_ptr(), slot.into()));
-                }
-                else if want_pointer == WantPointer::Virtual
-                {
-                    env.stack.push((struct_type.to_vptr(), slot.into()));
-                }
-                else
-                {
-                    let basic_type = get_backend_type_sized(&mut env.backend_types, &struct_type);
-                    let val = env.builder.build_load(basic_type, slot, "");
-                    env.stack.push((struct_type.clone(), val));
-                }
-                
-                //panic!("TODO");
+                push_val_or_ptr!(struct_type, slot);
             }
             "float" =>
             {
@@ -1182,6 +1090,20 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     panic!("error: no such block {}", label);
                 }
             }
+            "goto" =>
+            {
+                let label = &node.child(0).unwrap().child(0).unwrap().text;
+                let next_block = env.context.append_basic_block(env.func_val, "");
+                if let Some(then_block) = env.blocks.get(label)
+                {
+                    env.builder.build_unconditional_branch(*then_block);
+                    env.builder.position_at_end(next_block);
+                }
+                else
+                {
+                    panic!("error: no such label {}", label);
+                }
+            }
             "ifcondition" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
@@ -1197,7 +1119,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         let zero = int_type.const_int(0, true);
                         let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "");
                         let instval = env.builder.build_conditional_branch(int_val, *then_block, else_block);
-                        //instval.
                         env.builder.position_at_end(else_block);
                     }
                     else

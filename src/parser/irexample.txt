@@ -228,9 +228,9 @@ void advance(ptr(array(Body, 5)) bodies, f64 delta)
         Vector3 pos = (*bodies)[i].pos;
         Vector3 vel = (*bodies)[i].vel;
         
-        i64 j = i + 1i64;
-        if (j >= 5i64)
-            goto loop_inner_bottom;
+        i64 j = i;
+        goto loop_inner_bottom;
+        
         loop_inner:
             f64 mass2 = (*bodies)[j].mass;
             Vector3 pos2 = (*bodies)[j].pos;
@@ -245,10 +245,10 @@ void advance(ptr(array(Body, 5)) bodies, f64 delta)
             
             (*bodies)[j].vel = vel2;
             
+        loop_inner_bottom:
             j = j + 1i64;
             if (j < 5i64)
                 goto loop_inner;
-        loop_inner_bottom:
         
         (*bodies)[i].vel = vel;
         (*bodies)[i].pos = vec3_add_vec3(pos, vec3_mul_f64(vel, delta));
