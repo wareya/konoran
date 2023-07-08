@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+
 pub (crate) fn slice_any<T>(collection : &[T], start : i64, end : i64) -> Option<&[T]>
 {
     let u_start = if start < 0 {collection.len() - (-start as usize)} else {start as usize};

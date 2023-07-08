@@ -523,7 +523,6 @@ struct Environment<'a, 'b, 'c, 'd, 'f>
     backend_types : &'a mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>,
     func_val      : inkwell::values::FunctionValue<'c>,
     blocks        : HashMap<String, inkwell::basic_block::BasicBlock<'c>>,
-    next_block    : HashMap<inkwell::basic_block::BasicBlock<'c>, inkwell::basic_block::BasicBlock<'c>>,
     ptr_int_type  : inkwell::types::IntType<'c>,
     target_data   : &'f inkwell::targets::TargetData,
 }
@@ -536,6 +535,11 @@ enum WantPointer {
 }
 fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : WantPointer)
 {
+    // used to build constants for some lowerings, and to cast to bool
+    let u8_type_frontend = env.types.get("u8").unwrap();
+    let u8_type = env.backend_types.get("u8").unwrap().into_int_type();
+    let u64_type = env.backend_types.get("u64").unwrap().into_int_type();
+    
     macro_rules! push_val_or_ptr
     {
         ($type:expr, $addr:expr) =>
@@ -568,7 +572,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 if env.builder.get_insert_block().unwrap().get_terminator().is_none()
                 {
-                    panic!("error: functions must explicitly return, even if they return void\n(on line {})", node.line);
+                    panic!("error: functions must explicitly return, even if their return type is void\n(on line {})", node.line);
                 }
             }
             "statementlist" | "statement" | "instruction" =>
@@ -589,14 +593,16 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             "return" =>
             {
                 let mut returns = Vec::new();
-                // FIXME: check types
                 for child in node.get_children().unwrap()
                 {
                     compile(env, child, WantPointer::None);
-                    returns.push(env.stack.pop().unwrap().1);
+                    let (type_, val) = env.stack.pop().unwrap();
+                    returns.push((type_, val));
                 }
-                if let Some(val) = returns.get(0)
+                if let Some((_, val)) = returns.get(0)
                 {
+                    // FIXME: check types
+                    //assert!();
                     env.builder.build_return(Some(val));
                 }
                 else
@@ -848,8 +854,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let backend_type = get_backend_type_sized(&mut env.backend_types, &array_type);
                     let element_backend_type = get_backend_type_sized(&mut env.backend_types, &element_type);
                     
-                    let u64_type = get_backend_type_sized(&mut env.backend_types, env.types.get("u64").unwrap()).into_int_type();
-                    
                     let size = u64_type.const_int(array_length as u64, false);
                     let slot = env.builder.build_array_alloca(element_backend_type, size, "");
                     
@@ -960,10 +964,13 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             "integer" =>
             {
                 let text = &node.child(0).unwrap().text;
-                let mut location = text.rfind("i");
+                
+                let mut location = text.rfind("u");
+                let mut signed = false;
                 if location.is_none()
                 {
-                    location = text.rfind("u");
+                    location = text.rfind("i");
+                    signed = true;
                 }
                 if location.is_none()
                 {
@@ -972,24 +979,50 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let location = location.unwrap();
                 let parts = text.split_at(location);
                 let text = parts.0;
+                
+                let mut is_hex = false;
+                let text = if text.find("0x") == Some(0)
+                {
+                    is_hex = true;
+                    let parts = text.split_at(2);
+                    parts.1.to_string()
+                }
+                else if text.find("-0x") == Some(0)
+                {
+                    is_hex = true;
+                    let parts = text.split_at(2);
+                    "-".to_string() + parts.1
+                }
+                else
+                {
+                    text.to_string()
+                };
+                
                 if let Some(type_) = env.types.get(parts.1)
                 {
                     let backend_type = get_backend_type(&mut env.backend_types, &type_);
                     if let Ok(int_type) = inkwell::types::IntType::try_from(backend_type)
                     {
-                        let res = match parts.1
+                        let res = int_type.const_int(match (is_hex, parts.1)
                         {
-                            // FIXME: check if we need to use sign extension (probably don't)
-                            "u8"  => int_type.const_int(text.parse::< u8>().unwrap() as u64, false),
-                            "u16" => int_type.const_int(text.parse::<u16>().unwrap() as u64, false),
-                            "u32" => int_type.const_int(text.parse::<u32>().unwrap() as u64, false),
-                            "u64" => int_type.const_int(text.parse::<u64>().unwrap() as u64, false),
-                            "i8"  => int_type.const_int(text.parse::< i8>().unwrap() as u64, true),
-                            "i16" => int_type.const_int(text.parse::<i16>().unwrap() as u64, true),
-                            "i32" => int_type.const_int(text.parse::<i32>().unwrap() as u64, true),
-                            "i64" => int_type.const_int(text.parse::<i64>().unwrap() as u64, true),
+                            (false, "u8")  => text.parse::< u8>().unwrap() as u64,
+                            (false, "u16") => text.parse::<u16>().unwrap() as u64,
+                            (false, "u32") => text.parse::<u32>().unwrap() as u64,
+                            (false, "u64") => text.parse::<u64>().unwrap() as u64,
+                            (false, "i8")  => text.parse::< i8>().unwrap() as u64,
+                            (false, "i16") => text.parse::<i16>().unwrap() as u64,
+                            (false, "i32") => text.parse::<i32>().unwrap() as u64,
+                            (false, "i64") => text.parse::<i64>().unwrap() as u64,
+                            (true , "u8")  =>  u8::from_str_radix(&text, 16).unwrap() as u64,
+                            (true , "u16") => u16::from_str_radix(&text, 16).unwrap() as u64,
+                            (true , "u32") => u32::from_str_radix(&text, 16).unwrap() as u64,
+                            (true , "u64") => u64::from_str_radix(&text, 16).unwrap() as u64,
+                            (true , "i8")  =>  i8::from_str_radix(&text, 16).unwrap() as u64,
+                            (true , "i16") => i16::from_str_radix(&text, 16).unwrap() as u64,
+                            (true , "i32") => i32::from_str_radix(&text, 16).unwrap() as u64,
+                            (true , "i64") => i64::from_str_radix(&text, 16).unwrap() as u64,
                             _ => panic!("unknown int suffix pattern {}", parts.1)
-                        };
+                        }, signed);
                         env.stack.push((type_.clone(), res.into()));
                     }
                     else
@@ -1058,6 +1091,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             };
                             env.stack.push((type_.clone(), res));
                         }
+                        // TODO reimplement
                         /*
                         "i8" | "i16" | "i32" | "i64" |
                         "u8" | "u16" | "u32" | "u64" =>
@@ -1104,6 +1138,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     panic!("error: no such label {}", label);
                 }
             }
+            // TODO: all the other C-style control flow mechanisms
             "ifcondition" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
@@ -1184,6 +1219,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         panic!("internal error: float cast internal and backend type mismatch");
                     }
                 }
+                // TODO reimplement all these casts
                 /*
                 // cast between types of same size, non-float. bitcast.
                 else if !left_type.is_float() && !right_type.is_float() && left_type.size() == right_type.size()
@@ -1278,6 +1314,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         "*" => env.builder.build_float_mul(left_val, right_val, ""),
                                         "/" => env.builder.build_float_div(left_val, right_val, ""),
                                         /*
+                                        // TODO reimplement
                                         "%" =>
                                         {
                                             let times = env.builder.ins().fdiv(left_val, right_val);
@@ -1304,7 +1341,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         _ => panic!("internal error: operator mismatch")
                                     };
                                     let res = env.builder.build_float_compare(op, left_val, right_val, "");
-                                    let res = env.builder.build_int_cast_sign_flag(res, env.backend_types.get("u8").unwrap().into_int_type(), false, "");
+                                    let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "");
                                     env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
                                 }
                                 _ => panic!("operator {} not supported on type pair {}, {}", op, left_type.name, right_type.name)
@@ -1317,32 +1354,33 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             let right_val = right_val.into_int_value();
                             match op.as_str()
                             {
-                                /*
                                 "&&" | "||" | "and" | "or" =>
                                 {
-                                    let left_bool  = env.builder.ins().icmp_imm(IntCC::NotEqual, left_val , 0);
-                                    let right_bool = env.builder.ins().icmp_imm(IntCC::NotEqual, right_val, 0);
+                                    let zero = left_val.get_type().const_int(0, true);
+                                    let left_bool  = env.builder.build_int_compare(inkwell::IntPredicate::NE, left_val , zero, "");
+                                    let left_bool  = env.builder.build_int_cast_sign_flag(left_bool , u8_type, false, "");
+                                    let right_bool = env.builder.build_int_compare(inkwell::IntPredicate::NE, right_val, zero, "");
+                                    let right_bool = env.builder.build_int_cast_sign_flag(right_bool, u8_type, false, "");
                                     
                                     let res = match op.as_str()
                                     {
-                                        "||" | "or"  => env.builder.ins().bor (left_bool, right_bool),
-                                        "&&" | "and" => env.builder.ins().band(left_bool, right_bool),
+                                        "||" | "or"  => env.builder.build_or (left_bool, right_bool, ""),
+                                        "&&" | "and" => env.builder.build_and(left_bool, right_bool, ""),
                                         _ => panic!("internal error: operator mismatch")
                                     };
-                                    env.stack_push((env.types.get("u8").unwrap().clone(), res));
+                                    env.stack.push((u8_type_frontend.clone(), res.into()));
                                 }
                                 "|" | "&" | "^" =>
                                 {
                                     let res = match op.as_str()
                                     {
-                                        "|" => env.builder.ins().bor(left_val , right_val),
-                                        "&" => env.builder.ins().band(left_val, right_val),
-                                        "^" => env.builder.ins().bxor(left_val, right_val),
+                                        "|" => env.builder.build_or (left_val, right_val, ""),
+                                        "&" => env.builder.build_and(left_val, right_val, ""),
+                                        "^" => env.builder.build_xor(left_val, right_val, ""),
                                         _ => panic!("internal error: operator mismatch")
                                     };
-                                    env.stack_push((left_type.clone(), res));
+                                    env.stack.push((left_type.clone(), res.into()));
                                 }
-                                */
                                 "+" | "-" | "*" | "/" | "%" =>
                                 {
                                     let res = match op.as_str()
@@ -1359,6 +1397,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                             env.builder.build_int_signed_div(left_val, right_val, "")
                                         },
                                         /*
+                                        // TODO reimplement
                                         "%" =>
                                         {
                                             let times = if is_u
@@ -1391,7 +1430,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         _ => panic!("internal error: operator mismatch")
                                     };
                                     let res = env.builder.build_int_compare(op, left_val, right_val, "");
-                                    let res = env.builder.build_int_cast_sign_flag(res, env.backend_types.get("u8").unwrap().into_int_type(), false, "");
+                                    let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "");
                                     env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
                                 }
                                 
@@ -1464,35 +1503,17 @@ fn main()
     
     let mut parser = parser::Parser::new_from_grammar(&ir_grammar).unwrap();
     let program_lines : Vec<String> = program_text.lines().map(|x| x.to_string()).collect();
-    let tokens = parser.tokenize(&program_lines, false).unwrap();
-    let ast = parser.parse_program(&tokens, &program_lines, false).unwrap().unwrap();
+    let tokens = parser.tokenize(&program_lines, true).unwrap();
+    let ast = parser.parse_program(&tokens, &program_lines, true).unwrap().unwrap();
     
     let program = Program::new(&mut types, &ast).unwrap();
-    
-    /*
-    let mut ast_debug = format!("{:#?}", program);
-    ast_debug = ast_debug.replace("    ", " ");
-    ast_debug = ast_debug.split("\n").filter(|x|
-           !x.contains(" position:")
-        && !x.contains(" line:")
-        && !x.contains(" children: None")
-        && !x.contains(" ),")
-        && !x.contains(" },")
-        && !x.contains(" ],")
-        && !x.ends_with(" [")
-        && !x.ends_with(" (")
-        && *x != "}"
-        ).map(|x|
-            x.replace("{}", "None").replace(" {", ":").replace("children: Some(", "children:")
-        ).collect::<Vec<_>>().join("\n");
-    */
     
     let mut imports : BTreeMap<String, (*const u8, FunctionSig)> = BTreeMap::new();
     fn import_function<T>(types: &BTreeMap<String, Type>, parser : &mut parser::Parser, imports : &mut BTreeMap<String, (*const u8, FunctionSig)>, name : &str, pointer : T, pointer_usize : usize, type_string : &str)
     {
         let type_lines = vec!(type_string.to_string());
-        let type_tokens = parser.tokenize(&type_lines, false).unwrap();
-        let type_ast = parser.parse_with_root_node_type(&type_tokens, &type_lines, false, "type").unwrap().unwrap();
+        let type_tokens = parser.tokenize(&type_lines, true).unwrap();
+        let type_ast = parser.parse_with_root_node_type(&type_tokens, &type_lines, true, "type").unwrap().unwrap();
         let type_ = parse_type(&types, &type_ast).unwrap();
         if let TypeData::FuncPointer(funcsig) = type_.data
         {
@@ -1509,13 +1530,6 @@ fn main()
             panic!("type string must be function type");
         }
     }
-    /*
-    unsafe extern "C" fn wah()
-    {
-        println!("wah...!!");
-    }
-    import_function::<unsafe extern "C" fn() -> ()>(&types, &mut parser, &mut imports, "wah", wah, wah as usize, "funcptr(void, ())");
-    */
     
     unsafe extern "C" fn print_bytes(bytes : *mut u8, count : u64) -> ()
     {
@@ -1529,14 +1543,6 @@ fn main()
         }
     }
     import_function::<unsafe extern "C" fn(*mut u8, u64) -> ()>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
-    
-    /*
-    unsafe extern "C" fn sqrt(a : f64) -> f64
-    {
-        a.sqrt()
-    }
-    import_function::<unsafe extern "C" fn(f64) -> f64>(&types, &mut parser, &mut imports, "sqrt", sqrt, sqrt as usize, "funcptr(f64, (f64))");
-    */
     
     unsafe extern "C" fn print_float(a : f64) -> ()
     {
@@ -1578,8 +1584,8 @@ fn main()
     for (name, type_name) in intrinsic_imports
     {
         let type_lines = vec!(type_name.to_string());
-        let tokens = parser.tokenize(&type_lines, false).unwrap();
-        let type_ast = parser.parse_with_root_node_type(&tokens, &type_lines, false, "type").unwrap().unwrap();
+        let tokens = parser.tokenize(&type_lines, true).unwrap();
+        let type_ast = parser.parse_with_root_node_type(&tokens, &type_lines, true, "type").unwrap().unwrap();
         let type_ = parse_type(&types, &type_ast).unwrap();
         if let TypeData::FuncPointer(funcsig) = type_.data
         {
@@ -1621,7 +1627,6 @@ fn main()
     {
         let funcsig = function.to_sig();
         let func_type = get_function_type(&mut backend_types, &funcsig);
-        //println!("{}: {:?} {:?}", f_name, funcsig, func_type);
         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
         func_decs.insert(f_name.clone(), (func_val, funcsig));
     }
@@ -1664,7 +1669,7 @@ fn main()
                 let val = func_val.get_nth_param(j as u32).unwrap();
                 builder.build_store(slot, val);
                 
-                if variables.contains_key(&var_name)// || func_decs.contains_key(&var_name)
+                if variables.contains_key(&var_name)
                 {
                     panic!("error: parameter {} redeclared", var_name);
                 }
@@ -1678,6 +1683,7 @@ fn main()
             i += 1;
         }
         
+        // TODO don't declare variables ahead of time, declare them on the go, and support variable scoping
         // declare variables
         function.body.visit(&mut |node : &ASTNode|
         {
@@ -1713,7 +1719,6 @@ fn main()
         // collect labels (blocks)
         let mut blocks = HashMap::new();
         let mut blocks_vec = Vec::new();
-        let mut next_block = HashMap::new();
         function.body.visit(&mut |node : &ASTNode|
         {
             if node.is_parent() && node.text == "label"
@@ -1723,10 +1728,6 @@ fn main()
                 {
                     let block = context.append_basic_block(func_val, name);
                     blocks.insert(name.clone(), block);
-                    if let Some(prev) = blocks_vec.last()
-                    {
-                        next_block.insert(*prev, block);
-                    }
                     blocks_vec.push(block);
                 }
                 else
@@ -1738,7 +1739,7 @@ fn main()
         });
         
         let stack = Vec::new();
-        let mut env = Environment { context : &context, stack, variables, builder : &builder, module : &module, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, next_block, ptr_int_type, target_data };
+        let mut env = Environment { context : &context, stack, variables, builder : &builder, module : &module, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, ptr_int_type, target_data };
         
         //println!("\n\ncompiling function {}...", function.name);
         //println!("{}", function.body.pretty_debug());
@@ -1801,19 +1802,8 @@ fn main()
     
     unsafe
     {
-        /*
-        if VERBOSE
-        {
-            println!("calling return_literal...");
-        }
-        let f = get_func!("return_literal", unsafe extern "C" fn() -> f32);
-        f.call();
-        */
-        
         let name = "nbody_bench";
-        
         let f = get_func!(name, unsafe extern "C" fn() -> ());
-        
         
         let start = std::time::Instant::now();
         println!("running {}...", name);
@@ -1822,27 +1812,5 @@ fn main()
         
         println!("{}() = {:?}", name, out);
         println!("time: {}", elapsed_time.as_secs_f64());
-    }
-    
-    {
-        use inkwell::targets::*;
-        
-        let triple = TargetMachine::get_default_triple();
-        let cpu = TargetMachine::get_host_cpu_name().to_string();
-        let features = TargetMachine::get_host_cpu_features().to_string();
-        
-        let target = Target::from_triple(&triple).unwrap();
-        let machine = target
-            .create_target_machine(
-                &triple,
-                &cpu,
-                &features,
-                opt_level,
-                RelocMode::Default,
-                CodeModel::Default,
-            )
-            .unwrap();
-        
-        machine.write_to_file(&module, FileType::Assembly, "out.asm".as_ref()).unwrap();
     }
 }
