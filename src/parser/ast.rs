@@ -38,6 +38,7 @@ impl ASTNode {
 }
 
 impl ASTNode {
+    #[allow(dead_code)]
     pub (crate) fn last_child(&'_ self) -> Result<&'_ ASTNode, String>
     {
         let count = self.child_count()?;
@@ -97,6 +98,7 @@ impl ASTNode {
     {
         self.children.is_some()
     }
+    #[allow(dead_code)]
     pub (crate) fn get_tokens(&self) -> Vec<String>
     {
         let mut ret = Vec::new();

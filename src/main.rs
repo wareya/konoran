@@ -1,13 +1,10 @@
 extern crate alloc;
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeMap;
 use std::collections::HashMap;
 
 use inkwell::context::Context;
-use inkwell::execution_engine::JitFunction;
-use inkwell::OptimizationLevel;
-use inkwell::types::{AnyType, BasicType};
-use inkwell::values::{AnyValue, BasicValue};
+use inkwell::types::BasicType;
 
 use parser::ast::ASTNode;
 
@@ -57,9 +54,9 @@ impl Type
             TypeData::Void => if is_ptr { "core::ffi::c_void" } else { "()" }.to_string(),
             TypeData::Primitive => self.name.clone(),
             TypeData::Pointer(inner) => format!("*mut {}", inner.to_string_rusttype(true)),
-            TypeData::VirtualPointer(inner) => format!("<unrepresented>"),
-            TypeData::Array(inner, size) => format!("<unrepresented>"),
-            TypeData::Struct(_) => format!("*mut core::ffi::c_void"),
+            TypeData::VirtualPointer(_) => format!("<unrepresented>"),
+            TypeData::Array(_, _) => format!("<unrepresented>"),
+            TypeData::Struct(_) => format!("<unrepresented>"),
             TypeData::FuncPointer(sig) => sig.to_string_rusttype(),
         }
     }
@@ -127,18 +124,22 @@ impl Type
     {
         matches!(self.data, TypeData::VirtualPointer(_))
     }
+#[allow(dead_code)]
     fn is_float(&self) -> bool
     {
         self.name == "f32" || self.name == "f64"
     }
+#[allow(dead_code)]
     fn is_int(&self) -> bool
     {
         ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"].contains(&self.name.as_str())
     }
+#[allow(dead_code)]
     fn is_int_signed(&self) -> bool
     {
         ["i8", "i16", "i32", "i64"].contains(&self.name.as_str())
     }
+#[allow(dead_code)]
     fn is_int_unsigned(&self) -> bool
     {
         ["u8", "u16", "u32", "u64"].contains(&self.name.as_str())
@@ -189,7 +190,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
             let name = &node.child(0).unwrap().text;
             if let Some(named_type) = types.get(name)
             {
-                if let TypeData::Struct(struct_data) = &named_type.data
+                if let TypeData::Struct(_) = &named_type.data
                 {
                     return Ok(named_type.clone());
                 }
@@ -227,6 +228,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
 #[derive(Debug, Clone)]
 struct Function
 {
+#[allow(dead_code)]
     name : String,
     return_type : Type,
     args : Vec<(Type, String)>,
@@ -290,6 +292,7 @@ impl Function
     }
 }
 
+#[allow(dead_code)]
 fn store_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, type_ : &Type) -> u64
 {
     if type_.is_void()
@@ -299,6 +302,7 @@ fn store_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_t
     let backend_type = get_backend_type(backend_types, type_);
     target_data.get_store_size(&backend_type)
 }
+#[allow(dead_code)]
 fn alloc_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, type_ : &Type) -> u64
 {
     if type_.is_void()
@@ -362,7 +366,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
             TypeData::Struct(struct_data) =>
             {
                 let mut types = Vec::new();
-                for (name, type_) in struct_data
+                for (_, type_) in struct_data
                 {
                     let backend_type = get_backend_type_sized(backend_types, &type_);
                     types.push(backend_type);
@@ -379,7 +383,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                     panic!("error: structs cannot be empty");
                 }
             }
-            TypeData::FuncPointer(sig) => panic!("TODO"),
+            TypeData::FuncPointer(_sig) => panic!("TODO"),
         }
     }
 }
@@ -511,13 +515,12 @@ impl Program
     }
 }
 
-struct Environment<'a, 'b, 'c, 'd, 'f>
+struct Environment<'a, 'b, 'c, 'f>
 {
     context       : &'c inkwell::context::Context,
     stack         : Vec<(Type, inkwell::values::BasicValueEnum<'c>)>,
     variables     : BTreeMap<String, (Type, inkwell::values::PointerValue<'c>)>,
     builder       : &'b inkwell::builder::Builder<'c>,
-    module        : &'d inkwell::module::Module<'c>,
     func_decs     : &'a BTreeMap<String, (inkwell::values::FunctionValue<'c>, FunctionSig)>,
     types         : &'a BTreeMap<String, Type>,
     backend_types : &'a mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>,
@@ -757,10 +760,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let inner_type = &found.1.1;
                     let struct_addr = struct_addr.into_pointer_value();
                     
-                    let index_addr = unsafe
-                    {
-                        env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), struct_addr, inner_index as u32, "").unwrap()
-                    };
+                    let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), struct_addr, inner_index as u32, "").unwrap();
                     
                     push_val_or_ptr!(inner_type, index_addr);
                 }
@@ -851,7 +851,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     let element_type = element_type.unwrap();
                     let array_type = element_type.to_array(array_length);
-                    let backend_type = get_backend_type_sized(&mut env.backend_types, &array_type);
                     let element_backend_type = get_backend_type_sized(&mut env.backend_types, &element_type);
                     
                     let size = u64_type.const_int(array_length as u64, false);
@@ -911,10 +910,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let slot = env.builder.build_alloca(backend_type, "");
                 for (index, (type_, val)) in vals.into_iter().enumerate()
                 {
-                    let index_addr = unsafe
-                    {
-                        env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, index as u32, "").unwrap()
-                    };
+                    let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, index as u32, "").unwrap();
                     
                     assert!(type_ == stack_val_types[index]);
                     
@@ -1153,7 +1149,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         let zero = int_type.const_int(0, true);
                         let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "");
-                        let instval = env.builder.build_conditional_branch(int_val, *then_block, else_block);
+                        env.builder.build_conditional_branch(int_val, *then_block, else_block);
                         env.builder.position_at_end(else_block);
                     }
                     else
@@ -1469,7 +1465,7 @@ fn main()
     println!("startup...");
     
     let start = std::time::Instant::now();
-    let mut context = inkwell::context::Context::create();
+    let context = inkwell::context::Context::create();
     
     let type_table = [
         ("void".to_string(), Type { name : "void".to_string(), data : TypeData::Void }, context.void_type().into()),
@@ -1509,7 +1505,7 @@ fn main()
     let program = Program::new(&mut types, &ast).unwrap();
     
     let mut imports : BTreeMap<String, (*const u8, FunctionSig)> = BTreeMap::new();
-    fn import_function<T>(types: &BTreeMap<String, Type>, parser : &mut parser::Parser, imports : &mut BTreeMap<String, (*const u8, FunctionSig)>, name : &str, pointer : T, pointer_usize : usize, type_string : &str)
+    fn import_function<T>(types: &BTreeMap<String, Type>, parser : &mut parser::Parser, imports : &mut BTreeMap<String, (*const u8, FunctionSig)>, name : &str, _pointer : T, pointer_usize : usize, type_string : &str)
     {
         let type_lines = vec!(type_string.to_string());
         let type_tokens = parser.tokenize(&type_lines, true).unwrap();
@@ -1563,14 +1559,14 @@ fn main()
     //    builder.symbol(f_name, *pointer);
     //}
     
-    let mut module = context.create_module("main");
+    let module = context.create_module("main");
     
     //let mut func_types = BTreeMap::new();
     //let mut func_sizes = BTreeMap::new();
     //let mut func_disasm = BTreeMap::new();
     let mut func_decs = BTreeMap::new();
     
-    for (f_name, (pointer, funcsig)) in &imports
+    for (f_name, (_, funcsig)) in &imports
     {
         let func_type = get_function_type(&mut backend_types, &funcsig);
         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::AvailableExternally));
@@ -1603,19 +1599,21 @@ fn main()
         }
     }
     
+    println!("compile time: {}", start.elapsed().as_secs_f64());
+    
     if VERBOSE
     {
         println!("module:\n{}", module.to_string());
         println!("adding global mappings...");
     }
     
-    let opt_level = OptimizationLevel::Aggressive;
-    //let opt_level = OptimizationLevel::None;
+    let opt_level = inkwell::OptimizationLevel::Aggressive;
+    //let opt_level = inkwell::OptimizationLevel::None;
     
     let start = std::time::Instant::now();
-    let mut executor = module.create_jit_execution_engine(opt_level).unwrap();
+    let executor = module.create_jit_execution_engine(opt_level).unwrap();
     let target_data = executor.get_target_data();
-    for (f_name, (pointer, funcsig)) in &imports
+    for (f_name, (pointer, _)) in &imports
     {
         executor.add_global_mapping(&func_decs.get(f_name).unwrap().0, *pointer as usize);
     }
@@ -1636,8 +1634,7 @@ fn main()
         let f_name = f.0;
         let function = f.1;
         
-        let (func_val, funcsig) = func_decs.get(f_name).unwrap().clone();
-        let func_type = get_function_type(&mut backend_types, &funcsig);
+        let (func_val, _) = func_decs.get(f_name).unwrap().clone();
         
         let block = context.append_basic_block(func_val, "entry");
         let builder = context.create_builder();
@@ -1739,7 +1736,7 @@ fn main()
         });
         
         let stack = Vec::new();
-        let mut env = Environment { context : &context, stack, variables, builder : &builder, module : &module, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, ptr_int_type, target_data };
+        let mut env = Environment { context : &context, stack, variables, builder : &builder, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, ptr_int_type, target_data };
         
         //println!("\n\ncompiling function {}...", function.name);
         //println!("{}", function.body.pretty_debug());

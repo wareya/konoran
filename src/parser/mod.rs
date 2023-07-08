@@ -149,6 +149,7 @@ impl Default for Parser {
 }
 impl Parser {
     /// Constructs a new parser with the default grammar.
+    #[allow(dead_code)]
     pub fn new_from_default() -> Result<Parser, String>
     {
         let mut parser = Parser::default();
@@ -254,8 +255,6 @@ impl Parser {
     // FIXME: change it to not be line-based; seek to the next newline instead. necessary for things like strings containing newline literals, which should definitely be supported.
     pub (crate) fn tokenize(&mut self, lines : &[String], silent: bool) -> Result<Vec<LexToken>, String>
     {
-        let start_time = Instant::now();
-        
         let mut ret : Vec<_> = Vec::new();
         let mut linecount = 1;
         
@@ -351,7 +350,7 @@ impl Parser {
         
         if !silent
         {
-            println!("lex took {:?}", Instant::now().duration_since(start_time));
+            //println!("lex took {:?}", Instant::now().duration_since(start_time));
         }
         
         Ok(ret)
@@ -458,7 +457,7 @@ impl Parser {
                     
                     if nodes.len() == 0 || nodes.last().unwrap().child(0).unwrap().text != *subtype
                     {
-                        println!("{:#?}", nodes.last().unwrap());
+                        //println!("{:#?}", nodes.last().unwrap());
                         return Ok((defaultreturn.0, defaultreturn.1, latesterror, latestnode));
                     }
                 }

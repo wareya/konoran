@@ -1,5 +1,4 @@
 #[allow(dead_code)]
-
 pub (crate) fn slice_any<T>(collection : &[T], start : i64, end : i64) -> Option<&[T]>
 {
     let u_start = if start < 0 {collection.len() - (-start as usize)} else {start as usize};
@@ -7,22 +6,24 @@ pub (crate) fn slice_any<T>(collection : &[T], start : i64, end : i64) -> Option
     
     collection.get(u_start..u_end)
 }
+#[allow(dead_code)]
 pub (crate) fn slice(text : &str, start : i64, end : i64) -> String
 {
     slice_any(&text.chars().collect::<Vec<char>>(), start, end).map(|chars| chars.iter().collect()).unwrap_or_else(|| "".to_string())
 }
-
+#[allow(dead_code)]
 pub (crate) fn slice_any_to_end<T>(collection : &[T], start : i64) -> Option<&[T]>
 {
     let u_start = if start < 0 {collection.len() - (-start as usize)} else {start as usize};
     
     collection.get(u_start..)
 }
+#[allow(dead_code)]
 pub (crate) fn slice_to_end(text : &str, start : i64) -> String
 {
     slice_any_to_end(&text.chars().collect::<Vec<char>>(), start).map(|chars| chars.iter().collect()).unwrap_or_else(|| "".to_string())
 }
-
+#[allow(dead_code)]
 pub (crate) fn unescape(text: &str) -> String
 {
     let mut ret = String::with_capacity(text.len());
@@ -49,6 +50,7 @@ pub (crate) fn unescape(text: &str) -> String
     ret
 }
 
+#[allow(dead_code)]
 pub (crate) fn escape(text: &str) -> String
 {
     let mut ret = String::with_capacity(text.len());
