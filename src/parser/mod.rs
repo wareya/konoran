@@ -682,7 +682,7 @@ impl Parser {
         }
         Ok(())
     }
-    fn parse_tweak_ast_pass_2(&self, mut ast : &mut ASTNode) -> Result<(), String>
+    fn parse_tweak_ast_pass_2(&self, ast : &mut ASTNode) -> Result<(), String>
     {
         if ast.is_parent()
         {
@@ -697,7 +697,6 @@ impl Parser {
                         let mut temp = Vec::new();
                         std::mem::swap(&mut temp, children);
                         let dummy = temp.get_mut(0).ok_or_else(|| minierr("internal error: could not access child that was supposed to be there in expression summarization"))?;
-                        drop(children);
                         std::mem::swap(ast, dummy);
                     }
                     else
@@ -720,7 +719,6 @@ impl Parser {
                             }
                         }
                         let ast_right = children.pop().ok_or_else(|| minierr("internal error: failed to access last element of right-hand unary expansion expression"))?;
-                        drop(children);
                         let mut ast_left = ASTNode
                         {
                             text: format!("{}_head", ast_right.text),

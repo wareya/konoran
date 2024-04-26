@@ -8,8 +8,18 @@ use inkwell::types::BasicType;
 
 use parser::ast::ASTNode;
 
+/*
+TODO list:
+- allow recursive pointer types
+- have proper scoped variable declarations, not function-level variable declarations
+- implement other control flow constructs than just "if -> goto"
+- implement modulo operators
+*/
+
 mod parser;
 
+// FIXME disallow directly recursive types
+// FIXME allow recursive types through pointers specifically (currently don't work even w/o disallowing recursive types)
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeData
 {

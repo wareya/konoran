@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 regex = "1.7.1"
-inkwell = { version = "0.2.0", features = ["llvm16-0"] }
+inkwell = { version = "0.2.0", features = ["llvm16-0"], default-features = false }
 
 [profile.release]
 opt-level = 2
