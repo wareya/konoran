@@ -382,17 +382,3 @@ void nbody_bench()
     
     return;
 }
-
-
-struct linked_list {
-    ptr(linked_list) next;
-    ptr(u8) data;
-}
-
-f32 func_gravity2()
-{
-    linked_list asdf;
-    //asdf.next = &asdf;
-
-    return 0.0f32;
-}

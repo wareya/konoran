@@ -1,5 +1,8 @@
 extern crate alloc;
 
+use alloc::rc::Rc;
+use core::cell::RefCell;
+
 use alloc::collections::BTreeMap;
 use std::collections::HashMap;
 
@@ -14,6 +17,9 @@ TODO list:
 - have proper scoped variable declarations, not function-level variable declarations
 - implement other control flow constructs than just "if -> goto"
 - implement modulo operators
+- volatile assignment
+- global variables
+- export/import keywords
 */
 
 mod parser;
@@ -23,10 +29,11 @@ mod parser;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeData
 {
+    IncompleteStruct,
     Void,
     Primitive,
     Struct(Vec<(String, Type)>), // property name, property type
-    Pointer(Box<Type>),
+    Pointer(Rc<RefCell<Type>>),
     VirtualPointer(Box<Type>),
     FuncPointer(Box<FunctionSig>),
     Array(Box<Type>, usize),
@@ -46,10 +53,11 @@ impl ToString for Type
         {
             TypeData::Void => self.name.clone(),
             TypeData::Primitive => self.name.clone(),
-            TypeData::Pointer(inner) => format!("ptr({})", inner.to_string()),
+            TypeData::Pointer(inner) => format!("ptr({})", inner.borrow().to_string()),
             TypeData::VirtualPointer(inner) => format!("vptr({})", inner.to_string()),
             TypeData::Array(inner, size) => format!("array({}, {})", inner.to_string(), size),
             TypeData::Struct(_) => self.name.clone(),
+            TypeData::IncompleteStruct => self.name.clone(),
             TypeData::FuncPointer(sig) => sig.to_string(),
         }
     }
@@ -63,10 +71,11 @@ impl Type
         {
             TypeData::Void => if is_ptr { "core::ffi::c_void" } else { "()" }.to_string(),
             TypeData::Primitive => self.name.clone(),
-            TypeData::Pointer(inner) => format!("*mut {}", inner.to_string_rusttype(true)),
+            TypeData::Pointer(inner) => format!("*mut {}", inner.borrow().to_string_rusttype(true)),
             TypeData::VirtualPointer(_) => format!("<unrepresented>"),
             TypeData::Array(_, _) => format!("<unrepresented>"),
             TypeData::Struct(_) => format!("<unrepresented>"),
+            TypeData::IncompleteStruct => format!("<unrepresented>"),
             TypeData::FuncPointer(sig) => sig.to_string_rusttype(),
         }
     }
@@ -76,7 +85,7 @@ impl Type
     }
     fn to_ptr(&self) -> Type
     {
-        Type { name : "ptr".to_string(), data : TypeData::Pointer(Box::new(self.clone())) }
+        Type { name : "ptr".to_string(), data : TypeData::Pointer(Rc::new(RefCell::new(self.clone()))) }
     }
     fn to_vptr(&self) -> Type
     {
@@ -86,7 +95,7 @@ impl Type
     {
         match &self.data
         {
-            TypeData::Pointer(inner) => *inner.clone(),
+            TypeData::Pointer(inner) => inner.borrow().clone(),
             _ => panic!("error: attempted to dereference non-pointer type `{}`", self.to_string()),
         }
     }
@@ -201,6 +210,10 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
             if let Some(named_type) = types.get(name)
             {
                 if let TypeData::Struct(_) = &named_type.data
+                {
+                    return Ok(named_type.clone());
+                }
+                else if let TypeData::IncompleteStruct = &named_type.data
                 {
                     return Ok(named_type.clone());
                 }
@@ -346,9 +359,43 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
     {
         match &type_.data
         {
+            TypeData::IncompleteStruct => panic!("internal error: tried to directly access incomplete struct type"),
             TypeData::Void => panic!("internal error: tried to recreate void type"),
             TypeData::Primitive => panic!("internal error: tried to recreate primitive type"),
-            TypeData::Pointer(inner) | TypeData::VirtualPointer(inner) =>
+            TypeData::Pointer(inner) =>
+            {
+                let backend_inner = if matches!(inner.borrow().data, TypeData::IncompleteStruct)
+                {
+                    if let Some(backend_type) = backend_types.get(&inner.borrow().name)
+                    {
+                        *backend_type
+                    }
+                    else
+                    {
+                        panic!("internal error: tried to use incomplete struct type {}", inner.borrow().name)
+                    }
+                }
+                else
+                {
+                    get_backend_type(backend_types, &inner.borrow())
+                };
+                
+                let ptr_type = if let Ok(basic) = inkwell::types::BasicTypeEnum::try_from(backend_inner)
+                {
+                    basic.ptr_type(inkwell::AddressSpace::default())
+                }
+                else if let Ok(func) = inkwell::types::FunctionType::try_from(backend_inner)
+                {
+                    func.ptr_type(inkwell::AddressSpace::default())
+                }
+                else
+                {
+                    panic!("error: can't build pointers of type {}", key)
+                }.into();
+                backend_types.insert(key, ptr_type);
+                ptr_type
+            }
+            TypeData::VirtualPointer(inner) =>
             {
                 let backend_inner = get_backend_type(backend_types, &inner);
                 let ptr_type = if let Ok(basic) = inkwell::types::BasicTypeEnum::try_from(backend_inner)
@@ -479,6 +526,15 @@ impl Program
             if child.is_parent() && child.text == "structdef"
             {
                 let name = child.child(0)?.child(0)?.text.clone();
+                types.insert(name.clone(), Type{name, data : TypeData::IncompleteStruct});
+            }
+        }
+        for child in ast.get_children()?
+        {
+            if child.is_parent() && child.text == "structdef"
+            {
+                let name = child.child(0)?.child(0)?.text.clone();
+                
                 let mut struct_data = Vec::new();
                 for prop in child.child(1)?.get_children()?
                 {
@@ -496,7 +552,7 @@ impl Program
                 
                 let struct_type = Type { name : name.clone(), data : TypeData::Struct(struct_data) };
                 
-                types.insert(name.clone(), struct_type);
+                types.insert(name, struct_type);
             }
         }
         
@@ -568,7 +624,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             else
             {
                 let basic_type = get_backend_type_sized(&mut env.backend_types, &$type);
-                let val = env.builder.build_load(basic_type, $addr, "");
+                let val = env.builder.build_load(basic_type, $addr, "").unwrap();
                 env.stack.push(($type.clone(), val));
             }
         }
@@ -616,11 +672,11 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     // FIXME: check types
                     //assert!();
-                    env.builder.build_return(Some(val));
+                    env.builder.build_return(Some(val)).unwrap();
                 }
                 else
                 {
-                    env.builder.build_return(None);
+                    env.builder.build_return(None).unwrap();
                 }
             }
             "declaration" =>
@@ -639,7 +695,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     assert!(type_val == type_var, "fulldec type failure, {:?} vs {:?}, line {}", type_val, type_var, node.line);
                     
-                    let instval = env.builder.build_store(slot, val);
+                    let instval = env.builder.build_store(slot, val).unwrap();
+                    // FIXME: what does this do again...?
                     let v = instval.get_volatile();
                     if false
                     {
@@ -671,7 +728,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 if let Ok(addr) = inkwell::values::PointerValue::try_from(left_addr)
                 {
-                    env.builder.build_store(addr, val);
+                    env.builder.build_store(addr, val).unwrap();
                 }
                 else
                 {
@@ -741,7 +798,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let inner_backend_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
                     let inner_addr = unsafe
                     {
-                        env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "")
+                        env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "").unwrap()
                     };
                     
                     push_val_or_ptr!(inner_type, inner_addr);
@@ -811,7 +868,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         args.reverse();
                         
                         //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
-                        let callval = env.builder.build_indirect_call(func_type, funcaddr.into_pointer_value(), &args, "");
+                        let callval = env.builder.build_indirect_call(func_type, funcaddr.into_pointer_value(), &args, "").unwrap();
                         let result = callval.try_as_basic_value().left();
                         //println!("number of results {}", results.len());
                         for (result, type_) in result.iter().zip([funcsig.return_type])
@@ -864,7 +921,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let element_backend_type = get_backend_type_sized(&mut env.backend_types, &element_type);
                     
                     let size = u64_type.const_int(array_length as u64, false);
-                    let slot = env.builder.build_array_alloca(element_backend_type, size, "");
+                    let slot = env.builder.build_array_alloca(element_backend_type, size, "").unwrap();
                     
                     let mut offset = 0;
                     for val in vals
@@ -872,10 +929,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         let offset_val = u64_type.const_int(offset as u64, false);
                         let offset_addr = unsafe
                         {
-                            env.builder.build_in_bounds_gep(element_backend_type, slot, &[offset_val], "")
+                            env.builder.build_in_bounds_gep(element_backend_type, slot, &[offset_val], "").unwrap()
                         };
                         
-                        env.builder.build_store(offset_addr, val);
+                        env.builder.build_store(offset_addr, val).unwrap();
                         offset += 1;
                     }
                     
@@ -917,14 +974,14 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 //let size = alloc_size_of_type(&env.target_data, env.backend_types, &struct_type);
                 //println!("{:?}", backend_type);
-                let slot = env.builder.build_alloca(backend_type, "");
+                let slot = env.builder.build_alloca(backend_type, "").unwrap();
                 for (index, (type_, val)) in vals.into_iter().enumerate()
                 {
                     let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, index as u32, "").unwrap();
                     
                     assert!(type_ == stack_val_types[index]);
                     
-                    env.builder.build_store(index_addr, val);
+                    env.builder.build_store(index_addr, val).unwrap();
                 }
                 
                 push_val_or_ptr!(struct_type, slot);
@@ -1081,7 +1138,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 let basic_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
                                 let res = match op.as_str()
                                 {
-                                    "*" => env.builder.build_load(basic_type, val.into_pointer_value(), ""),
+                                    "*" => env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap(),
                                     _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
                                 };
                                 env.stack.push((inner_type, res));
@@ -1092,7 +1149,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             let res = match op.as_str()
                             {
                                 "+" => val,
-                                "-" => env.builder.build_float_neg(val.into_float_value(), "").into(),
+                                "-" => env.builder.build_float_neg(val.into_float_value(), "").unwrap().into(),
                                 _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
                             };
                             env.stack.push((type_.clone(), res));
@@ -1122,7 +1179,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let label = &node.child(0).unwrap().child(0).unwrap().text;
                 if let Some(block) = env.blocks.get(label)
                 {
-                    env.builder.build_unconditional_branch(*block);
+                    env.builder.build_unconditional_branch(*block).unwrap();
                     env.builder.position_at_end(*block);
                 }
                 else
@@ -1136,7 +1193,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let next_block = env.context.append_basic_block(env.func_val, "");
                 if let Some(then_block) = env.blocks.get(label)
                 {
-                    env.builder.build_unconditional_branch(*then_block);
+                    env.builder.build_unconditional_branch(*then_block).unwrap();
                     env.builder.position_at_end(next_block);
                 }
                 else
@@ -1158,8 +1215,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
                     {
                         let zero = int_type.const_int(0, true);
-                        let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "");
-                        env.builder.build_conditional_branch(int_val, *then_block, else_block);
+                        let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap();
+                        env.builder.build_conditional_branch(int_val, *then_block, else_block).unwrap();
                         env.builder.position_at_end(else_block);
                     }
                     else
@@ -1186,7 +1243,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let basic_type = get_backend_type_sized(&mut env.backend_types, &right_type);
                 if left_size == right_size || (right_size == ptr_size && left_type.is_composite())
                 {
-                    let ret = env.builder.build_bitcast(left_val, basic_type, "");
+                    let ret = env.builder.build_bitcast(left_val, basic_type, "").unwrap();
                     env.stack.push((right_type, ret));
                 }
                 else
@@ -1217,7 +1274,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     if let (Ok(left_val), Ok(float_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::FloatType::try_from(target_backend_type))
                     {
-                        let ret = env.builder.build_float_cast(left_val, float_type, "");
+                        let ret = env.builder.build_float_cast(left_val, float_type, "").unwrap();
                         env.stack.push((right_type, ret.into()));
                     }
                     else
@@ -1315,10 +1372,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 {
                                     let res = match op.as_str()
                                     {
-                                        "+" => env.builder.build_float_add(left_val, right_val, ""),
-                                        "-" => env.builder.build_float_sub(left_val, right_val, ""),
-                                        "*" => env.builder.build_float_mul(left_val, right_val, ""),
-                                        "/" => env.builder.build_float_div(left_val, right_val, ""),
+                                        "+" => env.builder.build_float_add(left_val, right_val, "").unwrap(),
+                                        "-" => env.builder.build_float_sub(left_val, right_val, "").unwrap(),
+                                        "*" => env.builder.build_float_mul(left_val, right_val, "").unwrap(),
+                                        "/" => env.builder.build_float_div(left_val, right_val, "").unwrap(),
                                         /*
                                         // TODO reimplement
                                         "%" =>
@@ -1346,8 +1403,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         ">=" => inkwell::FloatPredicate::OGE,
                                         _ => panic!("internal error: operator mismatch")
                                     };
-                                    let res = env.builder.build_float_compare(op, left_val, right_val, "");
-                                    let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "");
+                                    let res = env.builder.build_float_compare(op, left_val, right_val, "").unwrap();
+                                    let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
                                     env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
                                 }
                                 _ => panic!("operator {} not supported on type pair {}, {}", op, left_type.name, right_type.name)
@@ -1363,17 +1420,17 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 "&&" | "||" | "and" | "or" =>
                                 {
                                     let zero = left_val.get_type().const_int(0, true);
-                                    let left_bool  = env.builder.build_int_compare(inkwell::IntPredicate::NE, left_val , zero, "");
-                                    let left_bool  = env.builder.build_int_cast_sign_flag(left_bool , u8_type, false, "");
-                                    let right_bool = env.builder.build_int_compare(inkwell::IntPredicate::NE, right_val, zero, "");
-                                    let right_bool = env.builder.build_int_cast_sign_flag(right_bool, u8_type, false, "");
+                                    let left_bool  = env.builder.build_int_compare(inkwell::IntPredicate::NE, left_val , zero, "").unwrap();
+                                    let left_bool  = env.builder.build_int_cast_sign_flag(left_bool , u8_type, false, "").unwrap();
+                                    let right_bool = env.builder.build_int_compare(inkwell::IntPredicate::NE, right_val, zero, "").unwrap();
+                                    let right_bool = env.builder.build_int_cast_sign_flag(right_bool, u8_type, false, "").unwrap();
                                     
                                     let res = match op.as_str()
                                     {
                                         "||" | "or"  => env.builder.build_or (left_bool, right_bool, ""),
                                         "&&" | "and" => env.builder.build_and(left_bool, right_bool, ""),
                                         _ => panic!("internal error: operator mismatch")
-                                    };
+                                    }.unwrap();
                                     env.stack.push((u8_type_frontend.clone(), res.into()));
                                 }
                                 "|" | "&" | "^" =>
@@ -1384,7 +1441,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         "&" => env.builder.build_and(left_val, right_val, ""),
                                         "^" => env.builder.build_xor(left_val, right_val, ""),
                                         _ => panic!("internal error: operator mismatch")
-                                    };
+                                    }.unwrap();
                                     env.stack.push((left_type.clone(), res.into()));
                                 }
                                 "+" | "-" | "*" | "/" | "%" =>
@@ -1419,7 +1476,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         }
                                         */
                                         _ => panic!("internal error: operator mismatch")
-                                    };
+                                    }.unwrap();
                                     env.stack.push((left_type.clone(), res.into()));
                                 }
                                 
@@ -1435,8 +1492,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         ">=" => if left_type.is_int_signed() { inkwell::IntPredicate::SGE } else  { inkwell::IntPredicate::UGE },
                                         _ => panic!("internal error: operator mismatch")
                                     };
-                                    let res = env.builder.build_int_compare(op, left_val, right_val, "");
-                                    let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "");
+                                    let res = env.builder.build_int_compare(op, left_val, right_val, "").unwrap();
+                                    let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
                                     env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
                                 }
                                 
@@ -1671,10 +1728,10 @@ fn main()
                 else
                 {
                     builder.build_alloca(basic_type, &var_name)
-                };
+                }.unwrap();
                 
                 let val = func_val.get_nth_param(j as u32).unwrap();
-                builder.build_store(slot, val);
+                builder.build_store(slot, val).unwrap();
                 
                 if variables.contains_key(&var_name)
                 {
@@ -1710,7 +1767,7 @@ fn main()
                 else
                 {
                     builder.build_alloca(basic_type, &var_name)
-                };
+                }.unwrap();
                 
                 if variables.contains_key(&var_name)// || func_decs.contains_key(&var_name)
                 {
