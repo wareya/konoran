@@ -392,7 +392,34 @@ struct linked_list {
 f32 func_gravity2()
 {
     linked_list asdf;
-    //asdf.next = &asdf;
+    asdf.next = &asdf;
 
     return 0.0f32;
 }
+
+/*
+struct invalid_type {
+    invalid_type next;
+}
+*/
+
+/*
+struct doubly_invalid_type_a {
+    doubly_invalid_type_b next;
+}
+struct doubly_invalid_type_b {
+    doubly_invalid_type_a next;
+}
+*/
+
+/*
+struct triply_invalid_type_a {
+    triply_invalid_type_b next;
+}
+struct triply_invalid_type_b {
+    triply_invalid_type_c next;
+}
+struct triply_invalid_type_c {
+    triply_invalid_type_a next;
+}
+*/

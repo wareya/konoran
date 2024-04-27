@@ -13,19 +13,17 @@ use parser::ast::ASTNode;
 
 /*
 TODO list:
-- allow recursive pointer types
-- have proper scoped variable declarations, not function-level variable declarations
-- implement other control flow constructs than just "if -> goto"
 - implement modulo operators
 - volatile assignment
 - global variables
 - export/import keywords
+
+- have proper scoped variable declarations, not function-level variable declarations
+- implement other control flow constructs than just "if -> goto"
 */
 
 mod parser;
 
-// FIXME disallow directly recursive types
-// FIXME allow recursive types through pointers specifically (currently don't work even w/o disallowing recursive types)
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeData
 {
@@ -240,7 +238,14 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
         }
         (true, "ptr_type") =>
         {
-            let res = parse_type(types, node.child(0).unwrap());
+            let mut res = parse_type(types, node.child(0).unwrap());
+            if let Ok(res) = res.as_mut()
+            {
+                if matches!(res.data, TypeData::Struct(_))
+                {
+                    res.data = TypeData::IncompleteStruct;
+                }
+            }
             res.map(|x| x.to_ptr())
         }
         // FIXME
@@ -316,26 +321,26 @@ impl Function
 }
 
 #[allow(dead_code)]
-fn store_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, type_ : &Type) -> u64
+fn store_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
 {
     if type_.is_void()
     {
         return 0;
     }
-    let backend_type = get_backend_type(backend_types, type_);
+    let backend_type = get_backend_type(backend_types, types, type_);
     target_data.get_store_size(&backend_type)
 }
 #[allow(dead_code)]
-fn alloc_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, type_ : &Type) -> u64
+fn alloc_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
 {
     if type_.is_void()
     {
         return 0;
     }
-    let backend_type = get_backend_type(backend_types, type_);
+    let backend_type = get_backend_type(backend_types, types, type_);
     target_data.get_abi_size(&backend_type)
 }
-fn whyyyyyy_kgafnagerriawgiugsafbiu438438094<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum<'c>) -> inkwell::context::ContextRef<'c>
+fn get_any_type_context<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum<'c>) -> inkwell::context::ContextRef<'c>
 {
     match sdkawuidsguisagugarewudsga
     {
@@ -347,7 +352,7 @@ fn whyyyyyy_kgafnagerriawgiugsafbiu438438094<'c>(sdkawuidsguisagugarewudsga : in
         inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
     }
 }
-fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, type_ : &Type) -> inkwell::types::AnyTypeEnum<'c>
+fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, type_ : &Type) -> inkwell::types::AnyTypeEnum<'c>
 {
     let key = type_.to_string();
     
@@ -357,81 +362,76 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
     }
     else
     {
+        let context = get_any_type_context(inkwell::types::BasicTypeEnum::try_from(*backend_types.values().nth(0).unwrap()).unwrap());
+        
         match &type_.data
         {
-            TypeData::IncompleteStruct => panic!("internal error: tried to directly access incomplete struct type"),
             TypeData::Void => panic!("internal error: tried to recreate void type"),
             TypeData::Primitive => panic!("internal error: tried to recreate primitive type"),
-            TypeData::Pointer(inner) =>
+            TypeData::Pointer(_) =>
             {
-                let backend_inner = if matches!(inner.borrow().data, TypeData::IncompleteStruct)
-                {
-                    if let Some(backend_type) = backend_types.get(&inner.borrow().name)
-                    {
-                        *backend_type
-                    }
-                    else
-                    {
-                        panic!("internal error: tried to use incomplete struct type {}", inner.borrow().name)
-                    }
-                }
-                else
-                {
-                    get_backend_type(backend_types, &inner.borrow())
-                };
-                
-                let ptr_type = if let Ok(basic) = inkwell::types::BasicTypeEnum::try_from(backend_inner)
-                {
-                    basic.ptr_type(inkwell::AddressSpace::default())
-                }
-                else if let Ok(func) = inkwell::types::FunctionType::try_from(backend_inner)
-                {
-                    func.ptr_type(inkwell::AddressSpace::default())
-                }
-                else
-                {
-                    panic!("error: can't build pointers of type {}", key)
-                }.into();
+                let ptr_type = context.ptr_type(inkwell::AddressSpace::default()).into();
                 backend_types.insert(key, ptr_type);
                 ptr_type
             }
-            TypeData::VirtualPointer(inner) =>
+            TypeData::VirtualPointer(_) =>
             {
-                let backend_inner = get_backend_type(backend_types, &inner);
-                let ptr_type = if let Ok(basic) = inkwell::types::BasicTypeEnum::try_from(backend_inner)
-                {
-                    basic.ptr_type(inkwell::AddressSpace::default())
-                }
-                else if let Ok(func) = inkwell::types::FunctionType::try_from(backend_inner)
-                {
-                    func.ptr_type(inkwell::AddressSpace::default())
-                }
-                else
-                {
-                    panic!("error: can't build pointers of type {}", key)
-                }.into();
+                let ptr_type = context.ptr_type(inkwell::AddressSpace::default()).into();
                 backend_types.insert(key, ptr_type);
                 ptr_type
             }
             TypeData::Array(inner, size) =>
             {
-                let backend_inner = get_backend_type_sized(backend_types, &inner);
+                let backend_inner = get_backend_type_sized(backend_types, types, &inner);
                 let ptr_type = backend_inner.array_type(*size as u32).into();
                 backend_types.insert(key, ptr_type);
                 ptr_type
             }
+            TypeData::IncompleteStruct =>
+            {
+                //panic!("asdokgfaowiurgasd");
+                if let Some(complete_type) = types.get(&type_.name)
+                {
+                    if let TypeData::Struct(struct_data) = &complete_type.data
+                    {
+                        let mut prop_types = Vec::new();
+                        for (_, type_) in struct_data
+                        {
+                            let backend_type = get_backend_type_sized(backend_types, types, &type_);
+                            prop_types.push(backend_type);
+                        }
+                        if let Some(_) = prop_types.first()
+                        {
+                            let ptr_type = context.struct_type(&prop_types, false).into();
+                            backend_types.insert(key, ptr_type);
+                            ptr_type
+                        }
+                        else
+                        {
+                            panic!("error: structs cannot be empty");
+                        }
+                    }
+                    else
+                    {
+                        panic!("error: struct type broken");
+                    }
+                }
+                else
+                {
+                    panic!("error: tried to use incomplete struct type");
+                }
+            }
             TypeData::Struct(struct_data) =>
             {
-                let mut types = Vec::new();
+                let mut prop_types = Vec::new();
                 for (_, type_) in struct_data
                 {
-                    let backend_type = get_backend_type_sized(backend_types, &type_);
-                    types.push(backend_type);
+                    let backend_type = get_backend_type_sized(backend_types, types, &type_);
+                    prop_types.push(backend_type);
                 }
-                if let Some(first) = types.first()
+                if let Some(_) = prop_types.first()
                 {
-                    let context = whyyyyyy_kgafnagerriawgiugsafbiu438438094(*first);
-                    let ptr_type = context.struct_type(&types, false).into();
+                    let ptr_type = context.struct_type(&prop_types, false).into();
                     backend_types.insert(key, ptr_type);
                     ptr_type
                 }
@@ -445,9 +445,9 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
     }
 }
 
-fn get_backend_type_sized<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, type_ : &Type) -> inkwell::types::BasicTypeEnum<'c>
+fn get_backend_type_sized<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, type_ : &Type) -> inkwell::types::BasicTypeEnum<'c>
 {
-    let backend_type = get_backend_type(backend_types, &type_);
+    let backend_type = get_backend_type(backend_types, types, &type_);
     if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
     {
         basic_type
@@ -458,7 +458,7 @@ fn get_backend_type_sized<'c>(backend_types : &mut BTreeMap<String, inkwell::typ
     }
 }
 
-fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, sig : &FunctionSig) -> inkwell::types::FunctionType<'c>
+fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, sig : &FunctionSig) -> inkwell::types::FunctionType<'c>
 {
     let sig_type = Type::from_functionsig(sig);
     let key = sig_type.to_string();
@@ -475,7 +475,7 @@ fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::A
         {
             panic!("error: void function arguments are not allowed");
         }
-        if let Ok(backend_type) = inkwell::types::BasicTypeEnum::try_from(get_backend_type(backend_types, &var_type))
+        if let Ok(backend_type) = inkwell::types::BasicTypeEnum::try_from(get_backend_type(backend_types, types, &var_type))
         {
             params.push(backend_type.into());
         }
@@ -485,7 +485,7 @@ fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::A
         }
     }
     
-    let return_type = get_backend_type(backend_types, &sig.return_type);
+    let return_type = get_backend_type(backend_types, types, &sig.return_type);
     
     //println!("testing return type {:?} for {:?}...", return_type, sig.return_type);
     
@@ -515,6 +515,50 @@ struct Program
     funcs : BTreeMap<String, Function>,
 }
 
+fn struct_check_recursive(types : &BTreeMap<String, Type>, root_type : &Type, type_ : &Type)
+{
+    match &type_.data
+    {
+        TypeData::Struct(struct_data) =>
+        {
+            for inner_type in struct_data
+            {
+                if inner_type.1.name == root_type.name
+                {
+                    panic!("struct {} is directly recursive; directly recursive structs are forbidden", root_type.name);
+                }
+                struct_check_recursive(types, root_type, &inner_type.1);
+            }
+        }
+        TypeData::IncompleteStruct =>
+        {
+            if let Some(complete_type) = types.get(&type_.name)
+            {
+                if complete_type.name == root_type.name
+                {
+                    panic!("struct {} is directly recursive; directly recursive structs are forbidden", root_type.name);
+                }
+                if let TypeData::Struct(struct_data) = &complete_type.data
+                {
+                    for inner_type in struct_data
+                    {
+                        if inner_type.1.name == root_type.name
+                        {
+                            panic!("struct {} is directly recursive; directly recursive structs are forbidden", root_type.name);
+                        }
+                        struct_check_recursive(types, root_type, &inner_type.1);
+                    }
+                }
+            }
+            else
+            {
+                panic!("error: tried to use incomplete struct type");
+            }
+        }
+        _ => {}
+    }
+}
+
 impl Program
 {
     fn new(types : &mut BTreeMap<String, Type>, ast : &ASTNode) -> Result<Program, String>
@@ -540,17 +584,19 @@ impl Program
                 {
                     let prop_type = parse_type(&types, prop.child(0)?).unwrap();
                     let prop_name = prop.child(1)?.child(0)?.text.clone();
-                    if prop_name != "_" // for placeholders only
+                    if prop_type.name == "void"
                     {
-                        if prop_type.name == "void"
-                        {
-                            panic!("error: void struct properties are not allowed");
-                        }
+                        panic!("error: void struct properties are not allowed");
+                    }
+                    if prop_name != "_" // use non-placeholder variables only
+                    {
                         struct_data.push((prop_name, prop_type.clone()));
                     }
                 }
                 
                 let struct_type = Type { name : name.clone(), data : TypeData::Struct(struct_data) };
+                
+                struct_check_recursive(types, &struct_type, &struct_type);
                 
                 types.insert(name, struct_type);
             }
@@ -602,6 +648,28 @@ enum WantPointer {
     Real,
     Virtual,
 }
+fn check_struct_incomplete<'a>(env : &'a mut Environment, type_ : &mut Type)
+{
+    match &mut type_.data
+    {
+        TypeData::IncompleteStruct =>
+        {
+            if let Some(new_type) = env.types.get(&type_.name)
+            {
+                //println!("----incomplete struct found!!!!!----");
+                type_.data = new_type.data.clone();
+            }
+            else
+            {
+                panic!("tried to use incomplete struct type {}", type_.name);
+            }
+        }
+        TypeData::VirtualPointer(ref mut inner_type) => check_struct_incomplete(env, inner_type),
+        TypeData::Pointer(inner_type) => check_struct_incomplete(env, &mut inner_type.borrow_mut()),
+        _ => {}
+    }
+    
+}
 fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : WantPointer)
 {
     // used to build constants for some lowerings, and to cast to bool
@@ -623,7 +691,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             }
             else
             {
-                let basic_type = get_backend_type_sized(&mut env.backend_types, &$type);
+                let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &$type);
                 let val = env.builder.build_load(basic_type, $addr, "").unwrap();
                 env.stack.push(($type.clone(), val));
             }
@@ -688,7 +756,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let name = &node.child(1).unwrap().child(0).unwrap().text;
                 if env.variables.contains_key(name)
                 {
-                    let (type_var, slot) = env.variables[name].clone();
+                    let (mut type_var, slot) = env.variables[name].clone();
+                    check_struct_incomplete(env, &mut type_var);
                     
                     compile(env, node.child(2).unwrap(), WantPointer::None);
                     let (type_val, val) = env.stack.pop().unwrap();
@@ -724,7 +793,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     panic!("tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
                 };
-                assert!(type_val == type_left);
+                assert!(type_val == type_left, "binstate type failure, {:?} vs {:?}, line {}", type_val, type_left, node.line);
                 
                 if let Ok(addr) = inkwell::values::PointerValue::try_from(left_addr)
                 {
@@ -747,7 +816,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let name = &node.child(0).unwrap().child(0).unwrap().text;
                 if env.variables.contains_key(name)
                 {
-                    let (type_, slot) = env.variables[name].clone();
+                    let (mut type_, slot) = env.variables[name].clone();
+                    check_struct_incomplete(env, &mut type_);
                     
                     assert!(want_pointer != WantPointer::None);
                     
@@ -763,7 +833,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let name = &node.child(0).unwrap().text;
                 if env.variables.contains_key(name)
                 {
-                    let (type_, slot) = env.variables[name].clone();
+                    let (mut type_, slot) = env.variables[name].clone();
+                    check_struct_incomplete(env, &mut type_);
                     
                     push_val_or_ptr!(type_, slot);
                 }
@@ -794,8 +865,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     //println!("\ntype: {:?}", base_type);
                     //println!("\nval: {:?}\n", base_addr);
                     
-                    let inner_type = base_type.array_to_inner();
-                    let inner_backend_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
+                    let mut inner_type = base_type.array_to_inner();
+                    check_struct_incomplete(env, &mut inner_type);
+                    
+                    let inner_backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &inner_type);
                     let inner_addr = unsafe
                     {
                         env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "").unwrap()
@@ -813,18 +886,21 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             {
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
                 let (struct_type, struct_addr) = env.stack.pop().unwrap();
-                let struct_type = struct_type.deref_vptr();
-                let backend_type = get_backend_type_sized(&mut env.backend_types, &struct_type);
+                let mut struct_type = struct_type.deref_vptr();
+                check_struct_incomplete(env, &mut struct_type);
+                let backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &struct_type);
                 
                 let right_name = &node.child(1).unwrap().child(0).unwrap().text;
                 
                 if let Some(found) = match &struct_type.data {
                     TypeData::Struct(ref props) => props.iter().enumerate().find(|x| x.1.0 == *right_name),
-                    _ => panic!("error: tried to use indirection (.) operator on non-struct"),
+                    _ => panic!("error: tried to use indirection (.) operator on non-struct {:?}", struct_type),
                 }
                 {
                     let inner_index = found.0;
-                    let inner_type = &found.1.1;
+                    let mut inner_type = found.1.1.clone();
+                    check_struct_incomplete(env, &mut inner_type);
+                    
                     let struct_addr = struct_addr.into_pointer_value();
                     
                     let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), struct_addr, inner_index as u32, "").unwrap();
@@ -844,7 +920,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     TypeData::FuncPointer(funcsig) =>
                     {
-                        let func_type = get_function_type(&mut env.backend_types, &funcsig);
+                        let func_type = get_function_type(&mut env.backend_types, &env.types, &funcsig);
                         
                         let stack_len_start = env.stack.len();
                         compile(env, node.child(1).unwrap(), WantPointer::None);
@@ -918,7 +994,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     let element_type = element_type.unwrap();
                     let array_type = element_type.to_array(array_length);
-                    let element_backend_type = get_backend_type_sized(&mut env.backend_types, &element_type);
+                    let element_backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &element_type);
                     
                     let size = u64_type.const_int(array_length as u64, false);
                     let slot = env.builder.build_array_alloca(element_backend_type, size, "").unwrap();
@@ -970,7 +1046,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let stack_val_types = vals.iter().map(|x| x.0.clone()).collect::<Vec<_>>();
                 assert!(struct_member_types == stack_val_types);
                 
-                let backend_type = get_backend_type_sized(&mut env.backend_types, &struct_type);
+                let backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &struct_type);
                 
                 //let size = alloc_size_of_type(&env.target_data, env.backend_types, &struct_type);
                 //println!("{:?}", backend_type);
@@ -994,7 +1070,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let text = parts.0;
                 if let Some(type_) = env.types.get(parts.1)
                 {
-                    let backend_type = get_backend_type(&mut env.backend_types, &type_);
+                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
                     if let Ok(float_type) = inkwell::types::FloatType::try_from(backend_type)
                     {
                         match parts.1
@@ -1063,7 +1139,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 if let Some(type_) = env.types.get(parts.1)
                 {
-                    let backend_type = get_backend_type(&mut env.backend_types, &type_);
+                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
                     if let Ok(int_type) = inkwell::types::IntType::try_from(backend_type)
                     {
                         let res = int_type.const_int(match (is_hex, parts.1)
@@ -1135,7 +1211,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 {
                                     panic!("can't dereference void pointers");
                                 }
-                                let basic_type = get_backend_type_sized(&mut env.backend_types, &inner_type);
+                                let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &inner_type);
                                 let res = match op.as_str()
                                 {
                                     "*" => env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap(),
@@ -1211,7 +1287,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let else_block = env.context.append_basic_block(env.func_val, "");
                 if let Some(then_block) = env.blocks.get(label)
                 {
-                    let backend_type = get_backend_type(&mut env.backend_types, &type_);
+                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
                     if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
                     {
                         let zero = int_type.const_int(0, true);
@@ -1236,14 +1312,14 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
                 
-                let (left_size, right_size) = (store_size_of_type(&env.target_data, env.backend_types, &left_type), store_size_of_type(&env.target_data, env.backend_types, &right_type));
+                let (left_size, right_size) = (store_size_of_type(&env.target_data, env.backend_types, env.types, &left_type), store_size_of_type(&env.target_data, env.backend_types, env.types, &right_type));
                 let ptr_size = env.target_data.get_store_size(&env.ptr_int_type);
                 
                 // FIXME: platform-specific pointer size
-                let basic_type = get_backend_type_sized(&mut env.backend_types, &right_type);
+                let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &right_type);
                 if left_size == right_size || (right_size == ptr_size && left_type.is_composite())
                 {
-                    let ret = env.builder.build_bitcast(left_val, basic_type, "").unwrap();
+                    let ret = env.builder.build_bit_cast(left_val, basic_type, "").unwrap();
                     env.stack.push((right_type, ret));
                 }
                 else
@@ -1257,7 +1333,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let (left_type, left_val) = env.stack.pop().unwrap();
                 
                 let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
-                let target_backend_type = get_backend_type(&mut env.backend_types, &right_type);
+                let target_backend_type = get_backend_type(&mut env.backend_types, &env.types, &right_type);
                 
                 // cast as own type (replace type, aka do nothing)
                 if left_type.name == right_type.name
@@ -1635,7 +1711,7 @@ fn main()
     
     for (f_name, (_, funcsig)) in &imports
     {
-        let func_type = get_function_type(&mut backend_types, &funcsig);
+        let func_type = get_function_type(&mut backend_types, &types, &funcsig);
         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::AvailableExternally));
         func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
     }
@@ -1654,13 +1730,13 @@ fn main()
         {
             let sqrt_intrinsic = inkwell::intrinsics::Intrinsic::find(&format!("llvm.{}", name)).unwrap();
             
-            let mut types = Vec::new();
+            let mut arg_types = Vec::new();
             for arg_type in &funcsig.args
             {
-                types.push(get_backend_type_sized(&mut backend_types, &arg_type));
+                arg_types.push(get_backend_type_sized(&mut backend_types, &types, &arg_type));
             }
             //let f64_type = &types.get("f64").unwrap();
-            let sqrt_function = sqrt_intrinsic.get_declaration(&module, &types).unwrap();
+            let sqrt_function = sqrt_intrinsic.get_declaration(&module, &arg_types).unwrap();
             
             func_decs.insert(name.to_string(), (sqrt_function, *funcsig.clone()));
         }
@@ -1687,11 +1763,10 @@ fn main()
     let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
     println!("executor build time: {}", start.elapsed().as_secs_f64());
     
-    
     for (f_name, function) in &program.funcs
     {
         let funcsig = function.to_sig();
-        let func_type = get_function_type(&mut backend_types, &funcsig);
+        let func_type = get_function_type(&mut backend_types, &types, &funcsig);
         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
         func_decs.insert(f_name.clone(), (func_val, funcsig));
     }
@@ -1716,13 +1791,13 @@ fn main()
             let var_type = param.0.clone();
             let var_name = param.1.clone();
             
-            let backend_type = get_backend_type(&mut backend_types, &var_type);
+            let backend_type = get_backend_type(&mut backend_types, &types, &var_type);
             if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
             {
                 let slot = if let TypeData::Array(inner_type, size) = &var_type.data
                 {
-                    let size = get_backend_type_sized(&mut backend_types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
-                    let inner_basic_type = get_backend_type_sized(&mut backend_types, &inner_type);
+                    let size = get_backend_type_sized(&mut backend_types, &types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
+                    let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, &inner_type);
                     builder.build_array_alloca(inner_basic_type, size, &var_name)
                 }
                 else
@@ -1756,12 +1831,12 @@ fn main()
                 let var_type = parse_type(&types, &node.child(0).unwrap()).unwrap();
                 let var_name = node.child(1).unwrap().child(0).unwrap().text.clone();
                 
-                let basic_type = get_backend_type_sized(&mut backend_types, &var_type);
+                let basic_type = get_backend_type_sized(&mut backend_types, &types, &var_type);
                 
                 let slot = if let TypeData::Array(inner_type, size) = &var_type.data
                 {
-                    let size = get_backend_type_sized(&mut backend_types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
-                    let inner_basic_type = get_backend_type_sized(&mut backend_types, &inner_type);
+                    let size = get_backend_type_sized(&mut backend_types, &types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
+                    let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, &inner_type);
                     builder.build_array_alloca(inner_basic_type, size, &var_name)
                 }
                 else
@@ -1807,6 +1882,7 @@ fn main()
         
         //println!("\n\ncompiling function {}...", function.name);
         //println!("{}", function.body.pretty_debug());
+        
         compile(&mut env, &function.body, WantPointer::None);
     }
     
