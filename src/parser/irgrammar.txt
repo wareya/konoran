@@ -227,6 +227,9 @@ return ;
 intrinsic_memcpy: HIDELITERALS
 intrinsic_memcpy $expr$ $expr$ $expr$ ;
 
+intrinsic_memcpy_volatile: HIDELITERALS
+intrinsic_memcpy_volatile $expr$ $expr$ $expr$ ;
+
 intrinsic_memmove: HIDELITERALS
 intrinsic_memmove $expr$ $expr$ $expr$ ;
 
@@ -237,6 +240,7 @@ instruction:
 $goto$
 $return$
 $intrinsic_memcpy$
+$intrinsic_memcpy_volatile$
 $intrinsic_memmove$
 $intrinsic_memset$
 

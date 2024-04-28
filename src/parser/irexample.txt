@@ -389,12 +389,24 @@ struct linked_list {
     ptr(u8) data;
 }
 
-f32 func_gravity2()
+void func_etc()
 {
     linked_list asdf;
     asdf.next = &asdf;
-
-    return 0.0f32;
+    
+    u8 a = 10u8;
+    u8 b = 192u8;
+    print_float(((b % a) as f64));
+    
+    i8 a2 = -10i8;
+    i8 b2 = -112i8;
+    print_float(((b2 % a2) as f64));
+    
+    f32 a3 = -10.0f32;
+    f32 b3 = 192.1f32;
+    print_float(((b3 % a3) as f64));
+    
+    return;
 }
 
 /*

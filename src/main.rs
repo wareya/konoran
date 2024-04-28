@@ -8,15 +8,17 @@ use std::collections::HashMap;
 
 use inkwell::context::Context;
 use inkwell::types::BasicType;
+use inkwell::types::BasicTypeEnum;
 
 use parser::ast::ASTNode;
 
 /*
 TODO list:
-- implement modulo operators
+- finish implementing integer casting operations
 - volatile assignment
 - global variables
 - export/import keywords
+- fill out intrinsics (memcpy etc)
 
 - have proper scoped variable declarations, not function-level variable declarations
 - implement other control flow constructs than just "if -> goto"
@@ -1331,9 +1333,11 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 let (left_type, left_val) = env.stack.pop().unwrap();
+                let source_basic_type : BasicTypeEnum = get_backend_type(&mut env.backend_types, &env.types, &left_type).try_into().unwrap();
                 
                 let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
                 let target_backend_type = get_backend_type(&mut env.backend_types, &env.types, &right_type);
+                let target_basic_type : BasicTypeEnum = target_backend_type.try_into().unwrap();
                 
                 // cast as own type (replace type, aka do nothing)
                 if left_type.name == right_type.name
@@ -1358,26 +1362,41 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         panic!("internal error: float cast internal and backend type mismatch");
                     }
                 }
-                // TODO reimplement all these casts
-                /*
                 // cast between types of same size, non-float. bitcast.
-                else if !left_type.is_float() && !right_type.is_float() && left_type.size() == right_type.size()
+                else if !left_type.is_float() && !right_type.is_float() && source_basic_type.size_of() == target_basic_type.size_of() && target_basic_type.is_sized()
                 {
-                    let ret = env.builder.ins().bitcast(target_cranetype, MemFlags::new(), left_val);
-                    env.stack_push((right_type, ret));
-                }
-                // cast from float to int (must be int, not pointer)
-                else if left_type.is_int_signed() && right_type.is_float()
-                {
-                    let ret = env.builder.ins().fcvt_from_sint(target_cranetype, left_val);
-                    env.stack_push((right_type, ret));
-                }
-                else if left_type.is_int_unsigned() && right_type.is_float()
-                {
-                    let ret = env.builder.ins().fcvt_from_uint(target_cranetype, left_val);
-                    env.stack_push((right_type, ret));
+                    // TODO double check
+                    let ret = env.builder.build_bit_cast(left_val, target_basic_type, "").unwrap();
+                    env.stack.push((right_type, ret));
                 }
                 // cast from int to float (must be int, not pointer)
+                else if left_type.is_int_unsigned() && right_type.is_float()
+                {
+                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::FloatType::try_from(target_backend_type))
+                    {
+                        let ret = env.builder.build_unsigned_int_to_float(left_val, target_type.into(), "").unwrap();
+                        env.stack.push((right_type, ret.into()));
+                    }
+                    else
+                    {
+                        panic!("internal error: uint-to-float cast internal and backend type mismatch");
+                    }
+                }
+                else if left_type.is_int_signed() && right_type.is_float()
+                {
+                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::FloatType::try_from(target_backend_type))
+                    {
+                        let ret = env.builder.build_signed_int_to_float(left_val, target_type.into(), "").unwrap();
+                        env.stack.push((right_type, ret.into()));
+                    }
+                    else
+                    {
+                        panic!("internal error: sint-to-float cast internal and backend type mismatch");
+                    }
+                }
+                // TODO reimplement all these casts
+                /*
+                // cast from float to int (must be int, not pointer)
                 else if left_type.is_float() && right_type.is_int_signed()
                 {
                     let ret = env.builder.ins().fcvt_to_sint(target_cranetype, left_val);
@@ -1452,16 +1471,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         "-" => env.builder.build_float_sub(left_val, right_val, "").unwrap(),
                                         "*" => env.builder.build_float_mul(left_val, right_val, "").unwrap(),
                                         "/" => env.builder.build_float_div(left_val, right_val, "").unwrap(),
-                                        /*
-                                        // TODO reimplement
-                                        "%" =>
-                                        {
-                                            let times = env.builder.ins().fdiv(left_val, right_val);
-                                            let floored = env.builder.ins().floor(times);
-                                            let n = env.builder.ins().fmul(floored, right_val);
-                                            env.builder.ins().fsub(left_val, n)
-                                        }
-                                        */
+                                        "%" => env.builder.build_float_rem(left_val, right_val, "").unwrap(),
                                         _ => panic!("internal error: operator mismatch")
                                     };
                                     env.stack.push((left_type.clone(), res.into()));
@@ -1535,22 +1545,14 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         {
                                             env.builder.build_int_signed_div(left_val, right_val, "")
                                         },
-                                        /*
-                                        // TODO reimplement
-                                        "%" =>
+                                        "%" => if is_u
                                         {
-                                            let times = if is_u
-                                            {
-                                                env.builder.ins().udiv(left_val, right_val)
-                                            }
-                                            else
-                                            {
-                                                env.builder.ins().sdiv(left_val, right_val)
-                                            };
-                                            let n = env.builder.ins().imul(times, right_val);
-                                            env.builder.ins().isub(left_val, n)
+                                            env.builder.build_int_unsigned_rem(left_val, right_val, "")
                                         }
-                                        */
+                                        else
+                                        {
+                                            env.builder.build_int_signed_rem(left_val, right_val, "")
+                                        },
                                         _ => panic!("internal error: operator mismatch")
                                     }.unwrap();
                                     env.stack.push((left_type.clone(), res.into()));
@@ -1942,7 +1944,7 @@ fn main()
     
     unsafe
     {
-        let name = "nbody_bench";
+        let name = "func_etc";
         let f = get_func!(name, unsafe extern "C" fn() -> ());
         
         let start = std::time::Instant::now();
