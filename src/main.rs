@@ -377,12 +377,16 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
 {
     let key = type_.to_string();
     
+    //println!("{}", key);
+    
     if let Some(backend_type) = backend_types.get(&key)
     {
+        //println!("^- found in map as `{:?}`", backend_type);
         *backend_type
     }
     else
     {
+        //println!("^- not found in map");
         let context = get_any_type_context(inkwell::types::BasicTypeEnum::try_from(*backend_types.values().nth(0).unwrap()).unwrap());
         
         match &type_.data
@@ -461,7 +465,12 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                     panic!("error: structs cannot be empty");
                 }
             }
-            TypeData::FuncPointer(_sig) => panic!("TODO"),
+            TypeData::FuncPointer(_sig) =>
+            {
+                let ptr_type = context.ptr_type(inkwell::AddressSpace::default()).into();
+                backend_types.insert(key, ptr_type);
+                ptr_type
+            }
         }
     }
 }
@@ -479,13 +488,13 @@ fn get_backend_type_sized<'c>(backend_types : &mut BTreeMap<String, inkwell::typ
     }
 }
 
-fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, sig : &FunctionSig) -> inkwell::types::FunctionType<'c>
+fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::FunctionType<'c>>, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, sig : &FunctionSig) -> inkwell::types::FunctionType<'c>
 {
     let sig_type = Type::from_functionsig(sig);
     let key = sig_type.to_string();
-    if let Some(backend_type) = backend_types.get(&key)
+    if let Some(backend_type) = function_types.get(&key)
     {
-        return backend_type.into_function_type();
+        return *backend_type;
     }
     
     let mut params = Vec::new();
@@ -496,10 +505,19 @@ fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::A
         {
             panic!("error: void function arguments are not allowed");
         }
-        if let Ok(backend_type) = inkwell::types::BasicTypeEnum::try_from(get_backend_type(backend_types, types, &var_type))
+        let backend_type = get_backend_type(backend_types, types, &var_type);
+        if let Ok(backend_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
         {
             params.push(backend_type.into());
         }
+        /*
+        else if let Ok(_fptr) = inkwell::types::FunctionType::try_from(backend_type)
+        {
+            let context = get_any_type_context(inkwell::types::BasicTypeEnum::try_from(*backend_types.values().nth(0).unwrap()).unwrap());
+            let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+            params.push(ptr_type.into());
+        }
+        */
         else
         {
             panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", var_type.name, var_type.name);
@@ -518,14 +536,22 @@ fn get_function_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::A
     {
         void.fn_type(&params, false)
     }
+    /*
+    else if let Ok(_fptr) = inkwell::types::FunctionType::try_from(return_type)
+    {
+        let context = get_any_type_context(inkwell::types::BasicTypeEnum::try_from(*backend_types.values().nth(0).unwrap()).unwrap());
+        context.ptr_type(inkwell::AddressSpace::default()).fn_type(&params, false)
+    }
+    */
     else
     {
-        panic!("error: can't build functions that return type {}", sig.return_type.name)
+        panic!("error: can't build functions that return type {} ({:?})", sig.return_type.name, return_type)
     };
     
     //println!("func type is  {:?}", func_type);
     
-    backend_types.insert(key, func_type.into());
+    // FIXME
+    function_types.insert(key, func_type);
     
     func_type
 }
@@ -650,17 +676,18 @@ impl Program
 
 struct Environment<'a, 'b, 'c, 'f>
 {
-    context       : &'c inkwell::context::Context,
-    stack         : Vec<(Type, inkwell::values::BasicValueEnum<'c>)>,
-    variables     : BTreeMap<String, (Type, inkwell::values::PointerValue<'c>)>,
-    builder       : &'b inkwell::builder::Builder<'c>,
-    func_decs     : &'a BTreeMap<String, (inkwell::values::FunctionValue<'c>, FunctionSig)>,
-    types         : &'a BTreeMap<String, Type>,
-    backend_types : &'a mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>,
-    func_val      : inkwell::values::FunctionValue<'c>,
-    blocks        : HashMap<String, inkwell::basic_block::BasicBlock<'c>>,
-    ptr_int_type  : inkwell::types::IntType<'c>,
-    target_data   : &'f inkwell::targets::TargetData,
+    context        : &'c inkwell::context::Context,
+    stack          : Vec<(Type, inkwell::values::BasicValueEnum<'c>)>,
+    variables      : BTreeMap<String, (Type, inkwell::values::PointerValue<'c>)>,
+    builder        : &'b inkwell::builder::Builder<'c>,
+    func_decs      : &'a BTreeMap<String, (inkwell::values::FunctionValue<'c>, FunctionSig)>,
+    types          : &'a BTreeMap<String, Type>,
+    backend_types  : &'a mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>,
+    function_types : &'a mut BTreeMap<String, inkwell::types::FunctionType<'c>>,
+    func_val       : inkwell::values::FunctionValue<'c>,
+    blocks         : HashMap<String, inkwell::basic_block::BasicBlock<'c>>,
+    ptr_int_type   : inkwell::types::IntType<'c>,
+    target_data    : &'f inkwell::targets::TargetData,
 }
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -941,7 +968,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     TypeData::FuncPointer(funcsig) =>
                     {
-                        let func_type = get_function_type(&mut env.backend_types, &env.types, &funcsig);
+                        let func_type = get_function_type(&mut env.function_types, &mut env.backend_types, &env.types, &funcsig);
                         
                         let stack_len_start = env.stack.len();
                         compile(env, node.child(1).unwrap(), WantPointer::None);
@@ -1729,6 +1756,8 @@ fn main()
         backend_types.insert(a.clone(), *c);
     }
     
+    let mut function_types = BTreeMap::new();
+    
     let ir_grammar = include_str!("parser/irgrammar.txt");
     let program_text = include_str!("parser/irexample.txt");
     
@@ -1803,7 +1832,7 @@ fn main()
     
     for (f_name, (_, funcsig)) in &imports
     {
-        let func_type = get_function_type(&mut backend_types, &types, &funcsig);
+        let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::AvailableExternally));
         func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
     }
@@ -1858,7 +1887,7 @@ fn main()
     for (f_name, function) in &program.funcs
     {
         let funcsig = function.to_sig();
-        let func_type = get_function_type(&mut backend_types, &types, &funcsig);
+        let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
         func_decs.insert(f_name.clone(), (func_val, funcsig));
     }
@@ -1970,7 +1999,7 @@ fn main()
         });
         
         let stack = Vec::new();
-        let mut env = Environment { context : &context, stack, variables, builder : &builder, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, func_val, blocks, ptr_int_type, target_data };
+        let mut env = Environment { context : &context, stack, variables, builder : &builder, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
         
         //println!("\n\ncompiling function {}...", function.name);
         //println!("{}", function.body.pretty_debug());

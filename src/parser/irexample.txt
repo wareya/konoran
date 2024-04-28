@@ -41,9 +41,6 @@ void struct_literal()
     return;
 }
 
-/*
-
-
 f32 plus_one(f32 a)
 {
     return a + 1.0f32;
@@ -54,21 +51,29 @@ funcptr(f32, (f32)) r_add_one()
     return plus_one;
 }
 
+f32 wahahah(funcptr(f32, (f32)) f, f32 a)
+{
+    return f(a);
+}
+
+
 f32 add(f32 a, f32 b)
 {
     Vec2 vec;
     vec.x = a;
     vec.y = b;
-    a = vec.x + vec.y - 1.0f32;
+    //a = vec.x + vec.y - 1.0f32;
     
     array(f32, 2) list;
     list[0i64] = a;
     *(&(list[1i64])) = b;
     
-    f32 asdf = r_add_one()(list[0i64] + list[1i64]);
-    return r_add_one()(a + b);
+    //f32 asdf = r_add_one()(list[0i64] + list[1i64]);
+    return wahahah(r_add_one(), (a + b)) - 1.0f32;
 }
 
+
+/*
 
 f32 tenloop()
 {
@@ -434,6 +439,8 @@ void func_etc()
     z = !&z;
     
     print_float((z as f64));
+    
+    print_float((add(5.952f32, 2.822f32) as f64));
     
     return;
 }
