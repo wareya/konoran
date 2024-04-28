@@ -95,6 +95,7 @@ $cast$
 $bitcast$
 
 simplexpr: SIMPLIFY
+$intrinsic$
 $array_literal$
 $struct_literal$
 $rhunexpr$
@@ -206,6 +207,9 @@ funcdefargs:
 funcbody:
 $statementlist$
 
+intrinsic: HIDELITERALS
+intrinsic $name$ $funcargs$
+
 funcdef: HIDELITERALS
 $type$ $name$ ( $funcdefargs$ ) $funcbody$
 
@@ -225,25 +229,33 @@ return: HIDELITERALS
 return $expr$ ;
 return ;
 
-intrinsic_memcpy: HIDELITERALS
-intrinsic_memcpy $expr$ $expr$ $expr$ ;
+#intrinsic_memcpy: HIDELITERALS
+#intrinsic_memcpy $expr$ $expr$ $expr$ ;
 
-intrinsic_memcpy_volatile: HIDELITERALS
-intrinsic_memcpy_volatile $expr$ $expr$ $expr$ ;
+#intrinsic_memcpy_volatile: HIDELITERALS
+#intrinsic_memcpy_volatile $expr$ $expr$ $expr$ ;
 
-intrinsic_memmove: HIDELITERALS
-intrinsic_memmove $expr$ $expr$ $expr$ ;
+#intrinsic_memmove: HIDELITERALS
+#intrinsic_memmove $expr$ $expr$ $expr$ ;
 
-intrinsic_memset: HIDELITERALS
-intrinsic_memset $expr$ $expr$ $expr$ ;
+#intrinsic_memmove_volatile: HIDELITERALS
+#intrinsic_memmove_volatile $expr$ $expr$ $expr$ ;
+
+#intrinsic_memset: HIDELITERALS
+#intrinsic_memset $expr$ $expr$ $expr$ ;
+
+#intrinsic_memset_volatile: HIDELITERALS
+#intrinsic_memset_volatile $expr$ $expr$ $expr$ ;
 
 instruction:
 $goto$
 $return$
-$intrinsic_memcpy$
-$intrinsic_memcpy_volatile$
-$intrinsic_memmove$
-$intrinsic_memset$
+#$intrinsic_memcpy$
+#$intrinsic_memcpy_volatile$
+#$intrinsic_memmove$
+#$intrinsic_memmove_volatile$
+#$intrinsic_memset$
+#$intrinsic_memset_volatile$
 
 label: HIDELITERALS
 $name$ :

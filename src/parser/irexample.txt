@@ -216,7 +216,7 @@ f64 vec3_sq_length(Vector3 a)
 }
 f64 vec3_length(Vector3 a)
 {
-    return sqrt(vec3_sq_length(a));
+    return intrinsic sqrt(vec3_sq_length(a));
 }
 
 struct Body {
@@ -441,6 +441,12 @@ void func_etc()
     print_float((z as f64));
     
     print_float((add(5.952f32, 2.822f32) as f64));
+    
+    intrinsic memset(&z, 1u8, 1u64);
+    print_float((z as f64));
+    
+    intrinsic memset(&z, 16u8, 1u64);
+    print_float((z as f64));
     
     return;
 }

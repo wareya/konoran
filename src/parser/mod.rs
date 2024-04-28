@@ -177,7 +177,7 @@ impl Parser {
             macro_rules! pop { () => { lines.pop().ok_or_else(|| "tried to access past end of program text".to_string()) }; }
             
             let mut line : String = pop!()?;
-            if line == ""
+            if line == "" || line.starts_with("#")
             {
                 continue;
             }
@@ -200,7 +200,10 @@ impl Parser {
             line = pop!()?;
             while line != ""
             {
-                nodetype.forms.push(GrammarForm::new(&line, self, istoken)?);
+                if !line.starts_with("#")
+                {
+                    nodetype.forms.push(GrammarForm::new(&line, self, istoken)?);
+                }
                 line = pop!()?;
             }
             if self.nodetypemap.contains_key(&nodetype.name)

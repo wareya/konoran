@@ -17,7 +17,6 @@ use parser::ast::ASTNode;
 TODO list:
 - global variables
 - export and extern keywords
-- fill out intrinsics (memcpy etc)
 
 - implement other control flow constructs than just "if -> goto"
 - have proper scoped variable declarations, not function-level variable declarations
@@ -681,6 +680,7 @@ struct Environment<'a, 'b, 'c, 'f>
     variables      : BTreeMap<String, (Type, inkwell::values::PointerValue<'c>)>,
     builder        : &'b inkwell::builder::Builder<'c>,
     func_decs      : &'a BTreeMap<String, (inkwell::values::FunctionValue<'c>, FunctionSig)>,
+    intrinsic_decs : &'a BTreeMap<String, (inkwell::values::FunctionValue<'c>, FunctionSig)>,
     types          : &'a BTreeMap<String, Type>,
     backend_types  : &'a mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>,
     function_types : &'a mut BTreeMap<String, inkwell::types::FunctionType<'c>>,
@@ -722,6 +722,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
 {
     // used to build constants for some lowerings, and to cast to bool
     let u8_type_frontend = env.types.get("u8").unwrap();
+    let i1_type = env.backend_types.get("i1").unwrap().into_int_type();
     let u8_type = env.backend_types.get("u8").unwrap().into_int_type();
     let u64_type = env.backend_types.get("u64").unwrap().into_int_type();
     
@@ -1010,6 +1011,64 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     compile(env, child, WantPointer::None);
                 }
+            }
+            "intrinsic" =>
+            {
+                let intrinsic_name = &node.child(0).unwrap().child(0).unwrap().text;
+                if let Some((funcaddr, funcsig)) = env.intrinsic_decs.get(intrinsic_name)
+                {
+                    //let func_type = get_function_type(&mut env.function_types, &mut env.backend_types, &env.types, &funcsig);
+                    
+                    let stack_len_start = env.stack.len();
+                    compile(env, node.child(1).unwrap(), WantPointer::None);
+                    let stack_len_end = env.stack.len();
+                    
+                    let num_args = node.child(1).unwrap().child_count().unwrap();
+                    assert!(num_args == stack_len_end - stack_len_start);
+                    assert!(num_args == funcsig.args.len(), "incorrect number of arguments to function on line {}", node.line);
+                    
+                    let zero_bool = i1_type.const_int(0, true);
+                    let one_bool = i1_type.const_int(1, true);
+                    
+                    let mut args = Vec::new();
+                    for (i, arg_type) in funcsig.args.iter().rev().enumerate()
+                    {
+                        let (type_, val) = env.stack.pop().unwrap();
+                        if type_ != *arg_type
+                        {
+                            panic!("mismatched types for parameter {} in call to intrinsic {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
+                        }
+                        args.push(val.into());
+                    }
+                    
+                    args.reverse();
+                    
+                    // intrinsics whose function signatures lie because they have hidden arguments
+                    match intrinsic_name.as_str()
+                    {
+                        "memcpy" => args.push(zero_bool.into()),
+                        "memcpy_vol" => args.push(one_bool.into()),
+                        "memmove" => args.push(zero_bool.into()),
+                        "memmove_vol" => args.push(one_bool.into()),
+                        "memset" => args.push(zero_bool.into()),
+                        "memset_vol" => args.push(one_bool.into()),
+                        _ => {}
+                    }
+                    
+                    //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
+                    let callval = env.builder.build_call(*funcaddr, &args, "").unwrap();
+                    let result = callval.try_as_basic_value().left();
+                    //println!("number of results {}", results.len());
+                    for (result, type_) in result.iter().zip([&funcsig.return_type])
+                    {
+                        env.stack.push((type_.clone(), *result));
+                    }
+                }
+                else
+                {
+                    panic!("error: tried to call non-existent intrinsic {}", intrinsic_name);
+                }
+                //println!("done compiling func call");
             }
             "array_literal" =>
             {
@@ -1732,6 +1791,9 @@ fn main()
     let type_table = [
         ("void".to_string(), Type { name : "void".to_string(), data : TypeData::Void }, context.void_type().into()),
         
+        // used in some intrinsics
+        ("i1" .to_string(), Type { name : "i1" .to_string(), data : TypeData::Primitive }, context.bool_type().into()),
+        
         ("u8" .to_string(), Type { name : "u8" .to_string(), data : TypeData::Primitive }, context. i8_type().into()),
         ("u16".to_string(), Type { name : "u16".to_string(), data : TypeData::Primitive }, context.i16_type().into()),
         ("u32".to_string(), Type { name : "u32".to_string(), data : TypeData::Primitive }, context.i32_type().into()),
@@ -1838,10 +1900,18 @@ fn main()
     }
     
     let intrinsic_imports = [
-        ("sqrt", "funcptr(f64, (f64))"),
+        ("sqrt", "llvm.sqrt.f64", "funcptr(f64, (f64))"),
+        ("memset"    , "llvm.memset.p0.i64", "funcptr(void, (ptr(u8), u8, u64))"),
+        ("memset_vol", "llvm.memset.p0.i64", "funcptr(void, (ptr(u8), u8, u64))"),
+        ("memcpy"    , "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
+        ("memcpy_vol", "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
+        ("memmove"    , "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
+        ("memmove_vol", "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
     ];
     
-    for (name, type_name) in intrinsic_imports
+    let mut intrinsic_decs = BTreeMap::new();
+    
+    for (name, llvm_name, type_name) in intrinsic_imports
     {
         let type_lines = vec!(type_name.to_string());
         let tokens = parser.tokenize(&type_lines, true).unwrap();
@@ -1849,7 +1919,7 @@ fn main()
         let type_ = parse_type(&types, &type_ast).unwrap();
         if let TypeData::FuncPointer(funcsig) = type_.data
         {
-            let sqrt_intrinsic = inkwell::intrinsics::Intrinsic::find(&format!("llvm.{}", name)).unwrap();
+            let intrinsic = inkwell::intrinsics::Intrinsic::find(llvm_name).unwrap();
             
             let mut arg_types = Vec::new();
             for arg_type in &funcsig.args
@@ -1857,9 +1927,9 @@ fn main()
                 arg_types.push(get_backend_type_sized(&mut backend_types, &types, &arg_type));
             }
             //let f64_type = &types.get("f64").unwrap();
-            let sqrt_function = sqrt_intrinsic.get_declaration(&module, &arg_types).unwrap();
+            let function = intrinsic.get_declaration(&module, &arg_types).unwrap();
             
-            func_decs.insert(name.to_string(), (sqrt_function, *funcsig.clone()));
+            intrinsic_decs.insert(name.to_string(), (function, *funcsig.clone()));
         }
     }
     
@@ -1999,7 +2069,7 @@ fn main()
         });
         
         let stack = Vec::new();
-        let mut env = Environment { context : &context, stack, variables, builder : &builder, func_decs : &func_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
+        let mut env = Environment { context : &context, stack, variables, builder : &builder, func_decs : &func_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
         
         //println!("\n\ncompiling function {}...", function.name);
         //println!("{}", function.body.pretty_debug());
