@@ -383,7 +383,6 @@ void nbody_bench()
     return;
 }
 
-
 struct linked_list {
     ptr(linked_list) next;
     u8 data;
@@ -408,8 +407,33 @@ void func_etc()
     print_float(((b3 % a3) as f64));
     
     f64 asdfj = ((*@&(asdf.data)) as f64);
-    *@&(asdfj) = 0.5263f64;
+    *@&asdfj = 0.5263f64;
     print_float(asdfj);
+    
+    i64 zxcv = 0x85148113i64;
+    u8 z = (zxcv as u8);
+    
+    print_float((z as f64));
+    
+    z = ~z;
+    z = -z;
+    z = +z;
+    
+    print_float((z as f64));
+    
+    z = !z;
+    
+    print_float((z as f64));
+    
+    print_float(3.14159f64);
+    
+    z = !!&z;
+    
+    print_float((z as f64));
+    
+    z = !&z;
+    
+    print_float((z as f64));
     
     return;
 }

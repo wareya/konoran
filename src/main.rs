@@ -15,13 +15,12 @@ use parser::ast::ASTNode;
 
 /*
 TODO list:
-- finish implementing integer casting operations
 - global variables
 - export and extern keywords
 - fill out intrinsics (memcpy etc)
 
-- have proper scoped variable declarations, not function-level variable declarations
 - implement other control flow constructs than just "if -> goto"
+- have proper scoped variable declarations, not function-level variable declarations
 */
 
 mod parser;
@@ -160,6 +159,18 @@ impl Type
     fn is_int(&self) -> bool
     {
         ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"].contains(&self.name.as_str())
+    }
+#[allow(dead_code)]
+    fn size(&self) -> u8
+    {
+        match self.name.as_str()
+        {
+            "u8"  | "i8"  => 1,
+            "u16" | "i16" => 2,
+            "u32" | "i32" => 4,
+            "u64" | "i64" => 8,
+            _ => panic!("internal error: tried to get the size of a non-primitive-int type")
+        }
     }
 #[allow(dead_code)]
     fn is_int_signed(&self) -> bool
@@ -1208,7 +1219,13 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         {
                             if want_pointer == WantPointer::Virtual
                             {
-                                if op.as_str() == "*"
+                                if op.as_str() == "!"
+                                {
+                                    let res = env.builder.build_is_null(inkwell::values::PointerValue::try_from(val).unwrap(), "").unwrap();
+                                    let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
+                                    env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
+                                }
+                                else if op.as_str() == "*"
                                 {
                                     env.stack.push((type_.ptr_to_vptr(), val));
                                 }
@@ -1230,15 +1247,21 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             else
                             {
                                 let (inner_type, volatile) = type_.deref_ptr();
-                                if inner_type.is_void()
-                                {
-                                    panic!("can't dereference void pointers");
-                                }
                                 let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &inner_type);
                                 match op.as_str()
                                 {
+                                    "!" =>
+                                    {
+                                        let res = env.builder.build_is_null(inkwell::values::PointerValue::try_from(val).unwrap(), "").unwrap();
+                                        let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
+                                        env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
+                                    }
                                     "*" =>
                                     {
+                                        if inner_type.is_void()
+                                        {
+                                            panic!("can't dereference void pointers");
+                                        }
                                         let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
                                         res.as_instruction_value().unwrap().set_volatile(volatile).unwrap();
                                         env.stack.push((inner_type, res));
@@ -1266,22 +1289,33 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             };
                             env.stack.push((type_.clone(), res));
                         }
-                        // TODO reimplement
-                        /*
                         "i8" | "i16" | "i32" | "i64" |
                         "u8" | "u16" | "u32" | "u64" =>
                         {
                             let res = match op.as_str()
                             {
                                 "+" => val,
-                                "-" => env.builder.ins().ineg(val),
-                                "!" => env.builder.ins().icmp_imm(IntCC::Equal, val, 0),
-                                "~" => env.builder.ins().bnot(val),
+                                "-" => env.builder.build_int_neg(val.into_int_value(), "").unwrap().into(),
+                                "~" => env.builder.build_not(val.into_int_value(), "").unwrap().into(),
+                                "!" =>
+                                {
+                                    
+                                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
+                                    if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
+                                    {
+                                        let zero = int_type.const_int(0, true);
+                                        let int_val = env.builder.build_int_compare(inkwell::IntPredicate::EQ, int_val, zero, "").unwrap().into();
+                                        int_val
+                                    }
+                                    else
+                                    {
+                                        panic!("internal error: integer was not integer in ! operator");
+                                    }
+                                }
                                 _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
                             };
                             env.stack.push((type_.clone(), res));
                         }
-                        */
                         _ => panic!("error: type `{}` is not supported by unary operators", type_.name)
                     }
                 }
@@ -1321,6 +1355,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let label = &node.child(1).unwrap().child(0).unwrap().text;
                 // anonymous block for "else" case
                 let else_block = env.context.append_basic_block(env.func_val, "");
+                // TODO support pointers (test whether null)
                 if let Some(then_block) = env.blocks.get(label)
                 {
                     let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
@@ -1367,11 +1402,11 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 let (left_type, left_val) = env.stack.pop().unwrap();
-                let source_basic_type : BasicTypeEnum = get_backend_type(&mut env.backend_types, &env.types, &left_type).try_into().unwrap();
+                let left_basic_type : BasicTypeEnum = get_backend_type(&mut env.backend_types, &env.types, &left_type).try_into().unwrap();
                 
                 let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
-                let target_backend_type = get_backend_type(&mut env.backend_types, &env.types, &right_type);
-                let target_basic_type : BasicTypeEnum = target_backend_type.try_into().unwrap();
+                let right_backend_type = get_backend_type(&mut env.backend_types, &env.types, &right_type);
+                let right_basic_type : BasicTypeEnum = right_backend_type.try_into().unwrap();
                 
                 // cast as own type (replace type, aka do nothing)
                 if left_type.name == right_type.name
@@ -1386,7 +1421,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 // cast between float types"
                 else if (left_type.name == "f32" && right_type.name == "f64") || (left_type.name == "f64" && right_type.name == "f32")
                 {
-                    if let (Ok(left_val), Ok(float_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::FloatType::try_from(target_backend_type))
+                    if let (Ok(left_val), Ok(float_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::FloatType::try_from(right_backend_type))
                     {
                         let ret = env.builder.build_float_cast(left_val, float_type, "").unwrap();
                         env.stack.push((right_type, ret.into()));
@@ -1397,16 +1432,16 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                 }
                 // cast between types of same size, non-float. bitcast.
-                else if !left_type.is_float() && !right_type.is_float() && source_basic_type.size_of() == target_basic_type.size_of() && target_basic_type.is_sized()
+                else if !left_type.is_float() && !right_type.is_float() && left_basic_type.size_of() == right_basic_type.size_of() && right_basic_type.is_sized()
                 {
                     // TODO double check
-                    let ret = env.builder.build_bit_cast(left_val, target_basic_type, "").unwrap();
+                    let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
                     env.stack.push((right_type, ret));
                 }
                 // cast from int to float (must be int, not pointer)
                 else if left_type.is_int_unsigned() && right_type.is_float()
                 {
-                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::FloatType::try_from(target_backend_type))
+                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::FloatType::try_from(right_backend_type))
                     {
                         let ret = env.builder.build_unsigned_int_to_float(left_val, target_type.into(), "").unwrap();
                         env.stack.push((right_type, ret.into()));
@@ -1418,7 +1453,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else if left_type.is_int_signed() && right_type.is_float()
                 {
-                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::FloatType::try_from(target_backend_type))
+                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::FloatType::try_from(right_backend_type))
                     {
                         let ret = env.builder.build_signed_int_to_float(left_val, target_type.into(), "").unwrap();
                         env.stack.push((right_type, ret.into()));
@@ -1428,50 +1463,71 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         panic!("internal error: sint-to-float cast internal and backend type mismatch");
                     }
                 }
-                // TODO reimplement all these casts
-                /*
                 // cast from float to int (must be int, not pointer)
-                else if left_type.is_float() && right_type.is_int_signed()
-                {
-                    let ret = env.builder.ins().fcvt_to_sint(target_cranetype, left_val);
-                    env.stack_push((right_type, ret));
-                }
                 else if left_type.is_float() && right_type.is_int_unsigned()
                 {
-                    let ret = env.builder.ins().fcvt_to_uint(target_cranetype, left_val);
-                    env.stack_push((right_type, ret));
+                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
+                    {
+                        let ret = env.builder.build_float_to_unsigned_int(left_val, target_type.into(), "").unwrap();
+                        env.stack.push((right_type, ret.into()));
+                    }
+                    else
+                    {
+                        panic!("internal error: float-to-uint cast internal and backend type mismatch");
+                    }
                 }
-                // cast from smaller signed to larger unsigned
-                else if left_type.size() < right_type.size() && left_type.is_int_signed() && right_type.is_int_unsigned()
+                else if left_type.is_float() && right_type.is_int_signed()
                 {
-                    let ret = env.builder.ins().sextend(target_cranetype, left_val);
-                    env.stack_push((right_type, ret));
-                }
-                // cast from smaller signed to larger unsigned
-                else if left_type.size() < right_type.size() && left_type.is_int_unsigned() && right_type.is_int_signed()
-                {
-                    let ret = env.builder.ins().uextend(target_cranetype, left_val);
-                    env.stack_push((right_type, ret));
+                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
+                    {
+                        let ret = env.builder.build_float_to_signed_int(left_val, target_type.into(), "").unwrap();
+                        env.stack.push((right_type, ret.into()));
+                    }
+                    else
+                    {
+                        panic!("internal error: float-to-sint cast internal and backend type mismatch");
+                    }
                 }
                 // cast to larger int type, signed
                 else if left_type.size() < right_type.size() && left_type.is_int_signed() && right_type.is_int_signed()
                 {
-                    let ret = env.builder.ins().sextend(target_cranetype, left_val);
-                    env.stack_push((right_type, ret));
+                    
+                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
+                    {
+                        let ret = env.builder.build_int_s_extend(left_val, target_type, "").unwrap();
+                        env.stack.push((right_type, ret.into()));
+                    }
+                    else
+                    {
+                        panic!("internal error: signed int upcast internal and backend type mismatch");
+                    }
                 }
                 // cast to larger int type, unsigned
                 else if left_type.size() < right_type.size() && left_type.is_int_unsigned() && right_type.is_int_unsigned()
                 {
-                    let ret = env.builder.ins().uextend(target_cranetype, left_val);
-                    env.stack_push((right_type, ret));
+                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
+                    {
+                        let ret = env.builder.build_int_z_extend(left_val, target_type, "").unwrap();
+                        env.stack.push((right_type, ret.into()));
+                    }
+                    else
+                    {
+                        panic!("internal error: unsigned int upcast internal and backend type mismatch");
+                    }
                 }
                 // cast to smaller int type
                 else if left_type.size() > right_type.size() && left_type.is_int() && right_type.is_int()
                 {
-                    let ret = env.builder.ins().ireduce(target_cranetype, left_val);
-                    env.stack_push((right_type, ret));
+                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
+                    {
+                        let ret = env.builder.build_int_truncate(left_val, target_type, "").unwrap();
+                        env.stack.push((right_type, ret.into()));
+                    }
+                    else
+                    {
+                        panic!("internal error: int downcast internal and backend type mismatch");
+                    }
                 }
-                */
                 else
                 {
                     panic!("unsupported cast from type {} to type {}", left_type.to_string(), right_type.to_string());
