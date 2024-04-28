@@ -9,15 +9,15 @@ use std::collections::HashMap;
 use inkwell::context::Context;
 use inkwell::types::BasicType;
 use inkwell::types::BasicTypeEnum;
+use inkwell::values::BasicValue;
 
 use parser::ast::ASTNode;
 
 /*
 TODO list:
 - finish implementing integer casting operations
-- volatile assignment
 - global variables
-- export/import keywords
+- export and extern keywords
 - fill out intrinsics (memcpy etc)
 
 - have proper scoped variable declarations, not function-level variable declarations
@@ -33,8 +33,8 @@ enum TypeData
     Void,
     Primitive,
     Struct(Vec<(String, Type)>), // property name, property type
-    Pointer(Rc<RefCell<Type>>),
-    VirtualPointer(Box<Type>),
+    Pointer(Rc<RefCell<Type>>, bool),
+    VirtualPointer(Box<Type>, bool),
     FuncPointer(Box<FunctionSig>),
     Array(Box<Type>, usize),
 }
@@ -53,8 +53,8 @@ impl ToString for Type
         {
             TypeData::Void => self.name.clone(),
             TypeData::Primitive => self.name.clone(),
-            TypeData::Pointer(inner) => format!("ptr({})", inner.borrow().to_string()),
-            TypeData::VirtualPointer(inner) => format!("vptr({})", inner.to_string()),
+            TypeData::Pointer(inner, _) => format!("ptr({})", inner.borrow().to_string()),
+            TypeData::VirtualPointer(inner, _) => format!("vptr({})", inner.to_string()),
             TypeData::Array(inner, size) => format!("array({}, {})", inner.to_string(), size),
             TypeData::Struct(_) => self.name.clone(),
             TypeData::IncompleteStruct => self.name.clone(),
@@ -71,8 +71,8 @@ impl Type
         {
             TypeData::Void => if is_ptr { "core::ffi::c_void" } else { "()" }.to_string(),
             TypeData::Primitive => self.name.clone(),
-            TypeData::Pointer(inner) => format!("*mut {}", inner.borrow().to_string_rusttype(true)),
-            TypeData::VirtualPointer(_) => format!("<unrepresented>"),
+            TypeData::Pointer(inner, _) => format!("*mut {}", inner.borrow().to_string_rusttype(true)),
+            TypeData::VirtualPointer(_, _) => format!("<unrepresented>"),
             TypeData::Array(_, _) => format!("<unrepresented>"),
             TypeData::Struct(_) => format!("<unrepresented>"),
             TypeData::IncompleteStruct => format!("<unrepresented>"),
@@ -85,17 +85,25 @@ impl Type
     }
     fn to_ptr(&self) -> Type
     {
-        Type { name : "ptr".to_string(), data : TypeData::Pointer(Rc::new(RefCell::new(self.clone()))) }
+        Type { name : "ptr".to_string(), data : TypeData::Pointer(Rc::new(RefCell::new(self.clone())), false) }
     }
-    fn to_vptr(&self) -> Type
-    {
-        Type { name : "vptr".to_string(), data : TypeData::VirtualPointer(Box::new(self.clone())) }
-    }
-    fn deref_ptr(&self) -> Type
+    fn ptr_to_vptr(&self) -> Type
     {
         match &self.data
         {
-            TypeData::Pointer(inner) => inner.borrow().clone(),
+            TypeData::Pointer(inner, is_volatile) => Type { name : "vptr".to_string(), data : TypeData::VirtualPointer(Box::new(inner.borrow().clone()), *is_volatile) },
+            _ => panic!("internal error: tried to convert non-ptr to vptr")
+        }
+    }
+    fn to_vptr(&self) -> Type
+    {
+        Type { name : "vptr".to_string(), data : TypeData::VirtualPointer(Box::new(self.clone()), false) }
+    }
+    fn deref_ptr(&self) -> (Type, bool)
+    {
+        match &self.data
+        {
+            TypeData::Pointer(inner, volatile) => (inner.borrow().clone(), *volatile),
             _ => panic!("error: attempted to dereference non-pointer type `{}`", self.to_string()),
         }
     }
@@ -103,8 +111,8 @@ impl Type
     {
         match &self.data
         {
-            TypeData::VirtualPointer(inner) => *inner.clone(),
-            _ => panic!("error: attempted to dereference non-pointer type `{}`", self.to_string()),
+            TypeData::VirtualPointer(inner, _) => *inner.clone(),
+            _ => panic!("error: attempted to virtually dereference non-virtual-pointer type `{}`", self.to_string()),
         }
     }
     fn array_to_inner(&self) -> Type
@@ -137,11 +145,11 @@ impl Type
     }
     fn is_pointer(&self) -> bool
     {
-        matches!(self.data, TypeData::Pointer(_))
+        matches!(self.data, TypeData::Pointer(_, _))
     }
     fn is_virtual_pointer(&self) -> bool
     {
-        matches!(self.data, TypeData::VirtualPointer(_))
+        matches!(self.data, TypeData::VirtualPointer(_, _))
     }
 #[allow(dead_code)]
     fn is_float(&self) -> bool
@@ -370,13 +378,13 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
         {
             TypeData::Void => panic!("internal error: tried to recreate void type"),
             TypeData::Primitive => panic!("internal error: tried to recreate primitive type"),
-            TypeData::Pointer(_) =>
+            TypeData::Pointer(_, _) =>
             {
                 let ptr_type = context.ptr_type(inkwell::AddressSpace::default()).into();
                 backend_types.insert(key, ptr_type);
                 ptr_type
             }
-            TypeData::VirtualPointer(_) =>
+            TypeData::VirtualPointer(_, _) =>
             {
                 let ptr_type = context.ptr_type(inkwell::AddressSpace::default()).into();
                 backend_types.insert(key, ptr_type);
@@ -666,8 +674,8 @@ fn check_struct_incomplete<'a>(env : &'a mut Environment, type_ : &mut Type)
                 panic!("tried to use incomplete struct type {}", type_.name);
             }
         }
-        TypeData::VirtualPointer(ref mut inner_type) => check_struct_incomplete(env, inner_type),
-        TypeData::Pointer(inner_type) => check_struct_incomplete(env, &mut inner_type.borrow_mut()),
+        TypeData::VirtualPointer(ref mut inner_type, _) => check_struct_incomplete(env, inner_type),
+        TypeData::Pointer(inner_type, _) => check_struct_incomplete(env, &mut inner_type.borrow_mut()),
         _ => {}
     }
     
@@ -1193,33 +1201,59 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 else
                 {
                     compile(env, node.child(1).unwrap(), WantPointer::None);
-                    let (type_, val) = env.stack.pop().unwrap();
+                    let (mut type_, val) = env.stack.pop().unwrap();
                     match type_.name.as_str()
                     {
                         "ptr" =>
                         {
                             if want_pointer == WantPointer::Virtual
                             {
-                                if op.as_str() != "*"
+                                if op.as_str() == "*"
+                                {
+                                    env.stack.push((type_.ptr_to_vptr(), val));
+                                }
+                                else if op.as_str() == "@"
+                                {
+                                    match &mut type_.data
+                                    {
+                                        TypeData::Pointer(_, ref mut is_volatile) => *is_volatile = true,
+                                        _ => panic!("internal error: broken pointer volatility test"),
+                                    }
+                                    env.stack.push((type_, val));
+                                    
+                                }
+                                else
                                 {
                                     panic!("error: can't use operator `{}` on type `{}`", op, type_.name);
                                 }
-                                env.stack.push((type_.deref_ptr().to_vptr(), val));
                             }
                             else
                             {
-                                let inner_type = type_.deref_ptr();
+                                let (inner_type, volatile) = type_.deref_ptr();
                                 if inner_type.is_void()
                                 {
                                     panic!("can't dereference void pointers");
                                 }
                                 let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &inner_type);
-                                let res = match op.as_str()
+                                match op.as_str()
                                 {
-                                    "*" => env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap(),
+                                    "*" =>
+                                    {
+                                        let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
+                                        res.as_instruction_value().unwrap().set_volatile(volatile).unwrap();
+                                        env.stack.push((inner_type, res));
+                                    }
+                                    "@" =>
+                                    {
+                                        match &mut type_.data
+                                        {
+                                            TypeData::Pointer(_, ref mut is_volatile) => *is_volatile = true,
+                                            _ => panic!("internal error: broken pointer volatility test"),
+                                        }
+                                        env.stack.push((type_, val));
+                                    }
                                     _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
                                 };
-                                env.stack.push((inner_type, res));
                             }
                         }
                         "f32" | "f64" =>
@@ -1954,5 +1988,27 @@ fn main()
         
         println!("{}() = {:?}", name, out);
         println!("time: {}", elapsed_time.as_secs_f64());
+    }
+
+    {
+        use inkwell::targets::*;
+
+        let triple = TargetMachine::get_default_triple();
+        let cpu = TargetMachine::get_host_cpu_name().to_string();
+        let features = TargetMachine::get_host_cpu_features().to_string();
+
+        let target = Target::from_triple(&triple).unwrap();
+        let machine = target
+            .create_target_machine(
+                &triple,
+                &cpu,
+                &features,
+                opt_level,
+                RelocMode::Default,
+                CodeModel::Default,
+            )
+            .unwrap();
+
+        machine.write_to_file(&module, FileType::Assembly, "out.asm".as_ref()).unwrap();
     }
 }
