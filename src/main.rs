@@ -85,48 +85,48 @@ impl Type
     {
         Type { name : "ptr".to_string(), data : TypeData::Pointer(Rc::new(RefCell::new(self.clone())), false) }
     }
-    fn ptr_to_vptr(&self) -> Type
+    fn ptr_to_vptr(&self) -> Result<Type, String>
     {
         match &self.data
         {
-            TypeData::Pointer(inner, is_volatile) => Type { name : "vptr".to_string(), data : TypeData::VirtualPointer(Box::new(inner.borrow().clone()), *is_volatile) },
-            _ => panic!("internal error: tried to convert non-ptr to vptr")
+            TypeData::Pointer(inner, is_volatile) => Ok(Type { name : "vptr".to_string(), data : TypeData::VirtualPointer(Box::new(inner.borrow().clone()), *is_volatile) }),
+            _ => Err("internal error: tried to convert non-ptr to vptr".to_string())
         }
     }
     fn to_vptr(&self) -> Type
     {
         Type { name : "vptr".to_string(), data : TypeData::VirtualPointer(Box::new(self.clone()), false) }
     }
-    fn deref_ptr(&self) -> (Type, bool)
+    fn deref_ptr(&self) -> Result<(Type, bool), String>
     {
         match &self.data
         {
-            TypeData::Pointer(inner, volatile) => (inner.borrow().clone(), *volatile),
-            _ => panic!("error: attempted to dereference non-pointer type `{}`", self.to_string()),
+            TypeData::Pointer(inner, volatile) => Ok((inner.borrow().clone(), *volatile)),
+            _ => Err(format!("error: attempted to dereference non-pointer type `{}`", self.to_string())),
         }
     }
-    fn deref_vptr(&self) -> Type
+    fn deref_vptr(&self) -> Result<Type, String>
     {
         match &self.data
         {
-            TypeData::VirtualPointer(inner, _) => *inner.clone(),
-            _ => panic!("error: attempted to virtually dereference non-virtual-pointer type `{}`", self.to_string()),
+            TypeData::VirtualPointer(inner, _) => Ok(*inner.clone()),
+            _ => Err(format!("error: attempted to virtually dereference non-virtual-pointer type `{}`", self.to_string())),
         }
     }
-    fn array_to_inner(&self) -> Type
+    fn array_to_inner(&self) -> Result<Type, String>
     {
         match &self.data
         {
-            TypeData::Array(inner, _size) => *inner.clone(),
-            _ => panic!("error: attempted to use indexing on non-array type `{}`", self.to_string()),
+            TypeData::Array(inner, _size) => Ok(*inner.clone()),
+            _ => Err(format!("error: attempted to use indexing on non-array type `{}`", self.to_string())),
         }
     }
-    fn struct_to_info(&self) -> Vec<(String, Type)>
+    fn struct_to_info(&self) -> Result<Vec<(String, Type)>, String>
     {
         match &self.data
         {
-            TypeData::Struct(info) => info.clone(),
-            _ => panic!("internal error: attempted to access struct info of non-struct type `{}`", self.to_string()),
+            TypeData::Struct(info) => Ok(info.clone()),
+            _ => Err(format!("internal error: attempted to access struct info of non-struct type `{}`", self.to_string())),
         }
     }
     fn is_struct(&self) -> bool
@@ -149,17 +149,14 @@ impl Type
     {
         matches!(self.data, TypeData::VirtualPointer(_, _))
     }
-#[allow(dead_code)]
     fn is_float(&self) -> bool
     {
         self.name == "f32" || self.name == "f64"
     }
-#[allow(dead_code)]
     fn is_int(&self) -> bool
     {
         ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"].contains(&self.name.as_str())
     }
-#[allow(dead_code)]
     fn size(&self) -> u8
     {
         match self.name.as_str()
@@ -171,12 +168,10 @@ impl Type
             _ => panic!("internal error: tried to get the size of a non-primitive-int type")
         }
     }
-#[allow(dead_code)]
     fn is_int_signed(&self) -> bool
     {
         ["i8", "i16", "i32", "i64"].contains(&self.name.as_str())
     }
-#[allow(dead_code)]
     fn is_int_unsigned(&self) -> bool
     {
         ["u8", "u16", "u32", "u64"].contains(&self.name.as_str())
@@ -236,7 +231,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
                     return Ok(named_type.clone());
                 }
             }
-            Err(format!("error: unknown struct type `{}`", name))
+            Err(format!("error: unknown type `{}`", name))
         }
         (true, "array_type") =>
         {
@@ -432,17 +427,17 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                         }
                         else
                         {
-                            panic!("error: structs cannot be empty");
+                            panic!("internal error: structs cannot be empty");
                         }
                     }
                     else
                     {
-                        panic!("error: struct type broken");
+                        panic!("internal error: struct type broken");
                     }
                 }
                 else
                 {
-                    panic!("error: tried to use incomplete struct type");
+                    panic!("internal error: tried to use incomplete struct type");
                 }
             }
             TypeData::Struct(struct_data) =>
@@ -461,7 +456,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                 }
                 else
                 {
-                    panic!("error: structs cannot be empty");
+                    panic!("internal error: structs cannot be empty");
                 }
             }
             TypeData::FuncPointer(_sig) =>
@@ -673,8 +668,9 @@ impl Program
     }
 }
 
-struct Environment<'a, 'b, 'c, 'f>
+struct Environment<'a, 'b, 'c, 'e, 'f>
 {
+    source_text    : &'e Vec<String>,
     context        : &'c inkwell::context::Context,
     stack          : Vec<(Type, inkwell::values::BasicValueEnum<'c>)>,
     variables      : BTreeMap<String, (Type, inkwell::values::PointerValue<'c>)>,
@@ -726,6 +722,46 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
     let u8_type = env.backend_types.get("u8").unwrap().into_int_type();
     let u64_type = env.backend_types.get("u64").unwrap().into_int_type();
     
+    macro_rules! panic_error {
+        ($($t:tt)*) => {{
+            eprintln!("\x1b[91mError:\x1b[0m {}", format!($($t)*));
+            eprintln!("at line {}, column {}", node.line, node.position);
+            
+            let s = env.source_text[node.line-1].clone();
+            let ix = s.char_indices().map(|(p, _)| p).collect::<Vec<_>>();
+            let start = ix[node.position - 1];
+            let end = (start + node.text.len()).min(s.len());
+            let a = &s[0..start];
+            let b = &s[start..end];
+            let c = &s[end..s.len()];
+            
+            eprintln!("{}\x1b[96m{}\x1b[0m{}", a, b, c);
+            
+            for _ in 0..node.position-1
+            {
+                eprint!("\x1b[93m-");
+            }
+            eprintln!("^\x1b[0m");
+            panic!($($t)*);
+        }};
+    }
+    macro_rules! unwrap_or_panic {
+        ($($t:tt)*) => {{
+            let x = ($($t)*);
+            let mut unwrappable = false;
+            x.as_ref().inspect(|_| unwrappable = true).unwrap();
+            if unwrappable
+            {
+                x.unwrap()
+            }
+            else
+            {
+                let asdf : Result<_, _> = x.into();
+                panic_error!("{}", asdf.as_ref().unwrap_err());
+            }
+        }};
+    }
+    
     macro_rules! push_val_or_ptr
     {
         ($type:expr, $addr:expr) =>
@@ -758,7 +794,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 if env.builder.get_insert_block().unwrap().get_terminator().is_none()
                 {
-                    panic!("error: functions must explicitly return, even if their return type is void\n(on line {})", node.line);
+                    panic_error!("error: functions must explicitly return, even if their return type is void\n(on line {})", node.line);
                 }
             }
             "statementlist" | "statement" | "instruction" =>
@@ -823,7 +859,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("internal error: failed to find variable in full declaration");
+                    panic_error!("internal error: failed to find variable in full declaration");
                 }
             }
             "binstate" =>
@@ -836,11 +872,11 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let type_left = if type_left_incomplete.is_virtual_pointer()
                 {
-                    type_left_incomplete.deref_vptr()
+                    unwrap_or_panic!(type_left_incomplete.deref_vptr())
                 }
                 else
                 {
-                    panic!("tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
+                    panic_error!("tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
                 };
                 assert!(type_val == type_left, "binstate type failure, {:?} vs {:?}, line {}", type_val, type_left, node.line);
                 
@@ -850,7 +886,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
+                    panic_error!("tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
                 }
             }
             "lvar" =>
@@ -874,7 +910,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("error: unrecognized variable `{}`", name);
+                    panic_error!("error: unrecognized variable `{}`", name);
                 }
             }
             "rvarname" =>
@@ -894,7 +930,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("unrecognized identifier {}", name);
+                    panic_error!("unrecognized identifier {}", name);
                 }
             }
             "arrayindex_head" =>
@@ -906,7 +942,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let (offset_type, offset_val) = env.stack.pop().unwrap();
                 let (base_type, base_addr) = env.stack.pop().unwrap();
-                let base_type = base_type.deref_vptr();
+                let base_type = unwrap_or_panic!(base_type.deref_vptr());
                 
                 if offset_type.name == "i64"
                 {
@@ -914,7 +950,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     //println!("\ntype: {:?}", base_type);
                     //println!("\nval: {:?}\n", base_addr);
                     
-                    let mut inner_type = base_type.array_to_inner();
+                    let mut inner_type = unwrap_or_panic!(base_type.array_to_inner());
                     check_struct_incomplete(env, &mut inner_type);
                     
                     let inner_backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &inner_type);
@@ -928,14 +964,14 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("error: can't offset into arrays except with type i64 (used type `{}`)", offset_type.name)
+                    panic_error!("error: can't offset into arrays except with type i64 (used type `{}`)", offset_type.name)
                 }
             }
             "indirection_head" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
                 let (struct_type, struct_addr) = env.stack.pop().unwrap();
-                let mut struct_type = struct_type.deref_vptr();
+                let mut struct_type = unwrap_or_panic!(struct_type.deref_vptr());
                 check_struct_incomplete(env, &mut struct_type);
                 let backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &struct_type);
                 
@@ -943,7 +979,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 if let Some(found) = match &struct_type.data {
                     TypeData::Struct(ref props) => props.iter().enumerate().find(|x| x.1.0 == *right_name),
-                    _ => panic!("error: tried to use indirection (.) operator on non-struct {:?}", struct_type),
+                    _ => panic_error!("error: tried to use indirection (.) operator on non-struct {:?}", struct_type),
                 }
                 {
                     let inner_index = found.0;
@@ -958,7 +994,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("error: no such property {} in struct type {}", right_name, struct_type.name);
+                    panic_error!("error: no such property {} in struct type {}", right_name, struct_type.name);
                 }
             }
             "funcargs_head" =>
@@ -985,7 +1021,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             let (type_, val) = env.stack.pop().unwrap();
                             if type_ != *arg_type
                             {
-                                panic!("mismatched types for parameter {} in call to function {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
+                                panic_error!("mismatched types for parameter {} in call to function {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
                             }
                             args.push(val.into());
                         }
@@ -1001,7 +1037,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             env.stack.push((type_.clone(), *result));
                         }
                     }
-                    _ => panic!("error: tried to use non-function expression as a function")
+                    _ => panic_error!("error: tried to use non-function expression as a function")
                 }
                 //println!("done compiling func call");
             }
@@ -1036,7 +1072,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         let (type_, val) = env.stack.pop().unwrap();
                         if type_ != *arg_type
                         {
-                            panic!("mismatched types for parameter {} in call to intrinsic {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
+                            panic_error!("mismatched types for parameter {} in call to intrinsic {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
                         }
                         args.push(val.into());
                     }
@@ -1066,7 +1102,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("error: tried to call non-existent intrinsic {}", intrinsic_name);
+                    panic_error!("error: tried to call non-existent intrinsic {}", intrinsic_name);
                 }
                 //println!("done compiling func call");
             }
@@ -1091,7 +1127,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     if Some(type_.clone()) != element_type
                     {
-                        panic!("error: array literals must entirely be of a single type");
+                        panic_error!("error: array literals must entirely be of a single type");
                     }
                     vals.push(val);
                 }
@@ -1123,7 +1159,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("error: zero-length array literals are not allowed");
+                    panic_error!("error: zero-length array literals are not allowed");
                 }
             }
             "struct_literal" =>
@@ -1131,7 +1167,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let stack_size = env.stack.len();
                 
                 let struct_type = parse_type(&env.types, &node.child(0).unwrap()).unwrap();
-                let struct_member_types = struct_type.struct_to_info().iter().map(|x| x.1.clone()).collect::<Vec<_>>();
+                let struct_member_types = unwrap_or_panic!(struct_type.struct_to_info()).iter().map(|x| x.1.clone()).collect::<Vec<_>>();
                 //println!("struct type: {:?}", struct_type);
                 
                 for child in &node.get_children().unwrap()[1..]
@@ -1194,17 +1230,17 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 let res = float_type.const_float(val);
                                 env.stack.push((type_.clone(), res.into()));
                             }
-                            _ => panic!("unknown float suffix pattern {}", parts.1)
+                            _ => panic_error!("unknown float suffix pattern {}", parts.1)
                         }
                     }
                     else
                     {
-                        panic!("unknown float suffix pattern {}", parts.1)
+                        panic_error!("unknown float suffix pattern {}", parts.1)
                     }
                 }
                 else
                 {
-                    panic!("unknown float suffix pattern {}", parts.1)
+                    panic_error!("unknown float suffix pattern {}", parts.1)
                 }
             }
             "integer" =>
@@ -1220,7 +1256,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 if location.is_none()
                 {
-                    panic!("internal error: unknown integer type literal suffix");
+                    panic_error!("internal error: unknown integer type literal suffix");
                 }
                 let location = location.unwrap();
                 let parts = text.split_at(location);
@@ -1267,18 +1303,18 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             (true , "i16") => i16::from_str_radix(&text, 16).unwrap() as u64,
                             (true , "i32") => i32::from_str_radix(&text, 16).unwrap() as u64,
                             (true , "i64") => i64::from_str_radix(&text, 16).unwrap() as u64,
-                            _ => panic!("unknown int suffix pattern {}", parts.1)
+                            _ => panic_error!("unknown int suffix pattern {}", parts.1)
                         }, signed);
                         env.stack.push((type_.clone(), res.into()));
                     }
                     else
                     {
-                        panic!("unknown int suffix pattern {}", parts.1)
+                        panic_error!("unknown int suffix pattern {}", parts.1)
                     }
                 }
                 else
                 {
-                    panic!("unknown int suffix pattern {}", parts.1)
+                    panic_error!("unknown int suffix pattern {}", parts.1)
                 }
             }
             "unary" =>
@@ -1291,7 +1327,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let (type_, val) = env.stack.pop().unwrap();
                     if !type_.is_pointer()
                     {
-                        panic!("error: tried to get address of non-variable");
+                        panic_error!("error: tried to get address of non-variable");
                     }
                     env.stack.push((type_, val));
                 }
@@ -1313,26 +1349,26 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 }
                                 else if op.as_str() == "*"
                                 {
-                                    env.stack.push((type_.ptr_to_vptr(), val));
+                                    env.stack.push((unwrap_or_panic!(type_.ptr_to_vptr()), val));
                                 }
                                 else if op.as_str() == "@"
                                 {
                                     match &mut type_.data
                                     {
                                         TypeData::Pointer(_, ref mut is_volatile) => *is_volatile = true,
-                                        _ => panic!("internal error: broken pointer volatility test"),
+                                        _ => panic_error!("internal error: broken pointer volatility test"),
                                     }
                                     env.stack.push((type_, val));
                                     
                                 }
                                 else
                                 {
-                                    panic!("error: can't use operator `{}` on type `{}`", op, type_.name);
+                                    panic_error!("error: can't use operator `{}` on type `{}`", op, type_.name);
                                 }
                             }
                             else
                             {
-                                let (inner_type, volatile) = type_.deref_ptr();
+                                let (inner_type, volatile) = unwrap_or_panic!(type_.deref_ptr());
                                 let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &inner_type);
                                 match op.as_str()
                                 {
@@ -1346,7 +1382,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                     {
                                         if inner_type.is_void()
                                         {
-                                            panic!("can't dereference void pointers");
+                                            panic_error!("can't dereference void pointers");
                                         }
                                         let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
                                         res.as_instruction_value().unwrap().set_volatile(volatile).unwrap();
@@ -1357,11 +1393,11 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         match &mut type_.data
                                         {
                                             TypeData::Pointer(_, ref mut is_volatile) => *is_volatile = true,
-                                            _ => panic!("internal error: broken pointer volatility test"),
+                                            _ => panic_error!("internal error: broken pointer volatility test"),
                                         }
                                         env.stack.push((type_, val));
                                     }
-                                    _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                                    _ => panic_error!("error: can't use operator `{}` on type `{}`", op, type_.name)
                                 };
                             }
                         }
@@ -1371,7 +1407,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             {
                                 "+" => val,
                                 "-" => env.builder.build_float_neg(val.into_float_value(), "").unwrap().into(),
-                                _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                                _ => panic_error!("error: can't use operator `{}` on type `{}`", op, type_.name)
                             };
                             env.stack.push((type_.clone(), res));
                         }
@@ -1395,14 +1431,14 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                     }
                                     else
                                     {
-                                        panic!("internal error: integer was not integer in ! operator");
+                                        panic_error!("internal error: integer was not integer in ! operator");
                                     }
                                 }
-                                _ => panic!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                                _ => panic_error!("error: can't use operator `{}` on type `{}`", op, type_.name)
                             };
                             env.stack.push((type_.clone(), res));
                         }
-                        _ => panic!("error: type `{}` is not supported by unary operators", type_.name)
+                        _ => panic_error!("error: type `{}` is not supported by unary operators", type_.name)
                     }
                 }
             }
@@ -1416,7 +1452,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("error: no such block {}", label);
+                    panic_error!("error: no such block {}", label);
                 }
             }
             "goto" =>
@@ -1430,7 +1466,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("error: no such label {}", label);
+                    panic_error!("error: no such label {}", label);
                 }
             }
             // TODO: all the other C-style control flow mechanisms
@@ -1454,12 +1490,12 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else
                     {
-                        panic!("error: tried to branch on non-integer expression");
+                        panic_error!("error: tried to branch on non-integer expression");
                     }
                 }
                 else
                 {
-                    panic!("error: no such label {}", label);
+                    panic_error!("error: no such label {}", label);
                 }
             }
             "bitcast" =>
@@ -1481,7 +1517,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic!("error: unsupported bitcast from type {} to type {} (types must have the same size and be sized to be bitcasted)", left_type.to_string(), right_type.to_string());
+                    panic_error!("error: unsupported bitcast from type {} to type {} (types must have the same size and be sized to be bitcasted)", left_type.to_string(), right_type.to_string());
                 }
             }
             "cast" =>
@@ -1514,7 +1550,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else
                     {
-                        panic!("internal error: float cast internal and backend type mismatch");
+                        panic_error!("internal error: float cast internal and backend type mismatch");
                     }
                 }
                 // cast between types of same size, non-float. bitcast.
@@ -1534,7 +1570,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else
                     {
-                        panic!("internal error: uint-to-float cast internal and backend type mismatch");
+                        panic_error!("internal error: uint-to-float cast internal and backend type mismatch");
                     }
                 }
                 else if left_type.is_int_signed() && right_type.is_float()
@@ -1546,7 +1582,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else
                     {
-                        panic!("internal error: sint-to-float cast internal and backend type mismatch");
+                        panic_error!("internal error: sint-to-float cast internal and backend type mismatch");
                     }
                 }
                 // cast from float to int (must be int, not pointer)
@@ -1559,7 +1595,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else
                     {
-                        panic!("internal error: float-to-uint cast internal and backend type mismatch");
+                        panic_error!("internal error: float-to-uint cast internal and backend type mismatch");
                     }
                 }
                 else if left_type.is_float() && right_type.is_int_signed()
@@ -1571,7 +1607,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else
                     {
-                        panic!("internal error: float-to-sint cast internal and backend type mismatch");
+                        panic_error!("internal error: float-to-sint cast internal and backend type mismatch");
                     }
                 }
                 // cast to larger int type, signed
@@ -1585,7 +1621,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else
                     {
-                        panic!("internal error: signed int upcast internal and backend type mismatch");
+                        panic_error!("internal error: signed int upcast internal and backend type mismatch");
                     }
                 }
                 // cast to larger int type, unsigned
@@ -1598,7 +1634,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else
                     {
-                        panic!("internal error: unsigned int upcast internal and backend type mismatch");
+                        panic_error!("internal error: unsigned int upcast internal and backend type mismatch");
                     }
                 }
                 // cast to smaller int type
@@ -1611,12 +1647,12 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else
                     {
-                        panic!("internal error: int downcast internal and backend type mismatch");
+                        panic_error!("internal error: int downcast internal and backend type mismatch");
                     }
                 }
                 else
                 {
-                    panic!("unsupported cast from type {} to type {}", left_type.to_string(), right_type.to_string());
+                    panic_error!("unsupported cast from type {} to type {}", left_type.to_string(), right_type.to_string());
                 }
             }
             text => 
@@ -1648,7 +1684,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         "*" => env.builder.build_float_mul(left_val, right_val, "").unwrap(),
                                         "/" => env.builder.build_float_div(left_val, right_val, "").unwrap(),
                                         "%" => env.builder.build_float_rem(left_val, right_val, "").unwrap(),
-                                        _ => panic!("internal error: operator mismatch")
+                                        _ => panic_error!("internal error: operator mismatch")
                                     };
                                     env.stack.push((left_type.clone(), res.into()));
                                 }
@@ -1663,13 +1699,13 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         "<=" => inkwell::FloatPredicate::OLE,
                                         ">"  => inkwell::FloatPredicate::OGT,
                                         ">=" => inkwell::FloatPredicate::OGE,
-                                        _ => panic!("internal error: operator mismatch")
+                                        _ => panic_error!("internal error: operator mismatch")
                                     };
                                     let res = env.builder.build_float_compare(op, left_val, right_val, "").unwrap();
                                     let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
                                     env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
                                 }
-                                _ => panic!("operator {} not supported on type pair {}, {}", op, left_type.name, right_type.name)
+                                _ => panic_error!("operator {} not supported on type pair {}, {}", op, left_type.name, right_type.name)
                             }
                         }
                         ("i8", "i8") | ("i16", "i16") | ("i32", "i32") | ("i64", "i64") |
@@ -1691,7 +1727,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                     {
                                         "||" | "or"  => env.builder.build_or (left_bool, right_bool, ""),
                                         "&&" | "and" => env.builder.build_and(left_bool, right_bool, ""),
-                                        _ => panic!("internal error: operator mismatch")
+                                        _ => panic_error!("internal error: operator mismatch")
                                     }.unwrap();
                                     env.stack.push((u8_type_frontend.clone(), res.into()));
                                 }
@@ -1702,7 +1738,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         "|" => env.builder.build_or (left_val, right_val, ""),
                                         "&" => env.builder.build_and(left_val, right_val, ""),
                                         "^" => env.builder.build_xor(left_val, right_val, ""),
-                                        _ => panic!("internal error: operator mismatch")
+                                        _ => panic_error!("internal error: operator mismatch")
                                     }.unwrap();
                                     env.stack.push((left_type.clone(), res.into()));
                                 }
@@ -1729,7 +1765,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         {
                                             env.builder.build_int_signed_rem(left_val, right_val, "")
                                         },
-                                        _ => panic!("internal error: operator mismatch")
+                                        _ => panic_error!("internal error: operator mismatch")
                                     }.unwrap();
                                     env.stack.push((left_type.clone(), res.into()));
                                 }
@@ -1744,38 +1780,29 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         "<=" => if left_type.is_int_signed() { inkwell::IntPredicate::SLE } else  { inkwell::IntPredicate::ULE },
                                         ">"  => if left_type.is_int_signed() { inkwell::IntPredicate::SGT } else  { inkwell::IntPredicate::UGT },
                                         ">=" => if left_type.is_int_signed() { inkwell::IntPredicate::SGE } else  { inkwell::IntPredicate::UGE },
-                                        _ => panic!("internal error: operator mismatch")
+                                        _ => panic_error!("internal error: operator mismatch")
                                     };
                                     let res = env.builder.build_int_compare(op, left_val, right_val, "").unwrap();
                                     let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
                                     env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
                                 }
                                 
-                                _ => panic!("operator {} not supported on type {}", op, left_type.name)
+                                _ => panic_error!("operator {} not supported on type {}", op, left_type.name)
                             }
                         }
-                        _ => panic!("unhandled type pair `{}`, `{}`", left_type.name, right_type.name)
+                        _ => panic_error!("unhandled type pair `{}`, `{}`", left_type.name, right_type.name)
                     }
                 }
                 else
                 {
-                    panic!("unhandled AST node {}", text);
+                    panic_error!("unhandled AST node {}", text);
                 }
             }
         }
     }
     else
     {
-        panic!("unhandled variable access");
-        /*
-        match node.text.as_str()
-        {
-            "name" =>
-            {
-                let var = variables[node.child(0).unwrap()]
-                builder.use_var()
-            }
-        }*/
+        panic_error!("unhandled variable access");
     }
 }
 
@@ -2069,13 +2096,14 @@ fn main()
         });
         
         let stack = Vec::new();
-        let mut env = Environment { context : &context, stack, variables, builder : &builder, func_decs : &func_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
+        let mut env = Environment { source_text : &program_lines, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
         
         //println!("\n\ncompiling function {}...", function.name);
         //println!("{}", function.body.pretty_debug());
         
         compile(&mut env, &function.body, WantPointer::None);
     }
+    module.print_to_file("out_unopt.ll").unwrap();
     
     println!("compilation time: {}", start.elapsed().as_secs_f64());
     
@@ -2145,7 +2173,7 @@ fn main()
         println!("time: {}", elapsed_time.as_secs_f64());
     }
     
-    module.print_to_file("out.ir").unwrap();
+    module.print_to_file("out.ll").unwrap();
 
     {
         use inkwell::targets::*;

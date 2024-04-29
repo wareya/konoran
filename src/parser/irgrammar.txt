@@ -214,7 +214,7 @@ funcdef: HIDELITERALS
 $type$ $name$ ( $funcdefargs$ ) $funcbody$
 
 structparts:
-$declaration$*
+$declaration$+
 
 structdef: HIDELITERALS
 struct $name$ { $structparts$ }
