@@ -1,2 +1,4 @@
 /target
 .trash
+*.asm
+*.ll
