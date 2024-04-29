@@ -204,14 +204,26 @@ $type$ $name$
 funcdefargs:
 >>? $funcarg$...,
 
+loose_funcarg:
+$type$ >>? $name$
+
+loose_funcdefargs:
+>>? $loose_funcarg$...,
+
 funcbody:
 $statementlist$
 
 intrinsic: HIDELITERALS
 intrinsic $name$ $funcargs$
 
+vismodifier:
+# best effort export for dlls etc
+>>? export_extern
+# do not expose to other modules At All
+>>? private
+
 funcdef: HIDELITERALS
-$type$ $name$ ( $funcdefargs$ ) $funcbody$
+$vismodifier$ $type$ $name$ ( $funcdefargs$ ) $funcbody$
 
 structparts:
 $declaration$+
@@ -266,12 +278,6 @@ $type$ $name$ ;
 fulldeclaration: HIDELITERALS
 $type$ $name$ = $expr$ ;
 
-vismodifier:
-# best effort export for dlls etc
->>? export_extern
-# do not expose to other modules At All
->>? private
-
 globaldeclaration: HIDELITERALS
 $vismodifier$ $type$ $name$ ;
 
@@ -286,7 +292,7 @@ importglobal: HIDELITERALS
 $importsource$ $type$ $name$ ;
 
 importfunc: HIDELITERALS
-$importsource$ $type$ $name$ ( $funcdefargs$ ) ;
+$importsource$ $type$ $name$ ( $loose_funcdefargs$ ) ;
 
 statement: HIDELITERALS
 $instruction$

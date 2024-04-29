@@ -15,8 +15,6 @@ use parser::ast::ASTNode;
 
 /*
 TODO list:
-- implement import/export for functions
-
 - implement other control flow constructs than just "if -> goto"
 - have proper scoped variable declarations, not function-level variable declarations
 */
@@ -562,7 +560,8 @@ enum Visibility
 #[derive(Debug, Clone)]
 struct Program
 {
-    funcs : BTreeMap<String, Function>,
+    funcs : BTreeMap<String, (Function, Visibility)>,
+    func_imports : BTreeMap<String, (FunctionSig, Visibility)>,
     globals : BTreeMap<String, (Type, Option<ASTNode>, Visibility)>,
 }
 
@@ -615,8 +614,10 @@ impl Program
     fn new(types : &mut BTreeMap<String, Type>, ast : &ASTNode) -> Result<Program, String>
     {
         let mut funcs = BTreeMap::new();
+        let mut func_imports = BTreeMap::new();
         let mut globals = BTreeMap::new();
         
+        println!("starting struct defs...");
         for child in ast.get_children()?
         {
             if child.is_parent() && child.text == "structdef"
@@ -654,15 +655,56 @@ impl Program
             }
         }
         
+        println!("starting func defs...");
         for child in ast.get_children()?
         {
-            if child.is_parent() && child.text == "funcdef"
+            if child.is_parent() && child.text == "importfunc"
             {
-                let return_type = parse_type(&types, child.child(0)?).unwrap();
-                let name = child.child(1)?.child(0)?.text.clone();
+                println!("import func");
+                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "import_extern"
+                {
+                    Visibility::Import
+                }
+                else // "using"
+                {
+                    Visibility::ImportLocal
+                };
+                
+                let return_type = parse_type(&types, child.child(1)?).unwrap();
+                let name = child.child(2)?.child(0)?.text.clone();
                 
                 let mut args = Vec::new();
-                for arg in child.child(2)?.get_children()?
+                for arg in child.child(3)?.get_children()?
+                {
+                    let arg_type = parse_type(&types, arg.child(0)?).unwrap();
+                    args.push(arg_type);
+                }
+                
+                let funcsig = FunctionSig { return_type, args };
+                
+                func_imports.insert(name.clone(), (funcsig, visibility));
+            }
+            if child.is_parent() && child.text == "funcdef"
+            {
+                println!("func def");
+                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "export_extern"
+                {
+                    Visibility::Export
+                }
+                else if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "private"
+                {
+                    Visibility::Private
+                }
+                else // default
+                {
+                    Visibility::Local
+                };
+                
+                let return_type = parse_type(&types, child.child(1)?).unwrap();
+                let name = child.child(2)?.child(0)?.text.clone();
+                
+                let mut args = Vec::new();
+                for arg in child.child(3)?.get_children()?
                 {
                     let arg_type = parse_type(&types, arg.child(0)?).unwrap();
                     let arg_name = arg.child(1)?.child(0)?.text.clone();
@@ -670,11 +712,13 @@ impl Program
                     args.push((arg_type, arg_name));
                 }
                 
-                let body = child.child(3)?.clone();
+                let body = child.child(4)?.clone();
                 
-                funcs.insert(name.clone(), Function { name, return_type, args, body });
+                funcs.insert(name.clone(), (Function { name, return_type, args, body }, visibility));
             }
         }
+        
+        println!("starting global defs...");
         for child in ast.get_children()?
         {
             if child.is_parent() && child.text == "importglobal"
@@ -721,7 +765,7 @@ impl Program
                 }
             }
         }
-        Ok(Program { funcs, globals })
+        Ok(Program { funcs, func_imports, globals })
     }
 }
 
@@ -1994,12 +2038,15 @@ fn main()
             let module = context.create_module("main");
             let program = Program::new(&mut types, &ast).unwrap();
             
+            println!("initialized program...");
+            
             if executor.is_none()
             {
                 for (f_name, (_, funcsig)) in &imports
                 {
                     let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
-                    let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
+                    let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::AvailableExternally));
+                    func_val.as_global_value().set_dll_storage_class(inkwell::DLLStorageClass::Import);
                     func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
                 }
                 
@@ -2014,6 +2061,8 @@ fn main()
             {
                 executor.as_ref().unwrap().add_module(&module).unwrap();
             }
+            println!("initialized executor...");
+            
             let target_data = executor.as_ref().unwrap().get_target_data();
             
             let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
@@ -2029,6 +2078,8 @@ fn main()
             ];
             
             let mut intrinsic_decs = BTreeMap::new();
+            
+            println!("doing imports...");
             
             for (name, llvm_name, type_name) in intrinsic_imports
             {
@@ -2064,12 +2115,71 @@ fn main()
             
             println!("executor build time: {}", start.elapsed().as_secs_f64());
             
-            for (f_name, function) in &program.funcs
+            for (f_name, (function, visibility)) in &program.funcs
             {
+                let linkage = match *visibility
+                {
+                    Visibility::Export =>
+                        // expose as much as possible
+                        // exact semantics are implementation-defined; may be a dll export!
+                        inkwell::module::Linkage::External,
+                    Visibility::Local =>
+                        // expose to other modules and objects
+                        inkwell::module::Linkage::External,
+                    Visibility::Private =>
+                        // do not expose to other modules
+                        inkwell::module::Linkage::Internal,
+                    _ =>
+                        panic!("internal error, invalid visibility class for function definition"),
+                };
+                
+                let storage_class = match *visibility
+                {
+                    Visibility::Import =>
+                        panic!("internal error, invalid visibility class for function definition"),
+                    Visibility::Export =>
+                        // expose as much as possible
+                        // exact semantics are implementation-defined; may be a dll export!
+                        inkwell::DLLStorageClass::Export,
+                    _ =>
+                        inkwell::DLLStorageClass::Default,
+                };
+                
                 let funcsig = function.to_sig();
                 let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
-                let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
-                func_decs.insert(f_name.clone(), (func_val, funcsig));
+                let func_val = module.add_function(&f_name, func_type, Some(linkage));
+                func_val.as_global_value().set_dll_storage_class(storage_class);
+                func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
+            }
+            for (f_name, (funcsig, visibility)) in &program.func_imports
+            {
+                let linkage = match *visibility
+                {
+                    Visibility::Import => 
+                        // get from anywhere possible
+                        // exact semantics are implementation-defined; may be a dll import!
+                        inkwell::module::Linkage::AvailableExternally,
+                    Visibility::ImportLocal =>
+                        // get from external module or object
+                        inkwell::module::Linkage::AvailableExternally,
+                    _ => panic!("internal error, invalid visibility class for function import"),
+                };
+                
+                let storage_class = match *visibility
+                {
+                    Visibility::Import =>
+                        // get from anywhere possible
+                        // exact semantics are implementation-defined; may be a dll import!
+                        inkwell::DLLStorageClass::Import,
+                    Visibility::Export =>
+                        panic!("internal error, invalid visibility class for function import"),
+                    _ =>
+                        inkwell::DLLStorageClass::Default,
+                };
+                let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                let func_val = module.add_function(&f_name, func_type, Some(linkage));
+                func_val.as_global_value().set_dll_storage_class(storage_class);
+                func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
             }
             
             println!("starting globals...");
@@ -2083,17 +2193,17 @@ fn main()
                         Visibility::Import => 
                             // get from anywhere possible
                             // exact semantics are implementation-defined; may be a dll import!
-                            inkwell::module::Linkage::External,
+                            inkwell::module::Linkage::AvailableExternally,
                         Visibility::ImportLocal =>
                             // get from external module or object
-                            inkwell::module::Linkage::External,
+                            inkwell::module::Linkage::AvailableExternally,
                         Visibility::Export =>
                             // expose as much as possible
                             // exact semantics are implementation-defined; may be a dll export!
-                            inkwell::module::Linkage::AvailableExternally,
+                            inkwell::module::Linkage::External,
                         Visibility::Local =>
                             // expose to other modules and objects
-                            inkwell::module::Linkage::AvailableExternally,
+                            inkwell::module::Linkage::External,
                         Visibility::Private =>
                             // do not expose to other modules
                             inkwell::module::Linkage::Internal,
@@ -2194,7 +2304,7 @@ fn main()
             for f in &program.funcs
             {
                 let f_name = f.0;
-                let function = f.1;
+                let function = &f.1.0;
                 
                 let (func_val, _) = func_decs.get(f_name).unwrap().clone();
                 
