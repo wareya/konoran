@@ -2078,49 +2078,39 @@ fn main()
                 let backend_type = get_backend_type(&mut backend_types, &types, &g_type);
                 if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
                 {
-                    let linkage = if *visibility == Visibility::Import
+                    let linkage = match *visibility
                     {
-                        // get from anywhere possible
-                        // exact semantics are implementation-defined; may be a dll import!
-                        inkwell::module::Linkage::External
-                    }
-                    else if *visibility == Visibility::ImportLocal
-                    {
-                        // get from external module or object
-                        inkwell::module::Linkage::External
-                    }
-                    else if *visibility == Visibility::Export
-                    {
-                        // expose as much as possible
-                        // exact semantics are implementation-defined; may be a dll export!
-                        inkwell::module::Linkage::AvailableExternally
-                    }
-                    else if *visibility == Visibility::Private
-                    {
-                         // do not expose to other modules
-                        inkwell::module::Linkage::Internal
-                    }
-                    else // Visibility::Local
-                    {
-                         // expose to other modules and objects
-                        inkwell::module::Linkage::AvailableExternally
+                        Visibility::Import => 
+                            // get from anywhere possible
+                            // exact semantics are implementation-defined; may be a dll import!
+                            inkwell::module::Linkage::External,
+                        Visibility::ImportLocal =>
+                            // get from external module or object
+                            inkwell::module::Linkage::External,
+                        Visibility::Export =>
+                            // expose as much as possible
+                            // exact semantics are implementation-defined; may be a dll export!
+                            inkwell::module::Linkage::AvailableExternally,
+                        Visibility::Local =>
+                            // expose to other modules and objects
+                            inkwell::module::Linkage::AvailableExternally,
+                        Visibility::Private =>
+                            // do not expose to other modules
+                            inkwell::module::Linkage::Internal,
                     };
                     
-                    let storage_class = if *visibility == Visibility::Import
+                    let storage_class = match *visibility
                     {
-                        // get from anywhere possible
-                        // exact semantics are implementation-defined; may be a dll import!
-                        inkwell::DLLStorageClass::Import
-                    }
-                    else if *visibility == Visibility::Export
-                    {
-                        // expose as much as possible
-                        // exact semantics are implementation-defined; may be a dll export!
-                        inkwell::DLLStorageClass::Export
-                    }
-                    else
-                    {
-                        inkwell::DLLStorageClass::Default
+                        Visibility::Import =>
+                            // get from anywhere possible
+                            // exact semantics are implementation-defined; may be a dll import!
+                            inkwell::DLLStorageClass::Import,
+                        Visibility::Export =>
+                            // expose as much as possible
+                            // exact semantics are implementation-defined; may be a dll export!
+                            inkwell::DLLStorageClass::Export,
+                        _ =>
+                            inkwell::DLLStorageClass::Default,
                     };
                     
                     if let Some(node) = g_init
