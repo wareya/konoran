@@ -15,9 +15,8 @@ use parser::ast::ASTNode;
 
 /*
 TODO list:
-- import and export keywords
+- implement import/export for functions
 
-- global variable static data optimization (llvm doesn't seem to do it automatically)
 - implement other control flow constructs than just "if -> goto"
 - have proper scoped variable declarations, not function-level variable declarations
 */
@@ -550,11 +549,19 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
     func_type
 }
 
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+enum Visibility
+{
+    Local,
+    Export,
+    Import,
+}
+
 #[derive(Debug, Clone)]
 struct Program
 {
     funcs : BTreeMap<String, Function>,
-    globals : BTreeMap<String, (Type, Option<ASTNode>)>,
+    globals : BTreeMap<String, (Type, Option<ASTNode>, Visibility)>,
 }
 
 fn struct_check_recursive(types : &BTreeMap<String, Type>, root_type : &Type, type_ : &Type)
@@ -668,21 +675,35 @@ impl Program
         }
         for child in ast.get_children()?
         {
-            if child.is_parent() && (child.text == "globaldeclaration" || child.text == "globalfulldeclaration")
+            if child.is_parent() && child.text == "importglobal"
             {
-                // TODO: modifiers
+                let visibility = Visibility::Import;
+                let type_ = parse_type(&types, child.child(0)?).unwrap();
+                let name = child.child(1)?.child(0)?.text.clone();
+                globals.insert(name.clone(), (type_, None, visibility));
+            }
+            else if child.is_parent() && (child.text == "globaldeclaration" || child.text == "globalfulldeclaration")
+            {
+                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.child(0)?.text.clone() == "export"
+                {
+                    Visibility::Export
+                }
+                else
+                {
+                    Visibility::Local
+                };
                 
                 let type_ = parse_type(&types, child.child(1)?).unwrap();
                 let name = child.child(2)?.child(0)?.text.clone();
                 
                 if child.text == "globaldeclaration"
                 {
-                    globals.insert(name.clone(), (type_, None));
+                    globals.insert(name.clone(), (type_, None, visibility));
                 }
                 else
                 {
                     let initializer = child.child(3)?.clone();
-                    globals.insert(name.clone(), (type_, Some(initializer)));
+                    globals.insert(name.clone(), (type_, Some(initializer), visibility));
                 }
             }
         }
@@ -1877,18 +1898,13 @@ fn main()
         types.insert(a.clone(), b.clone());
         backend_types.insert(a.clone(), *c);
     }
-    
+    // backend types for functions
     let mut function_types = BTreeMap::new();
     
     let ir_grammar = include_str!("parser/irgrammar.txt");
-    let program_text = include_str!("parser/irexample.txt");
-    
     let mut parser = parser::Parser::new_from_grammar(&ir_grammar).unwrap();
-    let program_lines : Vec<String> = program_text.lines().map(|x| x.to_string()).collect();
-    let tokens = parser.tokenize(&program_lines, true).unwrap();
-    let ast = parser.parse_program(&tokens, &program_lines, true).unwrap().unwrap();
     
-    let program = Program::new(&mut types, &ast).unwrap();
+    let opt_level = inkwell::OptimizationLevel::Aggressive;
     
     let mut imports : BTreeMap<String, (*const u8, FunctionSig)> = BTreeMap::new();
     fn import_function<T>(types: &BTreeMap<String, Type>, parser : &mut parser::Parser, imports : &mut BTreeMap<String, (*const u8, FunctionSig)>, name : &str, _pointer : T, pointer_usize : usize, type_string : &str)
@@ -1934,104 +1950,180 @@ fn main()
     
     println!("startup done! time: {}", start.elapsed().as_secs_f64());
     
-    let start = std::time::Instant::now();
-    println!("compiling...");
-    
     let context = Context::create();
     
-    //let mut builder = JITBuilder::with_flags(&settings, cranelift_module::default_libcall_names()).unwrap();
-    //for (f_name, (pointer, funcsig)) in &imports
-    //{
-    //    builder.symbol(f_name, *pointer);
-    //}
+    let mut executor = None;
     
-    let module = context.create_module("main");
-    
-    //let mut func_types = BTreeMap::new();
-    //let mut func_sizes = BTreeMap::new();
-    //let mut func_disasm = BTreeMap::new();
     let mut func_decs = BTreeMap::new();
     let mut global_decs = BTreeMap::new();
     
-    for (f_name, (_, funcsig)) in &imports
+    macro_rules! load_module
     {
-        let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
-        let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::AvailableExternally));
-        func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
-    }
-    
-    let intrinsic_imports = [
-        ("sqrt", "llvm.sqrt.f64", "funcptr(f64, (f64))"),
-        ("memset"    , "llvm.memset.p0.i64", "funcptr(void, (ptr(u8), u8, u64))"),
-        ("memset_vol", "llvm.memset.p0.i64", "funcptr(void, (ptr(u8), u8, u64))"),
-        ("memcpy"    , "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
-        ("memcpy_vol", "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
-        ("memmove"    , "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
-        ("memmove_vol", "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
-    ];
-    
-    let mut intrinsic_decs = BTreeMap::new();
-    
-    for (name, llvm_name, type_name) in intrinsic_imports
-    {
-        let type_lines = vec!(type_name.to_string());
-        let tokens = parser.tokenize(&type_lines, true).unwrap();
-        let type_ast = parser.parse_with_root_node_type(&tokens, &type_lines, true, "type").unwrap().unwrap();
-        let type_ = parse_type(&types, &type_ast).unwrap();
-        if let TypeData::FuncPointer(funcsig) = type_.data
-        {
-            let intrinsic = inkwell::intrinsics::Intrinsic::find(llvm_name).unwrap();
+        ($fname:expr) =>
+        {{
+            use std::fs;
+            println!("loading {}...", $fname);
+            let program_text = fs::read_to_string($fname).unwrap();
+            let program_lines : Vec<String> = program_text.lines().map(|x| x.to_string()).collect();
+            let tokens = parser.tokenize(&program_lines, true).unwrap();
+            let ast = parser.parse_program(&tokens, &program_lines, true).unwrap().unwrap();
             
-            let mut arg_types = Vec::new();
-            for arg_type in &funcsig.args
+            let start = std::time::Instant::now();
+            println!("compiling...");
+            
+            //let mut builder = JITBuilder::with_flags(&settings, cranelift_module::default_libcall_names()).unwrap();
+            //for (f_name, (pointer, funcsig)) in &imports
+            //{
+            //    builder.symbol(f_name, *pointer);
+            //}
+            
+            let module = context.create_module("main");
+            let program = Program::new(&mut types, &ast).unwrap();
+            
+            if executor.is_none()
             {
-                arg_types.push(get_backend_type_sized(&mut backend_types, &types, &arg_type));
+                for (f_name, (_, funcsig)) in &imports
+                {
+                    let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                    let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
+                    func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
+                }
+                
+                let _executor = module.create_jit_execution_engine(opt_level).unwrap();
+                for (f_name, (pointer, _)) in &imports
+                {
+                    _executor.add_global_mapping(&func_decs.get(f_name).unwrap().0, *pointer as usize);
+                }
+                executor = Some(_executor);
             }
-            //let f64_type = &types.get("f64").unwrap();
-            let function = intrinsic.get_declaration(&module, &arg_types).unwrap();
-            
-            intrinsic_decs.insert(name.to_string(), (function, *funcsig.clone()));
-        }
-    }
-    
-    println!("compile time: {}", start.elapsed().as_secs_f64());
-    
-    if VERBOSE
-    {
-        println!("module:\n{}", module.to_string());
-        println!("adding global mappings...");
-    }
-    
-    let opt_level = inkwell::OptimizationLevel::Aggressive;
-    //let opt_level = inkwell::OptimizationLevel::None;
-    
-    let start = std::time::Instant::now();
-    let executor = module.create_jit_execution_engine(opt_level).unwrap();
-    let target_data = executor.get_target_data();
-    for (f_name, (pointer, _)) in &imports
-    {
-        executor.add_global_mapping(&func_decs.get(f_name).unwrap().0, *pointer as usize);
-    }
-    let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
-    println!("executor build time: {}", start.elapsed().as_secs_f64());
-    
-    for (f_name, function) in &program.funcs
-    {
-        let funcsig = function.to_sig();
-        let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
-        let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
-        func_decs.insert(f_name.clone(), (func_val, funcsig));
-    }
-    
-    println!("starting globals...");
-    for (g_name, (g_type, g_init)) in &program.globals
-    {
-        let backend_type = get_backend_type(&mut backend_types, &types, &g_type);
-        if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
-        {
-            if let Some(node) = g_init
+            else
             {
-                let f_name = format!("__init_global_{}_asdf1g0q", g_name);
+                executor.as_ref().unwrap().add_module(&module).unwrap();
+            }
+            let target_data = executor.as_ref().unwrap().get_target_data();
+            
+            let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
+            
+            let intrinsic_imports = [
+                ("sqrt", "llvm.sqrt.f64", "funcptr(f64, (f64))"),
+                ("memset"    , "llvm.memset.p0.i64", "funcptr(void, (ptr(u8), u8, u64))"),
+                ("memset_vol", "llvm.memset.p0.i64", "funcptr(void, (ptr(u8), u8, u64))"),
+                ("memcpy"    , "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
+                ("memcpy_vol", "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
+                ("memmove"    , "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
+                ("memmove_vol", "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),
+            ];
+            
+            let mut intrinsic_decs = BTreeMap::new();
+            
+            for (name, llvm_name, type_name) in intrinsic_imports
+            {
+                let type_lines = vec!(type_name.to_string());
+                let tokens = parser.tokenize(&type_lines, true).unwrap();
+                let type_ast = parser.parse_with_root_node_type(&tokens, &type_lines, true, "type").unwrap().unwrap();
+                let type_ = parse_type(&types, &type_ast).unwrap();
+                if let TypeData::FuncPointer(funcsig) = type_.data
+                {
+                    let intrinsic = inkwell::intrinsics::Intrinsic::find(llvm_name).unwrap();
+                    
+                    let mut arg_types = Vec::new();
+                    for arg_type in &funcsig.args
+                    {
+                        arg_types.push(get_backend_type_sized(&mut backend_types, &types, &arg_type));
+                    }
+                    //let f64_type = &types.get("f64").unwrap();
+                    let function = intrinsic.get_declaration(&module, &arg_types).unwrap();
+                    
+                    intrinsic_decs.insert(name.to_string(), (function, *funcsig.clone()));
+                }
+            }
+            
+            println!("compile time: {}", start.elapsed().as_secs_f64());
+            
+            if VERBOSE
+            {
+                println!("module:\n{}", module.to_string());
+                println!("adding global mappings...");
+            }
+            
+            //let opt_level = inkwell::OptimizationLevel::None;
+            
+            println!("executor build time: {}", start.elapsed().as_secs_f64());
+            
+            for (f_name, function) in &program.funcs
+            {
+                let funcsig = function.to_sig();
+                let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
+                func_decs.insert(f_name.clone(), (func_val, funcsig));
+            }
+            
+            println!("starting globals...");
+            for (g_name, (g_type, g_init, visibility)) in &program.globals
+            {
+                let backend_type = get_backend_type(&mut backend_types, &types, &g_type);
+                if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
+                {
+                    let linkage = if *visibility == Visibility::Import
+                    {
+                        // get from external module or object
+                        inkwell::module::Linkage::External
+                    }
+                    else if *visibility == Visibility::Local
+                    {
+                         // expose to other modules
+                        inkwell::module::Linkage::AvailableExternally
+                    }
+                    else // Visibility::Export
+                    {
+                        // expose as much as possible
+                        inkwell::module::Linkage::DLLExport
+                    };
+                    
+                    if let Some(node) = g_init
+                    {
+                        let f_name = format!("__init_global_{}_asdf1g0q", g_name);
+                        let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
+                        let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                        let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
+                        
+                        let block = context.append_basic_block(func_val, "entry");
+                        let builder = context.create_builder();
+                        builder.position_at_end(block);
+                        
+                        let stack = Vec::new();
+                        let blocks = HashMap::new();
+                        let mut env = Environment { source_text : &program_lines, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
+                        
+                        compile(&mut env, &node, WantPointer::None);
+                        let (type_val, val) = env.stack.pop().unwrap();
+                        assert!(type_val == *g_type);
+                        
+                        let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                        global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
+                        global.set_linkage(linkage);
+                        env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
+                        env.builder.build_return(None).unwrap();
+                        
+                        global_decs.insert(g_name.clone(), (g_type.clone(), global, Some(func_val)));
+                    }
+                    else
+                    {
+                        let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                        global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
+                        global.set_linkage(linkage);
+                        global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
+                    }
+                }
+                else
+                {
+                    panic!("internal error: tried to make global with unsized type");
+                }
+            }
+            
+            if global_decs.len() > 0
+            {
+                let f_name = format!("__init_allglobal_asdf3f6g");
                 let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
                 let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
                 let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
@@ -2040,186 +2132,156 @@ fn main()
                 let builder = context.create_builder();
                 builder.position_at_end(block);
                 
-                let stack = Vec::new();
-                let blocks = HashMap::new();
-                let mut env = Environment { source_text : &program_lines, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
-                
-                compile(&mut env, &node, WantPointer::None);
-                let (type_val, val) = env.stack.pop().unwrap();
-                assert!(type_val == *g_type);
-                
-                let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
-                global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
-                global.set_linkage(inkwell::module::Linkage::Internal);
-                env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
-                env.builder.build_return(None).unwrap();
-                
-                global_decs.insert(g_name.clone(), (g_type.clone(), global, Some(func_val)));
-            }
-            else
-            {
-                let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
-                global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
-                global.set_linkage(inkwell::module::Linkage::Internal);
-                global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
-            }
-        }
-        else
-        {
-            panic!("internal error: tried to make global with unsized type");
-        }
-    }
-    
-    if global_decs.len() > 0
-    {
-        let f_name = format!("__init_allglobal_asdf3f6g");
-        let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
-        let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
-        let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
-        
-        let block = context.append_basic_block(func_val, "entry");
-        let builder = context.create_builder();
-        builder.position_at_end(block);
-        
-        for (_, (_, _, f)) in &global_decs
-        {
-            if let Some(f) = f
-            {
-                builder.build_call(*f, &Vec::new(), "").unwrap();
+                for (_, (_, _, f)) in &global_decs
+                {
+                    if let Some(f) = f
+                    {
+                        builder.build_call(*f, &Vec::new(), "").unwrap();
+                    }
+                }
                 builder.build_return(None).unwrap();
-            }
-        }
-        
-        let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
-        
-        let s_type = context.struct_type(&[context.i32_type().into(), ptr_type.into(), ptr_type.into()], false);
-        let a_type = s_type.array_type(1);
-        let ctors = module.add_global(a_type, Some(inkwell::AddressSpace::default()), "llvm.global_ctors");
-        ctors.set_linkage(inkwell::module::Linkage::Appending);
-        let s_val = s_type.const_named_struct(&[context.i32_type().const_int(65535, false).into(), func_val.as_global_value().as_pointer_value().into(), ptr_type.const_null().into()]);
-        let a_val = s_type.const_array(&[s_val]);
-        ctors.set_initializer(&a_val);
-        // @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__init_allglobal_asdf3f6g, ptr null }
+                
+                let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+                
+                let s_type = context.struct_type(&[context.i32_type().into(), ptr_type.into(), ptr_type.into()], false);
+                let a_type = s_type.array_type(1);
+                let ctors = module.add_global(a_type, Some(inkwell::AddressSpace::default()), "llvm.global_ctors");
+                ctors.set_linkage(inkwell::module::Linkage::Appending);
+                let s_val = s_type.const_named_struct(&[context.i32_type().const_int(65535, false).into(), func_val.as_global_value().as_pointer_value().into(), ptr_type.const_null().into()]);
+                let a_val = s_type.const_array(&[s_val]);
+                ctors.set_initializer(&a_val);
+                // @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__init_allglobal_asdf3f6g, ptr null }
 
-        //"llvm.global_ctors"
+                //"llvm.global_ctors"
+            }
+            println!("done with globals");
+            
+            for f in &program.funcs
+            {
+                let f_name = f.0;
+                let function = f.1;
+                
+                let (func_val, _) = func_decs.get(f_name).unwrap().clone();
+                
+                let block = context.append_basic_block(func_val, "entry");
+                let builder = context.create_builder();
+                builder.position_at_end(block);
+                
+                let mut variables = BTreeMap::new();
+                
+                // declare arguments
+                let mut i = 0;
+                for (j, param) in function.args.iter().enumerate()
+                {
+                    let var_type = param.0.clone();
+                    let var_name = param.1.clone();
+                    
+                    let backend_type = get_backend_type(&mut backend_types, &types, &var_type);
+                    if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
+                    {
+                        let slot = if let TypeData::Array(inner_type, size) = &var_type.data
+                        {
+                            let size = get_backend_type_sized(&mut backend_types, &types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
+                            let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, &inner_type);
+                            builder.build_array_alloca(inner_basic_type, size, &var_name)
+                        }
+                        else
+                        {
+                            builder.build_alloca(basic_type, &var_name)
+                        }.unwrap();
+                        
+                        let val = func_val.get_nth_param(j as u32).unwrap();
+                        builder.build_store(slot, val).unwrap();
+                        
+                        if variables.contains_key(&var_name)
+                        {
+                            panic!("error: parameter {} redeclared", var_name);
+                        }
+                        variables.insert(var_name, (var_type, slot));
+                    }
+                    else
+                    {
+                        panic!("error: variables of type {} are not allowed", var_type.name);
+                    }
+                    
+                    i += 1;
+                }
+                
+                // TODO don't declare variables ahead of time, declare them on the go, and support variable scoping
+                // declare variables
+                function.body.visit(&mut |node : &ASTNode|
+                {
+                    if node.is_parent() && (node.text == "declaration" || node.text == "fulldeclaration")
+                    {
+                        let var_type = parse_type(&types, &node.child(0).unwrap()).unwrap();
+                        let var_name = node.child(1).unwrap().child(0).unwrap().text.clone();
+                        
+                        let basic_type = get_backend_type_sized(&mut backend_types, &types, &var_type);
+                        
+                        let slot = if let TypeData::Array(inner_type, size) = &var_type.data
+                        {
+                            let size = get_backend_type_sized(&mut backend_types, &types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
+                            let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, &inner_type);
+                            builder.build_array_alloca(inner_basic_type, size, &var_name)
+                        }
+                        else
+                        {
+                            builder.build_alloca(basic_type, &var_name)
+                        }.unwrap();
+                        
+                        if variables.contains_key(&var_name)// || func_decs.contains_key(&var_name)
+                        {
+                            panic!("error: variable {} redeclared", var_name);
+                        }
+                        variables.insert(var_name, (var_type, slot));
+                        
+                        i += 1;
+                    }
+                    false
+                });
+                
+                // collect labels (blocks)
+                let mut blocks = HashMap::new();
+                let mut blocks_vec = Vec::new();
+                function.body.visit(&mut |node : &ASTNode|
+                {
+                    if node.is_parent() && node.text == "label"
+                    {
+                        let name = &node.child(0).unwrap().child(0).unwrap().text;
+                        if !blocks.contains_key(name)
+                        {
+                            let block = context.append_basic_block(func_val, name);
+                            blocks.insert(name.clone(), block);
+                            blocks_vec.push(block);
+                        }
+                        else
+                        {
+                            panic!("error: redeclared block {}", name);
+                        }
+                    }
+                    false
+                });
+                
+                let stack = Vec::new();
+                let mut env = Environment { source_text : &program_lines, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
+                
+                //println!("\n\ncompiling function {}...", function.name);
+                //println!("{}", function.body.pretty_debug());
+                
+                compile(&mut env, &function.body, WantPointer::None);
+            }
+            
+            module
+        }};
     }
-    println!("done with globals");
     
-    for f in &program.funcs
-    {
-        let f_name = f.0;
-        let function = f.1;
-        
-        let (func_val, _) = func_decs.get(f_name).unwrap().clone();
-        
-        let block = context.append_basic_block(func_val, "entry");
-        let builder = context.create_builder();
-        builder.position_at_end(block);
-        
-        let mut variables = BTreeMap::new();
-        
-        // declare arguments
-        let mut i = 0;
-        for (j, param) in function.args.iter().enumerate()
-        {
-            let var_type = param.0.clone();
-            let var_name = param.1.clone();
-            
-            let backend_type = get_backend_type(&mut backend_types, &types, &var_type);
-            if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
-            {
-                let slot = if let TypeData::Array(inner_type, size) = &var_type.data
-                {
-                    let size = get_backend_type_sized(&mut backend_types, &types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
-                    let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, &inner_type);
-                    builder.build_array_alloca(inner_basic_type, size, &var_name)
-                }
-                else
-                {
-                    builder.build_alloca(basic_type, &var_name)
-                }.unwrap();
-                
-                let val = func_val.get_nth_param(j as u32).unwrap();
-                builder.build_store(slot, val).unwrap();
-                
-                if variables.contains_key(&var_name)
-                {
-                    panic!("error: parameter {} redeclared", var_name);
-                }
-                variables.insert(var_name, (var_type, slot));
-            }
-            else
-            {
-                panic!("error: variables of type {} are not allowed", var_type.name);
-            }
-            
-            i += 1;
-        }
-        
-        // TODO don't declare variables ahead of time, declare them on the go, and support variable scoping
-        // declare variables
-        function.body.visit(&mut |node : &ASTNode|
-        {
-            if node.is_parent() && (node.text == "declaration" || node.text == "fulldeclaration")
-            {
-                let var_type = parse_type(&types, &node.child(0).unwrap()).unwrap();
-                let var_name = node.child(1).unwrap().child(0).unwrap().text.clone();
-                
-                let basic_type = get_backend_type_sized(&mut backend_types, &types, &var_type);
-                
-                let slot = if let TypeData::Array(inner_type, size) = &var_type.data
-                {
-                    let size = get_backend_type_sized(&mut backend_types, &types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
-                    let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, &inner_type);
-                    builder.build_array_alloca(inner_basic_type, size, &var_name)
-                }
-                else
-                {
-                    builder.build_alloca(basic_type, &var_name)
-                }.unwrap();
-                
-                if variables.contains_key(&var_name)// || func_decs.contains_key(&var_name)
-                {
-                    panic!("error: variable {} redeclared", var_name);
-                }
-                variables.insert(var_name, (var_type, slot));
-                
-                i += 1;
-            }
-            false
-        });
-        
-        // collect labels (blocks)
-        let mut blocks = HashMap::new();
-        let mut blocks_vec = Vec::new();
-        function.body.visit(&mut |node : &ASTNode|
-        {
-            if node.is_parent() && node.text == "label"
-            {
-                let name = &node.child(0).unwrap().child(0).unwrap().text;
-                if !blocks.contains_key(name)
-                {
-                    let block = context.append_basic_block(func_val, name);
-                    blocks.insert(name.clone(), block);
-                    blocks_vec.push(block);
-                }
-                else
-                {
-                    panic!("error: redeclared block {}", name);
-                }
-            }
-            false
-        });
-        
-        let stack = Vec::new();
-        let mut env = Environment { source_text : &program_lines, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
-        
-        //println!("\n\ncompiling function {}...", function.name);
-        //println!("{}", function.body.pretty_debug());
-        
-        compile(&mut env, &function.body, WantPointer::None);
-    }
+    let module = load_module!("src/parser/irexample.txt");
+    let module2 = load_module!("src/parser/irexample_other.txt");
+    
     module.print_to_file("out_unopt.ll").unwrap();
+    module2.print_to_file("out_2_unopt.ll").unwrap();
+    
+    let executor = executor.unwrap();
     
     println!("compilation time: {}", start.elapsed().as_secs_f64());
     
@@ -2251,6 +2313,7 @@ fn main()
         println!("doing IR optimizations...");
     }
     pass_manager.run_on(&module);
+    pass_manager.run_on(&module2);
     
     println!("done doing IR optimizations. time: {}", start.elapsed().as_secs_f64());
     if VERBOSE
@@ -2259,6 +2322,7 @@ fn main()
     }
     
     module.print_to_file("out.ll").unwrap();
+    module2.print_to_file("out_2.ll").unwrap();
     
     println!("running static constructors...");
     executor.run_static_constructors();

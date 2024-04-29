@@ -9,11 +9,4 @@ struct Vec2
     f32 y;
 }
 
-import Vec2 myvec;
-
-void func_etc()
-{
-    print_float((myvec.x) as f64);
-    print_float((*@&myvec.x) as f64);
-    return;
-}
+Vec2 myvec = Vec2 { 151.015f32, 5.152f32 };
