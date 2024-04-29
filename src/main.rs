@@ -260,7 +260,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
             }
             res.map(|x| x.to_ptr())
         }
-        // FIXME
+        // FIXME // why was this fixme here?
         (_, name) => Err(format!("error: unsupported type (culprit: `{}`)", name)),
     }
 }
@@ -541,7 +541,7 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
     
     //println!("func type is  {:?}", func_type);
     
-    // FIXME
+    // FIXME // why was this fixme here?
     function_types.insert(key, func_type);
     
     func_type
@@ -791,6 +791,8 @@ struct Environment<'a, 'b, 'c, 'e, 'f>
     blocks         : HashMap<String, inkwell::basic_block::BasicBlock<'c>>,
     ptr_int_type   : inkwell::types::IntType<'c>,
     target_data    : &'f inkwell::targets::TargetData,
+    
+    return_type    : Option<Type>,
 }
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -928,14 +930,20 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let (type_, val) = env.stack.pop().unwrap();
                     returns.push((type_, val));
                 }
-                if let Some((_, val)) = returns.get(0)
+                if let Some((type_val, val)) = returns.get(0)
                 {
-                    // FIXME: check types
-                    //assert!();
+                    if env.return_type != Some(type_val.clone())
+                    {
+                        panic_error!("error: tried to return wrong type from function");
+                    }
                     env.builder.build_return(Some(val)).unwrap();
                 }
                 else
                 {
+                    if env.return_type != env.types.get("void").cloned()
+                    {
+                        panic_error!("error: tried to return nothing from function that requires a return value");
+                    }
                     env.builder.build_return(None).unwrap();
                 }
             }
@@ -956,13 +964,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     assert!(type_val == type_var, "fulldec type failure, {:?} vs {:?}, line {}", type_val, type_var, node.line);
                     
-                    let instval = env.builder.build_store(slot, val).unwrap();
-                    // FIXME: what does this do again...?
-                    let v = instval.get_volatile();
-                    if false
-                    {
-                        println!("volatile: {:?}", v);
-                    }
+                    env.builder.build_store(slot, val).unwrap();
                 }
                 else
                 {
@@ -1632,7 +1634,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let (left_size, right_size) = (store_size_of_type(&env.target_data, env.backend_types, env.types, &left_type), store_size_of_type(&env.target_data, env.backend_types, env.types, &right_type));
                 let ptr_size = env.target_data.get_store_size(&env.ptr_int_type);
                 
-                // FIXME: platform-specific pointer size
                 let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &right_type);
                 if left_size == right_size || (right_size == ptr_size && left_type.is_composite())
                 {
@@ -1680,7 +1681,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 // cast between types of same size, non-float. bitcast.
                 else if !left_type.is_float() && !right_type.is_float() && left_basic_type.size_of() == right_basic_type.size_of() && right_basic_type.is_sized()
                 {
-                    // TODO double check
+                    // TODO double check that this is right
                     let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
                     env.stack.push((right_type, ret));
                 }
@@ -2249,7 +2250,7 @@ fn main()
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { source_text : &program_lines, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
+                        let mut env = Environment { source_text : &program_lines, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : None };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -2421,7 +2422,7 @@ fn main()
                 });
                 
                 let stack = Vec::new();
-                let mut env = Environment { source_text : &program_lines, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
+                let mut env = Environment { source_text : &program_lines, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : Some(function.return_type.clone()) };
                 
                 //println!("\n\ncompiling function {}...", function.name);
                 //println!("{}", function.body.pretty_debug());
