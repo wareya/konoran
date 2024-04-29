@@ -563,6 +563,7 @@ struct Program
     funcs : BTreeMap<String, (Function, Visibility)>,
     func_imports : BTreeMap<String, (FunctionSig, Visibility)>,
     globals : BTreeMap<String, (Type, Option<ASTNode>, Visibility)>,
+    globals_order : Vec<String>,
 }
 
 fn struct_check_recursive(types : &BTreeMap<String, Type>, root_type : &Type, type_ : &Type)
@@ -616,6 +617,7 @@ impl Program
         let mut funcs = BTreeMap::new();
         let mut func_imports = BTreeMap::new();
         let mut globals = BTreeMap::new();
+        let mut globals_order = Vec::new();
         
         println!("starting struct defs...");
         for child in ast.get_children()?
@@ -735,6 +737,7 @@ impl Program
                 let type_ = parse_type(&types, child.child(1)?).unwrap();
                 let name = child.child(2)?.child(0)?.text.clone();
                 globals.insert(name.clone(), (type_, None, visibility));
+                globals_order.push(name.clone());
             }
             else if child.is_parent() && (child.text == "globaldeclaration" || child.text == "globalfulldeclaration")
             {
@@ -757,15 +760,17 @@ impl Program
                 if child.text == "globaldeclaration"
                 {
                     globals.insert(name.clone(), (type_, None, visibility));
+                    globals_order.push(name.clone());
                 }
                 else
                 {
                     let initializer = child.child(3)?.clone();
                     globals.insert(name.clone(), (type_, Some(initializer), visibility));
+                    globals_order.push(name.clone());
                 }
             }
         }
-        Ok(Program { funcs, func_imports, globals })
+        Ok(Program { funcs, func_imports, globals, globals_order })
     }
 }
 
@@ -1589,13 +1594,20 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let label = &node.child(1).unwrap().child(0).unwrap().text;
                 // anonymous block for "else" case
                 let else_block = env.context.append_basic_block(env.func_val, "");
-                // TODO support pointers (test whether null)
                 if let Some(then_block) = env.blocks.get(label)
                 {
                     let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
                     if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
                     {
                         let zero = int_type.const_int(0, true);
+                        let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap();
+                        env.builder.build_conditional_branch(int_val, *then_block, else_block).unwrap();
+                        env.builder.position_at_end(else_block);
+                    }
+                    else if let (Ok(_ptr_type), Ok(ptr_val)) = (inkwell::types::PointerType::try_from(backend_type), inkwell::values::PointerValue::try_from(val))
+                    {
+                        let int_val = env.builder.build_ptr_to_int(ptr_val, u64_type, "").unwrap();
+                        let zero = u64_type.const_int(0, true);
                         let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap();
                         env.builder.build_conditional_branch(int_val, *then_block, else_block).unwrap();
                         env.builder.position_at_end(else_block);
@@ -2183,8 +2195,9 @@ fn main()
             }
             
             println!("starting globals...");
-            for (g_name, (g_type, g_init, visibility)) in &program.globals
+            for g_name in &program.globals_order
             {
+                let (g_type, g_init, visibility) = program.globals.get(g_name).unwrap();
                 let backend_type = get_backend_type(&mut backend_types, &types, &g_type);
                 if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
                 {

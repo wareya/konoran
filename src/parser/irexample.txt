@@ -15,5 +15,9 @@ export_extern void func_etc()
 {
     print_float((myvec.x) as f64);
     print_float((*@&myvec.x) as f64);
+    u8 x;
+    if (!!&x)
+        goto asdf;
+asdf:
     return;
 }
