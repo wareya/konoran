@@ -267,7 +267,10 @@ fulldeclaration: HIDELITERALS
 $type$ $name$ = $expr$ ;
 
 vismodifier:
+# best effort export for dlls etc
 >>? export
+# do not expose to other modules At All
+>>? private
 
 globaldeclaration: HIDELITERALS
 $vismodifier$ $type$ $name$ ;
@@ -275,11 +278,15 @@ $vismodifier$ $type$ $name$ ;
 globalfulldeclaration: HIDELITERALS
 $vismodifier$ $type$ $name$ = $expr$ ;
 
+importsource:
+import
+import_locally
+
 importglobal: HIDELITERALS
-import $type$ $name$ ;
+$importsource$ $type$ $name$ ;
 
 importfunc: HIDELITERALS
-import $type$ $name$ ( $funcdefargs$ ) ;
+$importsource$ $type$ $name$ ( $funcdefargs$ ) ;
 
 statement: HIDELITERALS
 $instruction$

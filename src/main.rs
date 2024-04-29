@@ -552,8 +552,10 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 enum Visibility
 {
+    Private,
     Local,
     Export,
+    ImportLocal,
     Import,
 }
 
@@ -677,9 +679,17 @@ impl Program
         {
             if child.is_parent() && child.text == "importglobal"
             {
-                let visibility = Visibility::Import;
-                let type_ = parse_type(&types, child.child(0)?).unwrap();
-                let name = child.child(1)?.child(0)?.text.clone();
+                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "import"
+                {
+                    Visibility::Import
+                }
+                else
+                {
+                    Visibility::ImportLocal
+                };
+                
+                let type_ = parse_type(&types, child.child(1)?).unwrap();
+                let name = child.child(2)?.child(0)?.text.clone();
                 globals.insert(name.clone(), (type_, None, visibility));
             }
             else if child.is_parent() && (child.text == "globaldeclaration" || child.text == "globalfulldeclaration")
@@ -687,6 +697,10 @@ impl Program
                 let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.child(0)?.text.clone() == "export"
                 {
                     Visibility::Export
+                }
+                else if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.child(0)?.text.clone() == "private"
+                {
+                    Visibility::Private
                 }
                 else
                 {
@@ -2066,18 +2080,30 @@ fn main()
                 {
                     let linkage = if *visibility == Visibility::Import
                     {
+                        // get from anywhere possible
+                        // exact semantics are implementation-defined; may be a dll import!
+                        inkwell::module::Linkage::External
+                    }
+                    else if *visibility == Visibility::ImportLocal
+                    {
                         // get from external module or object
                         inkwell::module::Linkage::External
                     }
+                    else if *visibility == Visibility::Private
+                    {
+                         // do not expose to other modules
+                        inkwell::module::Linkage::Internal
+                    }
                     else if *visibility == Visibility::Local
                     {
-                         // expose to other modules
+                         // expose to other modules and objects
                         inkwell::module::Linkage::AvailableExternally
                     }
                     else // Visibility::Export
                     {
                         // expose as much as possible
-                        inkwell::module::Linkage::DLLExport
+                        // exact semantics are implementation-defined; may be a dll export!
+                        inkwell::module::Linkage::AvailableExternally
                     };
                     
                     if let Some(node) = g_init
