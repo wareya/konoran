@@ -698,6 +698,7 @@ struct Environment<'a, 'b, 'c, 'e, 'f>
     variables      : BTreeMap<String, (Type, inkwell::values::PointerValue<'c>)>,
     builder        : &'b inkwell::builder::Builder<'c>,
     func_decs      : &'a BTreeMap<String, (inkwell::values::FunctionValue<'c>, FunctionSig)>,
+    global_decs    : &'a BTreeMap<String, (Type, inkwell::values::GlobalValue<'c>, Option<inkwell::values::FunctionValue<'c>>)>,
     intrinsic_decs : &'a BTreeMap<String, (inkwell::values::FunctionValue<'c>, FunctionSig)>,
     types          : &'a BTreeMap<String, Type>,
     backend_types  : &'a mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>,
@@ -930,6 +931,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     push_val_or_ptr!(type_, slot);
                 }
+                else if env.global_decs.contains_key(name)
+                {
+                    panic_error!("error: found global but not implemented yet");
+                }
                 else
                 {
                     panic_error!("error: unrecognized variable `{}`", name);
@@ -944,6 +949,12 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     check_struct_incomplete(env, &mut type_);
                     
                     push_val_or_ptr!(type_, slot);
+                }
+                else if let Some((type_, val, _)) = env.global_decs.get(name)
+                {
+                    let mut type_ = type_.clone();
+                    check_struct_incomplete(env, &mut type_);
+                    push_val_or_ptr!(type_, val.as_pointer_value());
                 }
                 else if let Some((func_val, funcsig)) = env.func_decs.get(name)
                 {
@@ -2023,7 +2034,7 @@ fn main()
                 let f_name = format!("__init_global_{}_asdf1g0q", g_name);
                 let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
                 let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
-                let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Private));
+                let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
                 
                 let block = context.append_basic_block(func_val, "entry");
                 let builder = context.create_builder();
@@ -2031,24 +2042,26 @@ fn main()
                 
                 let stack = Vec::new();
                 let blocks = HashMap::new();
-                let mut env = Environment { source_text : &program_lines, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
+                let mut env = Environment { source_text : &program_lines, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
                 
                 compile(&mut env, &node, WantPointer::None);
                 let (type_val, val) = env.stack.pop().unwrap();
                 assert!(type_val == *g_type);
                 
                 let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
                 global.set_linkage(inkwell::module::Linkage::Internal);
                 env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
                 env.builder.build_return(None).unwrap();
                 
-                global_decs.insert(g_name, (global, g_type, Some(func_val)));
+                global_decs.insert(g_name.clone(), (g_type.clone(), global, Some(func_val)));
             }
             else
             {
                 let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
                 global.set_linkage(inkwell::module::Linkage::Internal);
-                global_decs.insert(g_name, (global, g_type, None));
+                global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
             }
         }
         else
@@ -2062,7 +2075,7 @@ fn main()
         let f_name = format!("__init_allglobal_asdf3f6g");
         let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
         let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
-        let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Private));
+        let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
         
         let block = context.append_basic_block(func_val, "entry");
         let builder = context.create_builder();
@@ -2086,7 +2099,7 @@ fn main()
         let s_val = s_type.const_named_struct(&[context.i32_type().const_int(65535, false).into(), func_val.as_global_value().as_pointer_value().into(), ptr_type.const_null().into()]);
         let a_val = s_type.const_array(&[s_val]);
         ctors.set_initializer(&a_val);
-        // @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @_GLOBAL__sub_I_example.cpp, ptr null }]
+        // @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__init_allglobal_asdf3f6g, ptr null }
 
         //"llvm.global_ctors"
     }
@@ -2199,7 +2212,7 @@ fn main()
         });
         
         let stack = Vec::new();
-        let mut env = Environment { source_text : &program_lines, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
+        let mut env = Environment { source_text : &program_lines, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
         
         //println!("\n\ncompiling function {}...", function.name);
         //println!("{}", function.body.pretty_debug());
@@ -2245,6 +2258,12 @@ fn main()
         println!("module after doing IR optimizations:\n{}", module.to_string());
     }
     
+    module.print_to_file("out.ll").unwrap();
+    
+    println!("running static constructors...");
+    executor.run_static_constructors();
+    println!("ran static constructors.");
+    
     macro_rules! get_func
     {
         ($name:expr, $T:ty) =>
@@ -2275,8 +2294,6 @@ fn main()
         println!("{}() = {:?}", name, out);
         println!("time: {}", elapsed_time.as_secs_f64());
     }
-    
-    module.print_to_file("out.ll").unwrap();
 
     {
         use inkwell::targets::*;
@@ -2299,4 +2316,6 @@ fn main()
 
         machine.write_to_file(&module, FileType::Assembly, "out.asm".as_ref()).unwrap();
     }
+    
+    executor.run_static_destructors();
 }
