@@ -70,10 +70,10 @@ $unary$
 $lvar_name$
 
 cast: HIDELITERALS
-( $expr$ as $type$ )
+( $expr$ ) as $type$
 
 bitcast: HIDELITERALS
-( $expr$ bit_as $type$ )
+( $expr$ ) bit_as $type$
 
 unusedcomma:
 ,
@@ -85,17 +85,19 @@ struct_literal: HIDELITERALS
 $struct_type$ { $expr$..., $unusedcomma$? }
 
 supersimplexpr: SIMPLIFY
+$cast$
+$bitcast$
 $array_literal$
 $struct_literal$
 $parenexpr$
 $float$
 $integer$
 $rvarname$
-$cast$
-$bitcast$
 
 simplexpr: SIMPLIFY
 $intrinsic$
+$cast$
+$bitcast$
 $array_literal$
 $struct_literal$
 $rhunexpr$
@@ -103,8 +105,6 @@ $parenexpr$
 $float$
 $integer$
 $rvarname$
-$cast$
-$bitcast$
 
 expr: SIMPLIFY
 $binexpr_0$
@@ -268,16 +268,18 @@ $type$ $name$ = $expr$ ;
 
 vismodifier:
 >>? export
->>? import
-
-modifiers:
-$vismodifier$
 
 globaldeclaration: HIDELITERALS
-$modifiers$ $type$ $name$ ;
+$vismodifier$ $type$ $name$ ;
 
 globalfulldeclaration: HIDELITERALS
-$modifiers$ $type$ $name$ = $expr$ ;
+$vismodifier$ $type$ $name$ = $expr$ ;
+
+importglobal: HIDELITERALS
+import $type$ $name$ ;
+
+importfunc: HIDELITERALS
+import $type$ $name$ ( $funcdefargs$ ) ;
 
 statement: HIDELITERALS
 $instruction$
@@ -290,6 +292,8 @@ $label$
 $expr$ ;
 
 rootstatement: SIMPLIFY
+$importglobal$
+$importfunc$
 $globaldeclaration$
 $globalfulldeclaration$
 $structdef$
