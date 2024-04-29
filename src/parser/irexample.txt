@@ -9,7 +9,7 @@ struct Vec2
     f32 y;
 }
 
-import Vec2 myvec;
+using Vec2 myvec;
 
 void func_etc()
 {

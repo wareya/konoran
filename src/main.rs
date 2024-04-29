@@ -679,11 +679,11 @@ impl Program
         {
             if child.is_parent() && child.text == "importglobal"
             {
-                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "import"
+                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "import_extern"
                 {
                     Visibility::Import
                 }
-                else
+                else // "using"
                 {
                     Visibility::ImportLocal
                 };
@@ -694,7 +694,7 @@ impl Program
             }
             else if child.is_parent() && (child.text == "globaldeclaration" || child.text == "globalfulldeclaration")
             {
-                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.child(0)?.text.clone() == "export"
+                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.child(0)?.text.clone() == "export_extern"
                 {
                     Visibility::Export
                 }
@@ -702,7 +702,7 @@ impl Program
                 {
                     Visibility::Private
                 }
-                else
+                else // default
                 {
                     Visibility::Local
                 };
@@ -2089,21 +2089,38 @@ fn main()
                         // get from external module or object
                         inkwell::module::Linkage::External
                     }
+                    else if *visibility == Visibility::Export
+                    {
+                        // expose as much as possible
+                        // exact semantics are implementation-defined; may be a dll export!
+                        inkwell::module::Linkage::AvailableExternally
+                    }
                     else if *visibility == Visibility::Private
                     {
                          // do not expose to other modules
                         inkwell::module::Linkage::Internal
                     }
-                    else if *visibility == Visibility::Local
+                    else // Visibility::Local
                     {
                          // expose to other modules and objects
                         inkwell::module::Linkage::AvailableExternally
+                    };
+                    
+                    let storage_class = if *visibility == Visibility::Import
+                    {
+                        // get from anywhere possible
+                        // exact semantics are implementation-defined; may be a dll import!
+                        inkwell::DLLStorageClass::Import
                     }
-                    else // Visibility::Export
+                    else if *visibility == Visibility::Export
                     {
                         // expose as much as possible
                         // exact semantics are implementation-defined; may be a dll export!
-                        inkwell::module::Linkage::AvailableExternally
+                        inkwell::DLLStorageClass::Export
+                    }
+                    else
+                    {
+                        inkwell::DLLStorageClass::Default
                     };
                     
                     if let Some(node) = g_init
@@ -2128,6 +2145,7 @@ fn main()
                         let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
                         global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
                         global.set_linkage(linkage);
+                        global.set_dll_storage_class(storage_class);
                         env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
                         env.builder.build_return(None).unwrap();
                         
@@ -2138,6 +2156,7 @@ fn main()
                         let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
                         global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
                         global.set_linkage(linkage);
+                        global.set_dll_storage_class(storage_class);
                         global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
                     }
                 }

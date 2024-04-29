@@ -268,7 +268,7 @@ $type$ $name$ = $expr$ ;
 
 vismodifier:
 # best effort export for dlls etc
->>? export
+>>? export_extern
 # do not expose to other modules At All
 >>? private
 
@@ -279,8 +279,8 @@ globalfulldeclaration: HIDELITERALS
 $vismodifier$ $type$ $name$ = $expr$ ;
 
 importsource:
-import
-import_locally
+import_extern
+using
 
 importglobal: HIDELITERALS
 $importsource$ $type$ $name$ ;
