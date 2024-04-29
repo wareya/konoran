@@ -266,6 +266,19 @@ $type$ $name$ ;
 fulldeclaration: HIDELITERALS
 $type$ $name$ = $expr$ ;
 
+vismodifier:
+>>? export
+>>? import
+
+modifiers:
+$vismodifier$
+
+globaldeclaration: HIDELITERALS
+$modifiers$ $type$ $name$ ;
+
+globalfulldeclaration: HIDELITERALS
+$modifiers$ $type$ $name$ = $expr$ ;
+
 statement: HIDELITERALS
 $instruction$
 $statementlist$
@@ -277,6 +290,8 @@ $label$
 $expr$ ;
 
 rootstatement: SIMPLIFY
+$globaldeclaration$
+$globalfulldeclaration$
 $structdef$
 $funcdef$
 

@@ -16,7 +16,7 @@ use parser::ast::ASTNode;
 /*
 TODO list:
 - global variables
-- export and extern keywords
+- import and export keywords
 
 - implement other control flow constructs than just "if -> goto"
 - have proper scoped variable declarations, not function-level variable declarations
@@ -2144,6 +2144,8 @@ fn main()
         println!("{}() = {:?}", name, out);
         println!("time: {}", elapsed_time.as_secs_f64());
     }
+    
+    module.print_to_file("out.ir").unwrap();
 
     {
         use inkwell::targets::*;
