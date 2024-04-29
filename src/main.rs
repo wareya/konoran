@@ -15,9 +15,9 @@ use parser::ast::ASTNode;
 
 /*
 TODO list:
-- global variables
 - import and export keywords
 
+- global variable static data optimization (llvm doesn't seem to do it automatically)
 - implement other control flow constructs than just "if -> goto"
 - have proper scoped variable declarations, not function-level variable declarations
 */
@@ -554,6 +554,7 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
 struct Program
 {
     funcs : BTreeMap<String, Function>,
+    globals : BTreeMap<String, (Type, Option<ASTNode>)>,
 }
 
 fn struct_check_recursive(types : &BTreeMap<String, Type>, root_type : &Type, type_ : &Type)
@@ -605,6 +606,7 @@ impl Program
     fn new(types : &mut BTreeMap<String, Type>, ast : &ASTNode) -> Result<Program, String>
     {
         let mut funcs = BTreeMap::new();
+        let mut globals = BTreeMap::new();
         
         for child in ast.get_children()?
         {
@@ -664,7 +666,27 @@ impl Program
                 funcs.insert(name.clone(), Function { name, return_type, args, body });
             }
         }
-        Ok(Program { funcs })
+        for child in ast.get_children()?
+        {
+            if child.is_parent() && (child.text == "globaldeclaration" || child.text == "globalfulldeclaration")
+            {
+                // TODO: modifiers
+                
+                let type_ = parse_type(&types, child.child(1)?).unwrap();
+                let name = child.child(2)?.child(0)?.text.clone();
+                
+                if child.text == "globaldeclaration"
+                {
+                    globals.insert(name.clone(), (type_, None));
+                }
+                else
+                {
+                    let initializer = child.child(3)?.clone();
+                    globals.insert(name.clone(), (type_, Some(initializer)));
+                }
+            }
+        }
+        Ok(Program { funcs, globals })
     }
 }
 
@@ -1918,6 +1940,7 @@ fn main()
     //let mut func_sizes = BTreeMap::new();
     //let mut func_disasm = BTreeMap::new();
     let mut func_decs = BTreeMap::new();
+    let mut global_decs = BTreeMap::new();
     
     for (f_name, (_, funcsig)) in &imports
     {
@@ -1988,6 +2011,86 @@ fn main()
         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
         func_decs.insert(f_name.clone(), (func_val, funcsig));
     }
+    
+    println!("starting globals...");
+    for (g_name, (g_type, g_init)) in &program.globals
+    {
+        let backend_type = get_backend_type(&mut backend_types, &types, &g_type);
+        if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
+        {
+            if let Some(node) = g_init
+            {
+                let f_name = format!("__init_global_{}_asdf1g0q", g_name);
+                let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
+                let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Private));
+                
+                let block = context.append_basic_block(func_val, "entry");
+                let builder = context.create_builder();
+                builder.position_at_end(block);
+                
+                let stack = Vec::new();
+                let blocks = HashMap::new();
+                let mut env = Environment { source_text : &program_lines, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data };
+                
+                compile(&mut env, &node, WantPointer::None);
+                let (type_val, val) = env.stack.pop().unwrap();
+                assert!(type_val == *g_type);
+                
+                let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                global.set_linkage(inkwell::module::Linkage::Internal);
+                env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
+                env.builder.build_return(None).unwrap();
+                
+                global_decs.insert(g_name, (global, g_type, Some(func_val)));
+            }
+            else
+            {
+                let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                global.set_linkage(inkwell::module::Linkage::Internal);
+                global_decs.insert(g_name, (global, g_type, None));
+            }
+        }
+        else
+        {
+            panic!("internal error: tried to make global with unsized type");
+        }
+    }
+    
+    if global_decs.len() > 0
+    {
+        let f_name = format!("__init_allglobal_asdf3f6g");
+        let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
+        let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+        let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Private));
+        
+        let block = context.append_basic_block(func_val, "entry");
+        let builder = context.create_builder();
+        builder.position_at_end(block);
+        
+        for (_, (_, _, f)) in &global_decs
+        {
+            if let Some(f) = f
+            {
+                builder.build_call(*f, &Vec::new(), "").unwrap();
+                builder.build_return(None).unwrap();
+            }
+        }
+        
+        let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+        
+        let s_type = context.struct_type(&[context.i32_type().into(), ptr_type.into(), ptr_type.into()], false);
+        let a_type = s_type.array_type(1);
+        let ctors = module.add_global(a_type, Some(inkwell::AddressSpace::default()), "llvm.global_ctors");
+        ctors.set_linkage(inkwell::module::Linkage::Appending);
+        let s_val = s_type.const_named_struct(&[context.i32_type().const_int(65535, false).into(), func_val.as_global_value().as_pointer_value().into(), ptr_type.const_null().into()]);
+        let a_val = s_type.const_array(&[s_val]);
+        ctors.set_initializer(&a_val);
+        // @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @_GLOBAL__sub_I_example.cpp, ptr null }]
+
+        //"llvm.global_ctors"
+    }
+    println!("done with globals");
     
     for f in &program.funcs
     {
