@@ -62,7 +62,7 @@ Konoran is not meant to be the ultimate, or even a particularly powerful, compil
 
 However, things that are *necessary* for proper low-level programming, like volatile memory access, and pointer conjuration (i.e. hardcoded pointer values), are exposed. Also, intrinsics *are* exposed, but limited in number, and they're implementation-defined (except memcpy etc, which must be provided).
 
-Konoran's reference implementation is currently built on top of LLVM as a JIT compiles and executes a single file. However, multiple konoran modules can be linked together without issue, just like C object files. Also, I plan on implementing a pure "reference interpreter" for konoran that doesn't need to pull in LLVM to be built, and also as a demonstration of how simple the language is.
+Konoran's reference implementation is currently built on top of LLVM as a JIT compiler, and executes a single file. However, multiple konoran modules can be linked together without issue, just like C object files. Also, I plan on implementing a pure "reference interpreter" for konoran that doesn't need to pull in LLVM to be built, and also as a demonstration of how simple the language is.
 
 Konoran also aims to minimize the about of UB that it exposes, but this is fraught and not guaranteed, as low-level programming necessarily involves things that CPUs themselves can consider to trigger UB, like raw memory access. However, a best effort will be done to remove UB from things that shouldn't have UB in them, like integer arithmetic, as noticed.
 
