@@ -108,6 +108,18 @@ The following program behaviors are generally undefined and the compiler is allo
 2) Calling a function without using its name or a correctly-derived pointer to it
 3) Integer division/remainder (`/` or `%` operator) by zero (this is an oversight and will be changed in the future)
 
+Point 1 means that other code using that name is allowed to assume that it doesn't suddenly change for no reason, even if a pointer value happens to be pointing to it. For example:
+
+```rust
+u32 x = 0;
+ptr(u32) maybe_x = (randi()) as ptr(u32);
+print_float((x) as f64);
+```
+
+A compiler optimizing this code can assume that the value passed to `print_float` is `0.0f64`, even though `maybe_x` might theoretically modify the value of `x`.
+
+Point 2 means that the optimizer can remove functions that are never referenced even if code might accidentally construct the value of a function pointer that would point at that function if it hadn't been removed.
+
 ## Non-undefined behaviors
 
 Attempting to do most floating-point math operations with NaNs produces non-poison (i.e. not undefined), but otherwise unknown, values.
