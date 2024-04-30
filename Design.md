@@ -46,7 +46,7 @@ asdf:
 }
 ```
 
-The `using` keyword indicates that the variable is being declared without being defined, and can be found in another (otherwise unspecified) module. Alternatively, the `import_extern` keyword could be used; the difference between `using` and `import_extern` is implementation-defined, except that `inport_extern` must be able to find at least any keyword that `using` can find. The official recommendation is: `using` should, with best effort, try to only look for symbols in other konoran modules, or object files that are being treated as precompiled konoran modules; and `import_extern` should go as far as to try to load symbols from DLLs.
+The `using` keyword indicates that the variable is being declared without being defined, and can be found in another (otherwise unspecified) module. Alternatively, the `import_extern` keyword could be used; the difference between `using` and `import_extern` is implementation-defined, except that `import_extern` must be able to find at least any keyword that `using` can find. The official recommendation is: `using` should, with best effort, try to only look for symbols in other konoran modules, or object files that are being treated as precompiled konoran modules; and `import_extern` should go as far as to try to load symbols from DLLs.
 
 The `export_extern` keyword indicates that the function is being exported to wherever it can possibly be exported to, e.g. a JIT runtime's visible symbol table, or the list of symbols that a DLL exports. However, its exact semantics are implementation-defined.
 
