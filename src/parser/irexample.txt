@@ -19,5 +19,9 @@ export_extern void func_etc()
     if (&x)
         goto asdf;
 asdf:
+    print_float(1.0f64/0.0f64);
+    print_float(1.0f64/-0.0f64);
+    print_float(1.0f64%0.0f64);
+    print_float(1.0f64%-0.0f64);
     return;
 }

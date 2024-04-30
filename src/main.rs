@@ -921,6 +921,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
             }
             "unusedcomma" => {},
+            // FIXME: does returning from the middle of a function, in a branch, work? Maybe if it's followed by a label?
             "return" =>
             {
                 let mut returns = Vec::new();

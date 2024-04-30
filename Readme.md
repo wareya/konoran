@@ -50,6 +50,7 @@ Differences from C:
 5) Struct types are in the same situation as functions, pre-declarations are not needed
 6) No pre-declarations at all anywhere; the only non-defining declarations are imports from other modules
 7) No expression type analysis pass; functions can be compiled with recursive descent (on the AST) without looking ahead
+8) No "platform-defined" type sizes; f32, f64, i8, i16, etc. encode their exact bit count precisely, and there's no generic "int" type.
 
 Some things that are probably subject to change:
 
