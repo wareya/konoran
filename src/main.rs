@@ -1934,9 +1934,12 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
 
 const VERBOSE : bool = false;
 
-fn main()
+fn run_program(modules : Vec<String>, _args : Vec<String>)
 {
-    println!("startup...");
+    if VERBOSE
+    {
+        println!("startup...");
+    }
     
     let start = std::time::Instant::now();
     let context = inkwell::context::Context::create();
@@ -2020,7 +2023,10 @@ fn main()
     }
     import_function::<unsafe extern "C" fn(f64) -> ()>(&types, &mut parser, &mut imports, "print_float", print_float, print_float as usize, "funcptr(void, (f64))");
     
-    println!("startup done! time: {}", start.elapsed().as_secs_f64());
+    if VERBOSE
+    {
+        println!("startup done! time: {}", start.elapsed().as_secs_f64());
+    }
     
     let context = Context::create();
     
@@ -2034,14 +2040,20 @@ fn main()
         ($fname:expr) =>
         {{
             use std::fs;
-            println!("loading {}...", $fname);
+            if VERBOSE
+            {
+                println!("loading {}...", $fname);
+            }
             let program_text = fs::read_to_string($fname).unwrap();
             let program_lines : Vec<String> = program_text.lines().map(|x| x.to_string()).collect();
             let tokens = parser.tokenize(&program_lines, true).unwrap();
             let ast = parser.parse_program(&tokens, &program_lines, true).unwrap().unwrap();
             
             let start = std::time::Instant::now();
-            println!("compiling...");
+            if VERBOSE
+            {
+                println!("compiling {}...", $fname);
+            }
             
             //let mut builder = JITBuilder::with_flags(&settings, cranelift_module::default_libcall_names()).unwrap();
             //for (f_name, (pointer, funcsig)) in &imports
@@ -2051,8 +2063,6 @@ fn main()
             
             let module = context.create_module("main");
             let program = Program::new(&mut types, &ast).unwrap();
-            
-            println!("initialized program...");
             
             if executor.is_none()
             {
@@ -2075,8 +2085,6 @@ fn main()
             {
                 executor.as_ref().unwrap().add_module(&module).unwrap();
             }
-            println!("initialized executor...");
-            
             let target_data = executor.as_ref().unwrap().get_target_data();
             
             let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
@@ -2092,8 +2100,6 @@ fn main()
             ];
             
             let mut intrinsic_decs = BTreeMap::new();
-            
-            println!("doing imports...");
             
             for (name, llvm_name, type_name) in intrinsic_imports
             {
@@ -2117,17 +2123,13 @@ fn main()
                 }
             }
             
-            println!("compile time: {}", start.elapsed().as_secs_f64());
-            
             if VERBOSE
             {
+                println!("compile time: {}", start.elapsed().as_secs_f64());
                 println!("module:\n{}", module.to_string());
                 println!("adding global mappings...");
+                println!("executor build time: {}", start.elapsed().as_secs_f64());
             }
-            
-            //let opt_level = inkwell::OptimizationLevel::None;
-            
-            println!("executor build time: {}", start.elapsed().as_secs_f64());
             
             for (f_name, (function, visibility)) in &program.funcs
             {
@@ -2196,7 +2198,6 @@ fn main()
                 func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
             }
             
-            println!("starting globals...");
             for g_name in &program.globals_order
             {
                 let (g_type, g_init, visibility) = program.globals.get(g_name).unwrap();
@@ -2314,7 +2315,6 @@ fn main()
 
                 //"llvm.global_ctors"
             }
-            println!("done with globals");
             
             for f in &program.funcs
             {
@@ -2435,15 +2435,24 @@ fn main()
         }};
     }
     
-    let module = load_module!("src/parser/irexample.txt");
-    let module2 = load_module!("src/parser/irexample_other.txt");
+    let mut loaded_modules = Vec::new();
+    for arg in &modules
+    {
+        loaded_modules.push(load_module!(arg));
+    }
     
-    module.print_to_file("out_unopt.ll").unwrap();
-    module2.print_to_file("out_2_unopt.ll").unwrap();
+    //let module = load_module!("src/parser/irexample.txt");
+    //let module2 = load_module!("src/parser/irexample_other.txt");
+    
+    //module.print_to_file("out_unopt.ll").unwrap();
+    //module2.print_to_file("out_2_unopt.ll").unwrap();
     
     let executor = executor.unwrap();
     
-    println!("compilation time: {}", start.elapsed().as_secs_f64());
+    if VERBOSE
+    {
+        println!("compilation time: {}", start.elapsed().as_secs_f64());
+    }
     
     //println!("features: {}", inkwell::targets::TargetMachine::get_host_cpu_features());
     
@@ -2464,7 +2473,10 @@ fn main()
         
         pass_manager
     };
-    println!("pass manager build time: {}", start.elapsed().as_secs_f64());
+    if VERBOSE
+    {
+        println!("pass manager build time: {}", start.elapsed().as_secs_f64());
+    }
     
     
     let start = std::time::Instant::now();
@@ -2472,17 +2484,15 @@ fn main()
     {
         println!("doing IR optimizations...");
     }
-    pass_manager.run_on(&module);
-    pass_manager.run_on(&module2);
-    
-    println!("done doing IR optimizations. time: {}", start.elapsed().as_secs_f64());
-    if VERBOSE
+    for module in &loaded_modules
     {
-        println!("module after doing IR optimizations:\n{}", module.to_string());
+        pass_manager.run_on(&module);
     }
     
-    module.print_to_file("out.ll").unwrap();
-    module2.print_to_file("out_2.ll").unwrap();
+    println!("done doing IR optimizations. time: {}", start.elapsed().as_secs_f64());
+    
+    //module.print_to_file("out.ll").unwrap();
+    //module2.print_to_file("out_2.ll").unwrap();
     
     println!("running static constructors...");
     executor.run_static_constructors();
@@ -2493,7 +2503,12 @@ fn main()
         ($name:expr, $T:ty) =>
         {
             {
-                let dec = func_decs.get(&$name.to_string()).unwrap();
+                let dec = func_decs.get(&$name.to_string());
+                if dec.is_none()
+                {
+                    panic!("error: no `{}` function", $name);
+                }
+                let dec = dec.unwrap();
                 let type_string = dec.1.to_string_rusttype();
                 
                 let want_type_string = std::any::type_name::<$T>(); // FIXME: not guaranteed to be stable across rust versions
@@ -2507,18 +2522,25 @@ fn main()
     
     unsafe
     {
-        let name = "func_etc";
+        let name = "main";
         let f = get_func!(name, unsafe extern "C" fn() -> ());
         
         let start = std::time::Instant::now();
-        println!("running {}...", name);
+        if VERBOSE
+        {
+            println!("running {}...", name);
+        }
         let out = f.call();
         let elapsed_time = start.elapsed();
         
-        println!("{}() = {:?}", name, out);
-        println!("time: {}", elapsed_time.as_secs_f64());
+        if VERBOSE
+        {
+            println!("{}() = {:?}", name, out);
+            println!("time: {}", elapsed_time.as_secs_f64());
+        }
     }
 
+    /*
     {
         use inkwell::targets::*;
 
@@ -2540,6 +2562,45 @@ fn main()
 
         machine.write_to_file(&module, FileType::Assembly, "out.asm".as_ref()).unwrap();
     }
+    */
     
     executor.run_static_destructors();
+}
+
+use std::env;
+fn main()
+{
+    let mut modules = Vec::new();
+    let mut args = Vec::new();
+    let mut mode = "";
+    for arg in env::args().skip(1)
+    {
+        if mode == "-i" || (mode == "" && !arg.starts_with("-"))
+        {
+            modules.push(arg);
+            mode = "";
+        }
+        else if mode == "--"
+        {
+            args.push(arg);
+        }
+        else
+        {
+            match arg.as_str()
+            {
+                "-i" => mode = "-i",
+                "--" => mode = "--",
+                _ => panic!("unknown argument `{}`", arg),
+            }
+        }
+    }
+    if modules.len() == 0
+    {
+        println!("Usage:");
+        println!("konoran <source_file> -- <arguments>");
+    }
+    else
+    {
+        run_program(modules, args);
+    }
 }

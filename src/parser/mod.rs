@@ -288,6 +288,13 @@ impl Parser {
                         break;
                     }
                 }
+                if let Some(signal) = line.get(offset..offset+1)
+                {
+                    if signal == "#"
+                    {
+                        break;
+                    }
+                }
                 if in_multiline_comment
                 {
                     offset += 1;

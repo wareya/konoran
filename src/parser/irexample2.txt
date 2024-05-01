@@ -108,7 +108,7 @@ head:
     if (i < 500000000u64)
         goto head;
     
-    return (y as f32);
+    return (y) as f32;
 }
 
 void returns_void(f32 a)
@@ -128,9 +128,9 @@ void void_ptr_arg(ptr(void) a)
 void array_literal()
 {
     array(u8, 10) funtime = [16u8, 201u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8];
-    print_bytes(((&funtime) bit_as ptr(u8)), 10u64);
+    print_bytes((&funtime) bit_as ptr(u8), 10u64);
     funtime = [61u8, 1u8, 0u8, 0u8, 0u8, 1u8, 2u8, 3u8, 0u8, 42u8];
-    print_bytes(((&funtime) bit_as ptr(u8)), 10u64);
+    print_bytes((&funtime) bit_as ptr(u8), 10u64);
     return;
 }
 void print_garbage()
@@ -154,7 +154,7 @@ void print_garbage()
     garbage[14i64] = 85u8;
     garbage[15i64] = 1u8;
     
-    print_bytes(((&garbage) bit_as ptr(u8)), 16u64);
+    print_bytes((&garbage) bit_as ptr(u8), 16u64);
     
     u8 a;
     i32 r;
@@ -401,52 +401,52 @@ void func_etc()
     
     u8 a = 10u8;
     u8 b = 192u8;
-    print_float(((b % a) as f64));
+    print_float((b % a) as f64);
     
     i8 a2 = -10i8;
     i8 b2 = -112i8;
-    print_float(((b2 % a2) as f64));
+    print_float((b2 % a2) as f64);
     
     f32 a3 = -10.0f32;
     f32 b3 = 192.1f32;
-    print_float(((b3 % a3) as f64));
+    print_float((b3 % a3) as f64);
     
-    f64 asdfj = ((*@&(asdf.data)) as f64);
+    f64 asdfj = (*@&(asdf.data)) as f64;
     *@&asdfj = 0.5263f64;
     print_float(asdfj);
     
     i64 zxcv = 0x85148113i64;
-    u8 z = (zxcv as u8);
+    u8 z = (zxcv) as u8;
     
-    print_float((z as f64));
+    print_float((z) as f64);
     
     z = ~z;
     z = -z;
     z = +z;
     
-    print_float((z as f64));
+    print_float((z) as f64);
     
     z = !z;
     
-    print_float((z as f64));
+    print_float((z) as f64);
     
     print_float(3.14159f64);
     
     z = !!&z;
     
-    print_float((z as f64));
+    print_float((z) as f64);
     
     z = !&z;
     
-    print_float((z as f64));
+    print_float((z) as f64);
     
-    print_float((add(5.952f32, 2.822f32) as f64));
+    print_float((add(5.952f32, 2.822f32)) as f64);
     
     intrinsic memset(&z, 1u8, 1u64);
-    print_float((z as f64));
+    print_float((z) as f64);
     
     intrinsic memset(&z, 16u8, 1u64);
-    print_float((z as f64));
+    print_float((z) as f64);
     
     return;
 }
@@ -477,3 +477,10 @@ struct triply_invalid_type_c {
     triply_invalid_type_a next;
 }
 */
+
+export_extern void main()
+{
+    func_etc();
+    nbody_bench();
+    return;
+}

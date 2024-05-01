@@ -11,7 +11,7 @@ struct Vec2
 
 using Vec2 myvec;
 
-export_extern void func_etc()
+void func_etc()
 {
     print_float((myvec.x) as f64);
     print_float((*@&myvec.x) as f64);
@@ -23,5 +23,11 @@ asdf:
     print_float(1.0f64/-0.0f64);
     print_float(1.0f64%0.0f64);
     print_float(1.0f64%-0.0f64);
+    return;
+}
+
+export_extern void main()
+{
+    func_etc();
     return;
 }
