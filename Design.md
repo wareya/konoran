@@ -108,7 +108,7 @@ The following program behaviors are generally undefined and the compiler is allo
 2) Calling a function without using its name or a correctly-derived pointer to it
 3) Integer division/remainder (`/` or `%` operator) by zero (this is an oversight and will be changed in the future)
 
-Point 1 means that other code using that name is allowed to assume that it doesn't suddenly change for no reason, even if a pointer value happens to be pointing to it. For example:
+Point 1 means that other code using that name is allowed to assume that it doesn't suddenly change for no reason, even if an incorrectly-derived pointer value might be pointing to it. For example:
 
 ```rust
 u32 x = 0;
