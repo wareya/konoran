@@ -123,6 +123,8 @@ Importantly, point 1 does not make it instant UB to access/modify data via conju
 
 Point 2 means that the optimizer can remove functions that are never referenced even if code might accidentally construct the value of a function pointer that would point at that function if it hadn't been removed. The same is true of point 1 and variables.
 
+The implementation is allowed to specify anything that it wants involving threads, OS access, etc. as UB; in particular, it's OK for an implementation to define it to be UB to read and write to a memory location from two threads without using a synchronization primitive or memory fence, but it's not OK for an implementation to define simple single-threaded code that never "leaves" konoran as containing UB that is not specified here.
+
 ## Non-undefined behaviors
 
 Attempting to do most floating-point math operations with NaNs produces non-poison (i.e. not undefined), but otherwise unknown, values.
