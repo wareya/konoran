@@ -54,6 +54,17 @@ Global variables and functions are visible to other modules by default. On a bes
 
 To make global variables and functions only visible to the current module, the user can mark them with the `private` keyword, which is basically the opposite of the `export_extern` keyword; functions and global variables marked with `private` must not be conventionally exposed to the outside of the module anywhere, under any circumstances (except for debugging purposes etc), and in particular it must not create any errors or warnings if you try to link together two modules that have private symbols with the same names.
 
+To summarize the visibility modifiers for definitions:
+
+- `export_extern` - export to anywhere possible, possibly even as a DLL export, but also to other modules
+- `<no modifier>` - export to other modules
+- `private` - only expose to current module, do not allow other modules to find
+
+And for pure declarations without definition:
+
+- `using` - find symbol in other modules
+- `import_extern` - find symbol from anywhere possible, possibly even from DLLs, but also from other modules
+
 Global variables can have static initializers (i.e. definitions). These initializers are executed from top to bottom when the program is initialized or run. Optimizing simple initializers into static data is highly encouraged, and is allowed even when initializers contain function calls. If an initializer has side effects, it must be run exactly once, and cannot be reordered against other initializers. Initializers may only access variables that were previously initialized; directly accessing such other variables (or the currently-being-initialized variable) is illegal, and indirectly accessing such other variables through a call to a function that accesses them is undefined behavior.
 
 Global variables and functions that are imported from other modules with `using` or `import_extern` cannot have initializers or definitions.
