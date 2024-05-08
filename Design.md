@@ -121,9 +121,11 @@ The above program contains undefined behavior if randi() is capable of producing
 
 Importantly, point 1 does not make it instant UB to access/modify data via conjured pointers. The optimizer is merely allowed to assume that accesses via conjured pointers do not modify named variables. Arbitrary memory and heap memory are assumed to be disjoint from "variables".
 
-Point 2 means that the optimizer can remove functions that are never referenced even if code might accidentally construct the value of a function pointer that would point at that function if it hadn't been removed. The same is true of point 1 and variables.
+Point 2 means that the optimizer can remove functions that are never referenced even if code might accidentally construct the value of a function pointer that would point at that function if it hadn't been removed. The same is true of point 1 and variables. However, this does not apply to `export_extern`'d global variables or functions.
 
-The implementation is allowed to specify anything that it wants involving threads, OS access, etc. as UB; in particular, it's OK for an implementation to define it to be UB to read and write to a memory location from two threads without using a synchronization primitive or memory fence, but it's not OK for an implementation to define simple single-threaded code that never "leaves" konoran as containing UB that is not specified here.
+Implementations are allowed to specify anything that it wants involving threads, OS access, etc. as UB; in particular, it's OK for an implementation to define it to be UB to read and write to a memory location from two threads without using a synchronization primitive or memory fence, but it's not OK for an implementation to define simple single-threaded code that never "leaves" konoran as containing UB that is not specified here.
+
+Implementations are allowed to specify things as being defined even if they're specified as UB here. For example, implementations are allowed to specify that it's not UB for a variable's value to magically change when a memory fence or thread synchronization operation is somehow performed.
 
 Implementations are allowed to specify unaligned memory accesses as UB, but this is disouraged and it's strongly recommended that they specify them as implementation-defined instead.
 
