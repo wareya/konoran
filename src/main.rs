@@ -15,6 +15,17 @@ use parser::ast::ASTNode;
 
 /*
 TODO list:
+- strings (u8 array syntax sugar)
+- const literals
+- varargs (for printf mainly)
+- standard io functions
+- fix early return
+
+- division/mod UB fix
+- float cast overflow fix
+- make pointer casts use inttoptr/ptrtoint
+- sizeof operator (no parens)
+
 - implement other control flow constructs than just "if -> goto"
 - have proper scoped variable declarations, not function-level variable declarations
 */
@@ -619,7 +630,7 @@ impl Program
         let mut globals = BTreeMap::new();
         let mut globals_order = Vec::new();
         
-        println!("starting struct defs...");
+        //println!("starting struct defs...");
         for child in ast.get_children()?
         {
             if child.is_parent() && child.text == "structdef"
@@ -657,12 +668,12 @@ impl Program
             }
         }
         
-        println!("starting func defs...");
+        //println!("starting func defs...");
         for child in ast.get_children()?
         {
             if child.is_parent() && child.text == "importfunc"
             {
-                println!("import func");
+                //println!("import func");
                 let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "import_extern"
                 {
                     Visibility::Import
@@ -688,7 +699,7 @@ impl Program
             }
             if child.is_parent() && child.text == "funcdef"
             {
-                println!("func def");
+                //println!("func def");
                 let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "export_extern"
                 {
                     Visibility::Export
@@ -720,7 +731,7 @@ impl Program
             }
         }
         
-        println!("starting global defs...");
+        //println!("starting global defs...");
         for child in ast.get_children()?
         {
             if child.is_parent() && child.text == "importglobal"
@@ -1212,7 +1223,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     
                     //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
-                    let callval = env.builder.build_call(*funcaddr, &args, "").unwrap();
+                    let callval = env.builder.build_direct_call(*funcaddr, &args, "").unwrap();
                     let result = callval.try_as_basic_value().left();
                     //println!("number of results {}", results.len());
                     for (result, type_) in result.iter().zip([&funcsig.return_type])
@@ -1635,6 +1646,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let (left_size, right_size) = (store_size_of_type(&env.target_data, env.backend_types, env.types, &left_type), store_size_of_type(&env.target_data, env.backend_types, env.types, &right_type));
                 let ptr_size = env.target_data.get_store_size(&env.ptr_int_type);
                 
+                // FIXME fix pointer type casts (currently emitted wrong)
                 let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &right_type);
                 if left_size == right_size || (right_size == ptr_size && left_type.is_composite())
                 {
@@ -1666,7 +1678,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     env.stack.push((right_type, left_val));
                 }
-                // cast between float types"
+                // cast between different float types
                 else if (left_type.name == "f32" && right_type.name == "f64") || (left_type.name == "f64" && right_type.name == "f32")
                 {
                     if let (Ok(left_val), Ok(float_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::FloatType::try_from(right_backend_type))
@@ -1682,7 +1694,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 // cast between types of same size, non-float. bitcast.
                 else if !left_type.is_float() && !right_type.is_float() && left_basic_type.size_of() == right_basic_type.size_of() && right_basic_type.is_sized()
                 {
-                    // TODO double check that this is right
+                    // FIXME fix pointer type casts (currently emitted wrong)
                     let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
                     env.stack.push((right_type, ret));
                 }
@@ -2489,14 +2501,24 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         pass_manager.run_on(&module);
     }
     
-    println!("done doing IR optimizations. time: {}", start.elapsed().as_secs_f64());
+    if VERBOSE
+    {
+        println!("done doing IR optimizations. time: {}", start.elapsed().as_secs_f64());
+    }
     
     //module.print_to_file("out.ll").unwrap();
     //module2.print_to_file("out_2.ll").unwrap();
     
-    println!("running static constructors...");
+    if VERBOSE
+    {
+        println!("running static constructors...");
+    }
     executor.run_static_constructors();
-    println!("ran static constructors.");
+    
+    if VERBOSE
+    {
+        println!("ran static constructors.");
+    }
     
     macro_rules! get_func
     {
