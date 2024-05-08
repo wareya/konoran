@@ -125,6 +125,8 @@ Point 2 means that the optimizer can remove functions that are never referenced 
 
 The implementation is allowed to specify anything that it wants involving threads, OS access, etc. as UB; in particular, it's OK for an implementation to define it to be UB to read and write to a memory location from two threads without using a synchronization primitive or memory fence, but it's not OK for an implementation to define simple single-threaded code that never "leaves" konoran as containing UB that is not specified here.
 
+Implementations are allowed to specify unaligned memory accesses as UB, but this is disouraged and it's strongly recommended that they specify them as implementation-defined instead.
+
 ## Non-undefined behaviors
 
 Attempting to do most floating-point math operations with NaNs produces non-poison (i.e. not undefined), but otherwise unknown, values.
@@ -135,6 +137,9 @@ Integer division by zero with the `/` operator (or remainder calculation against
 
 Accessing arbitrary memory locations via conjured pointers is allowed. The result is implementation-defined rather than undefined.
 
-Having a value change between consecutive *volatile* accesses is allowed, i.e. the compiler cannot change the order or number of volatile operations or what addresses they operate on.
+Accessing variables via a pointer to a different type is allowed; for example, accessing a `f32` via a `ptr(u16)` pointing at the first or third byte of the `f32` is allowed.
 
-Volatile operations are allowed to have arbitrary implementation-defined side effects. Volatile writes to a correctly-derived pointer cannot be optimized away, and volatile reads from a correctly-derived pointer must assume that the value may have magically changed since the last time it was accessed.
+Having a value change between consecutive *volatile* accesses is allowed, i.e. the compiler cannot change the order or number of volatile operations or what addresses they operate on. In particular, volatile writes to even a correctly-derived pointer cannot be optimized away (even if the variable the pointer points at is never used again), and volatile reads from even a correctly-derived pointer must assume that the value may have magically changed since the last time it was accessed (even if it has not been accessed).
+
+Volatile memory acceses must be treated as though they have (non-UB-producing) side effects. In particular, optimizations must not change volatile memory accesses in order, number, or address. Implementations are allowed to specify arbitrary side-effects for volatile memory accesses. Volatile memory accesses are not assumed to modify variables or memory that they do not point at, but implementations are allowed to define situations where they do.
+
