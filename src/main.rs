@@ -15,17 +15,22 @@ use parser::ast::ASTNode;
 
 /*
 TODO list:
-- strings (u8 array syntax sugar)
-- const literals
-- varargs (for printf mainly)
-- standard io functions
-- fix early return
-
+high:
 - division/mod UB fix
 - float cast overflow fix
 - make pointer casts use inttoptr/ptrtoint
-- sizeof operator (no parens)
+- fix early return
 
+mid:
+- varargs (for printf mainly)
+- sizeof operator (no parens)
+- const literals
+- strings (const u8 array syntax sugar)
+
+low:
+- standard io functions
+
+maybe:
 - implement other control flow constructs than just "if -> goto"
 - have proper scoped variable declarations, not function-level variable declarations
 */
@@ -2309,7 +2314,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 {
                     if let Some(f) = f
                     {
-                        builder.build_call(*f, &Vec::new(), "").unwrap();
+                        builder.build_direct_call(*f, &Vec::new(), "").unwrap();
                     }
                 }
                 builder.build_return(None).unwrap();
