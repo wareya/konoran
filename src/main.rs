@@ -16,7 +16,6 @@ use parser::ast::ASTNode;
 /*
 TODO list:
 high:
-- division/mod UB fix
 - float cast overflow fix
 - make pointer casts use inttoptr/ptrtoint
 - add +, -, and & (mask) operators to pointers (left side must be ptr, right side must be u64)
@@ -1895,14 +1894,14 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                     }.unwrap();
                                     env.stack.push((left_type.clone(), res.into()));
                                 }
-                                "+" | "-" | "*" | "/" | "%" =>
+                                "+" | "-" | "*" | "div_unsafe" | "rem_unsafe" =>
                                 {
                                     let res = match op.as_str()
                                     {
                                         "+" => env.builder.build_int_add(left_val, right_val, ""),
                                         "-" => env.builder.build_int_sub(left_val, right_val, ""),
                                         "*" => env.builder.build_int_mul(left_val, right_val, ""),
-                                        "/" => if is_u
+                                        "div_unsafe" => if is_u
                                         {
                                             env.builder.build_int_unsigned_div(left_val, right_val, "")
                                         }
@@ -1910,7 +1909,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         {
                                             env.builder.build_int_signed_div(left_val, right_val, "")
                                         },
-                                        "%" => if is_u
+                                        "rem_unsafe" => if is_u
                                         {
                                             env.builder.build_int_unsigned_rem(left_val, right_val, "")
                                         }
@@ -1922,7 +1921,40 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                     }.unwrap();
                                     env.stack.push((left_type.clone(), res.into()));
                                 }
-                                
+                                "/" | "%" =>
+                                {
+                                    let then_block = env.context.append_basic_block(env.func_val, "");
+                                    let else_block = env.context.append_basic_block(env.func_val, "");
+                                    let out_block = env.context.append_basic_block(env.func_val, "");
+                                    
+                                    let zero = left_val.get_type().const_int(0, true);
+                                    let temp_slot = env.builder.build_alloca(left_val.get_type(), "").unwrap();
+                                    
+                                    let comp_val = env.builder.build_int_compare(inkwell::IntPredicate::EQ, left_val, zero, "").unwrap();
+                                    env.builder.build_conditional_branch(comp_val, then_block, else_block).unwrap();
+                                    
+                                    env.builder.position_at_end(then_block);
+                                    env.builder.build_store(temp_slot, zero).unwrap();
+                                    
+                                    env.builder.build_unconditional_branch(out_block).unwrap();
+                                    env.builder.position_at_end(else_block);
+                                    
+                                    let res = match (op.as_str(), is_u)
+                                    {
+                                        ("/",  true) => env.builder.build_int_unsigned_div(left_val, right_val, ""),
+                                        ("/", false) => env.builder.build_int_signed_div(left_val, right_val, ""),
+                                        ("%",  true) => env.builder.build_int_unsigned_rem(left_val, right_val, ""),
+                                        ("%", false) => env.builder.build_int_signed_rem(left_val, right_val, ""),
+                                        _ => panic_error!("internal error: div/rem operator mismatch"),
+                                    }.unwrap();
+                                    env.builder.build_store(temp_slot, res).unwrap();
+                                    
+                                    env.builder.build_unconditional_branch(out_block).unwrap();
+                                    env.builder.position_at_end(out_block);
+                                    
+                                    let res = env.builder.build_load(left_val.get_type(), temp_slot, "").unwrap();
+                                    env.stack.push((left_type.clone(), res.into()));
+                                }
                                 ">" | "<" | ">=" | "<=" | "==" | "!=" =>
                                 {
                                     let op = match op.as_str()

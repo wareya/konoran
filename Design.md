@@ -145,15 +145,14 @@ The following things are currently UB, but they are oversights and will be made 
 
 1) Overflowing floating-point casts (they will be changed to saturate, with an unsafe_cast alternative)
 2) NaN floating-point casts to integer (they will be changed to produce 0, with an unsafe_cast alternative)
-3) Integer division/remainder (`/` or `%` operator) by zero (this is an oversight and will be changed in the future, with an unsafe_div alternative)
 
 ## Non-undefined behaviors
 
 Attempting to do most floating-point math operations with NaNs produces non-poison (i.e. not undefined), but otherwise unknown, values.
 
-Floating-point division by zero with the `/` operator produces signed infinity. Floating-point remainder by zero with the `%` operator produces either NaN or zero.
+Floating-point division by zero with the `/` operator produces signed infinity. Floating-point remainder by zero with the `%` operator produces either NaN or zero (preferably zero).
 
-Integer division by zero with the `/` operator (or remainder calculation against zero with the `%` operator) produces an undefined/poison value, but this is subject to change and will produce a branch to avoid the UB in the future. When this is done, non-branching UB-generating alternative versions will be added, probably `unsafe_div` and `unsafe_rem`.
+Integer division by zero with the `/` operator (or integer remainder calculation against zero with the `%` operator) produces zero, not an undefined/poison value.
 
 Accessing arbitrary memory locations via conjured pointers is allowed. The result is implementation-defined rather than undefined.
 

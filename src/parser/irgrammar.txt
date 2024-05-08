@@ -167,7 +167,9 @@ binop_3:
 binop_4:
 *
 /
+div_unsafe
 %
+rem_unsafe
 
 arglist: EMBED
 $expr$...,
