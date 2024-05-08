@@ -113,10 +113,13 @@ Point 1 means that other code using that name is allowed to assume that it doesn
 ```rust
 u32 x = 0;
 ptr(u32) maybe_x = (randi()) as ptr(u32);
+*maybe_x = 16u32;
 print_float((x) as f64);
 ```
 
-A compiler optimizing this code can assume that the value passed to `print_float` is `0.0f64`, even though `maybe_x` might theoretically modify the value of `x`.
+The above program contains undefined behavior if randi() is capable of producing a value matching the address of the x variable. As such, a compiler optimizing this code is allowed to assume that the value passed to print_float() remains 0.0f64, even if *maybe_x is written to in the meantime, because even if maybe_x points to x, it was not correctly derived.
+
+Importantly, point 1 does not make it instant UB to access/modify data via conjured pointers. The optimizer is merely allowed to assume that accesses via conjured pointers do not modify named variables.
 
 Point 2 means that the optimizer can remove functions that are never referenced even if code might accidentally construct the value of a function pointer that would point at that function if it hadn't been removed.
 
@@ -128,8 +131,8 @@ Floating-point division by zero with the `/` operator produces signed infinity. 
 
 Integer division by zero with the `/` operator (or remainder calculation against zero with the `%` operator) produces an undefined/poison value, but this is subject to change and will produce a branch to avoid the UB in the future. When this is done, non-branching UB-generating alternative versions will be added, probably `unsafe_div` and `unsafe_rem`.
 
-Accessing arbitrary memory locations via pointers is allowed. The result is implementation-defined rather than undefined.
+Accessing arbitrary memory locations via conjured pointers is allowed. The result is implementation-defined rather than undefined.
 
 Having a value change between consecutive *volatile* accesses is allowed, i.e. the compiler cannot change the order or number of volatile operations or what addresses they operate on.
 
-Volatile operations are allowed to have arbitrary implementation-defined side effects.
+Volatile operations are allowed to have arbitrary implementation-defined side effects. Volatile writes to a correctly-derived pointer cannot be optimized away, and volatile reads from a correctly-derived pointer must assume that the value may have magically changed since the last time it was accessed.
