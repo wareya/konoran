@@ -106,7 +106,6 @@ The following program behaviors are generally undefined and the compiler is allo
 
 1) Accessing a variable without using its name or a correctly-derived pointer to it
 2) Calling a function without using its name or a correctly-derived pointer to it
-3) Integer division/remainder (`/` or `%` operator) by zero (this is an oversight and will be changed in the future)
 
 Point 1 means that other code using that name is allowed to assume that it doesn't suddenly change for no reason, even if an incorrectly-derived pointer value might be pointing to it. For example:
 
@@ -127,7 +126,15 @@ The implementation is allowed to define new UB in situations where threads, OS a
 
 Implementations are allowed to specify things as being defined even if they're specified as UB here. For example, implementations are allowed to specify that it's not UB for a variable's value to magically change when a memory fence or thread synchronization operation is somehow performed.
 
-Implementations are allowed to specify unaligned memory accesses as UB, but this is disouraged and it's strongly recommended that they specify them as implementation-defined instead.
+Implementations are allowed to specify unaligned memory accesses as UB, but this is discouraged and it's strongly recommended that they specify them as implementation-defined instead.
+
+## Unwanted UB / UB oversights
+
+The following things are currently UB, but they are oversights and will be made non-UB in the future:
+
+1) Overflowing floating-point casts (they will be changed to saturate, with an unsafe_cast alternative)
+2) NaN floating-point casts to integer (they will be changed to produce 0, with an unsafe_cast alternative)
+3) Integer division/remainder (`/` or `%` operator) by zero (this is an oversight and will be changed in the future, with an unsafe_div alternative)
 
 ## Non-undefined behaviors
 
