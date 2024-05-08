@@ -119,7 +119,7 @@ print_float((x) as f64);
 
 The above program contains undefined behavior if randi() is capable of producing a value matching the address of the x variable. As such, a compiler optimizing this code is allowed to assume that the value passed to print_float() remains 0.0f64, even if *maybe_x is written to in the meantime, because even if maybe_x points to x, it was not correctly derived.
 
-Importantly, point 1 does not make it instant UB to access/modify data via conjured pointers. The optimizer is merely allowed to assume that accesses via conjured pointers do not modify named variables.
+Importantly, point 1 does not make it instant UB to access/modify data via conjured pointers. The optimizer is merely allowed to assume that accesses via conjured pointers do not modify named variables. Arbitrary memory and heap memory are assumed to be disjoint from "variables".
 
 Point 2 means that the optimizer can remove functions that are never referenced even if code might accidentally construct the value of a function pointer that would point at that function if it hadn't been removed. The same is true of point 1 and variables.
 
