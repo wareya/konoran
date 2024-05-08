@@ -482,5 +482,8 @@ export_extern void main()
 {
     func_etc();
     nbody_bench();
+    // early return test (must not crash)
+    return;
+    print_float(0.0f64);
     return;
 }

@@ -19,7 +19,7 @@ high:
 - division/mod UB fix
 - float cast overflow fix
 - make pointer casts use inttoptr/ptrtoint
-- fix early return
+- add +, -, and & (mask) operators to pointers (left side must be ptr, right side must be u64)
 
 mid:
 - varargs (for printf mainly)
@@ -809,6 +809,7 @@ struct Environment<'a, 'b, 'c, 'e, 'f>
     target_data    : &'f inkwell::targets::TargetData,
     
     return_type    : Option<Type>,
+    just_returned  : bool,
 }
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -909,6 +910,15 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
     }
     if node.is_parent()
     {
+        if env.just_returned
+        {
+            // returns can only happen at the very end of a block
+            // and the end of a block can only have one flow control mechanism
+            // (so we can't explicitly jump to this new anonymous block we're making; it's dead code)
+            let block = env.context.append_basic_block(env.func_val, "");
+            env.builder.position_at_end(block);
+            env.just_returned = false;
+        }
         match node.text.as_str()
         {
             "funcbody" =>
@@ -937,7 +947,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
             }
             "unusedcomma" => {},
-            // FIXME: does returning from the middle of a function, in a branch, work? Maybe if it's followed by a label?
             "return" =>
             {
                 let mut returns = Vec::new();
@@ -963,6 +972,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     env.builder.build_return(None).unwrap();
                 }
+                env.just_returned = true;
             }
             "declaration" =>
             {
@@ -2269,7 +2279,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { source_text : &program_lines, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : None };
+                        let mut env = Environment { source_text : &program_lines, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : None, just_returned : false };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -2440,7 +2450,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 });
                 
                 let stack = Vec::new();
-                let mut env = Environment { source_text : &program_lines, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : Some(function.return_type.clone()) };
+                let mut env = Environment { source_text : &program_lines, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : Some(function.return_type.clone()), just_returned : false };
                 
                 //println!("\n\ncompiling function {}...", function.name);
                 //println!("{}", function.body.pretty_debug());
