@@ -804,7 +804,7 @@ struct Environment<'a, 'b, 'c, 'e, 'f>
     function_types : &'a mut BTreeMap<String, inkwell::types::FunctionType<'c>>,
     func_val       : inkwell::values::FunctionValue<'c>,
     blocks         : HashMap<String, inkwell::basic_block::BasicBlock<'c>>,
-    ptr_int_type   : inkwell::types::IntType<'c>,
+    //ptr_int_type   : inkwell::types::IntType<'c>,
     target_data    : &'f inkwell::targets::TargetData,
     
     return_type    : Option<Type>,
@@ -1658,11 +1658,15 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
                 
                 let (left_size, right_size) = (store_size_of_type(&env.target_data, env.backend_types, env.types, &left_type), store_size_of_type(&env.target_data, env.backend_types, env.types, &right_type));
-                let ptr_size = env.target_data.get_store_size(&env.ptr_int_type);
                 
-                // FIXME fix pointer type casts (currently emitted wrong)
                 let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &right_type);
-                if left_size == right_size || (right_size == ptr_size && left_type.is_composite())
+                // FIXME double check that this is correct
+                if right_type.is_pointer() && left_type.is_composite()
+                {
+                    env.stack.push((right_type, left_val));
+                }
+                // FIXME fix pointer type casts (currently emitted wrong)
+                else if left_size == right_size
                 {
                     let ret = env.builder.build_bit_cast(left_val, basic_type, "").unwrap();
                     env.stack.push((right_type, ret));
@@ -2199,7 +2203,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             }
             let target_data = executor.as_ref().unwrap().get_target_data();
             
-            let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
+            //let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
             
             let intrinsic_imports = [
                 ("sqrt", "llvm.sqrt.f64", "funcptr(f64, (f64))"),
@@ -2364,7 +2368,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : None, just_returned : false };
+                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, /*ptr_int_type,*/ target_data, return_type : None, just_returned : false };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -2535,7 +2539,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 });
                 
                 let stack = Vec::new();
-                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : Some(function.return_type.clone()), just_returned : false };
+                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, /*ptr_int_type,*/ target_data, return_type : Some(function.return_type.clone()), just_returned : false };
                 
                 //println!("\n\ncompiling function {}...", function.name);
                 //println!("{}", function.body.pretty_debug());
