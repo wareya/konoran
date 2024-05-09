@@ -147,7 +147,7 @@ The following things are currently UB, but they are oversights and will be made 
 
 ## Non-undefined behaviors
 
-Attempting to do most floating-point math operations with NaNs produces non-poison (i.e. not undefined), but otherwise unknown, values.
+Attempting to do most floating-point math operations with NaNs produces NaNs or other sane values (e.g. true or false).
 
 Floating-point division by zero with the `/` operator produces signed infinity. Floating-point remainder by zero with the `%` operator produces either NaN or zero (preferably zero).
 
