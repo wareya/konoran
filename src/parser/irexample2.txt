@@ -506,6 +506,23 @@ export_extern void main()
     xp_buh = xp_recover - 16u64;
     print_float((xp_int) as f64);
     print_float(((xp_buh) bit_as u64) as f64);
+    
+    u64 agidkr = 0xDEADBEEFF00D1337u64;
+    
+    array(ptr(u8), 2) testargs = [
+        (&agidkr) bit_as ptr(u8),
+        (0u64) bit_as ptr(u8),
+    ];
+    array(u8, 6) fmt_spec   = [0x21u8, 0x25u8, 0x58u8, 0x5Cu8, 0x6Eu8, 0x00u8];
+    array(u8, 5) fmt_spec_2 = [0x25u8, 0x73u8, 0x5Cu8, 0x6Eu8, 0x00u8];
+    
+    array(ptr(u8), 2) testargs2 = [
+        (&fmt_spec) bit_as ptr(u8),
+        (0u64) bit_as ptr(u8),
+    ];
+    
+    print_fmt((&fmt_spec) bit_as ptr(u8), (&testargs) bit_as ptr(ptr(u8)));
+    print_fmt((&fmt_spec_2) bit_as ptr(u8), (&testargs2) bit_as ptr(ptr(u8)));
     // early return test (must not crash)
     return;
     print_float(0.0f64);

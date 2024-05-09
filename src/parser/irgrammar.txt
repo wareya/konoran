@@ -87,7 +87,11 @@ array_literal: HIDELITERALS
 struct_literal: HIDELITERALS
 $struct_type$ { $expr$..., $unusedcomma$? }
 
+sizeof: HIDELITERALS
+sizeof $type$
+
 supersimplexpr: SIMPLIFY
+$sizeof$
 $cast$
 $unsafe_cast$
 $bitcast$
@@ -99,6 +103,7 @@ $integer$
 $rvarname$
 
 simplexpr: SIMPLIFY
+$sizeof$
 $intrinsic$
 $cast$
 $unsafe_cast$

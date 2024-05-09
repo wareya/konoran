@@ -16,7 +16,6 @@ use parser::ast::ASTNode;
 /*
 TODO list:
 mid:
-- varargs (for printf mainly)
 - sizeof operator (no parens)
 - const literals
 - strings (const u8 array syntax sugar)
@@ -25,6 +24,7 @@ low:
 - standard io functions
 
 maybe:
+- varargs in declarations (not definitions) (for printf mainly)
 - implement other control flow constructs than just "if -> goto"
 - have proper scoped variable declarations, not function-level variable declarations
 */
@@ -2195,6 +2195,112 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             panic!("type string must be function type");
         }
     }
+    
+    // format specifiers:
+    // %X - u64    uppercase hex
+    // %x - u64    lowercase hex
+    // %u - i64    unsigned integer
+    // %i - i64    signed integer
+    // %F - f64    64-bit float
+    // %f - f32    32-bit float
+    // %s - u8...  null-terminated utf-8 string (forbidden codepoints are dropped)
+    // %c - u32    unicode codepoint (forbidden codepoints are dropped)
+    //
+    // escape codes:
+    // \\ - backslash
+    // \% - % character
+    // \n, \r, \t - LF, CR, and horizontal tab characters
+    //
+    // vars is allowed to be null if no format specifiers are used
+    unsafe extern "C" fn print_fmt(cstring_bytes : *mut u8, mut vars : *mut *mut u8) -> ()
+    {
+        unsafe
+        {
+            let mut strlen = 0;
+            while *cstring_bytes.offset(strlen as isize) != 0
+            {
+                strlen += 1;
+            }
+            let orig_string = String::from_utf8_lossy(&std::slice::from_raw_parts(cstring_bytes, strlen));
+            
+            let mut s = "".to_string();
+            
+            let mut state = ' '; // ' ' - normal, '\' - in escape sequence, '%' - in format specifier
+            for c in orig_string.chars()
+            {
+                match state
+                {
+                    ' ' =>
+                    {
+                        match c
+                        {
+                            '%' => state = '%',
+                            '\\' => state = '\\',
+                            _ => s.push(c),
+                        }
+                    }
+                    '\\' =>
+                    {
+                        state = ' ';
+                        match c
+                        {
+                            '%' | '\\' => s.push(c),
+                            'n' => s.push('\n'),
+                            'r' => s.push('\r'),
+                            't' => s.push('\t'),
+                            _ =>
+                            {
+                                s.push('\\');
+                                s.push(c);
+                            }
+                        }
+                    }
+                    '%' =>
+                    {
+                        state = ' ';
+                        if !(*vars).is_null()
+                        {
+                            match c
+                            {
+                                'X' => s.push_str(&format!("{:X}", *((*vars) as *mut u64))),
+                                'x' => s.push_str(&format!("{:x}", *((*vars) as *mut u64))),
+                                'u' => s.push_str(&format!("{}", *((*vars) as *mut u64))),
+                                'i' => s.push_str(&format!("{}", *((*vars) as *mut i64))),
+                                'F' => s.push_str(&format!("{}", *((*vars) as *mut f64))),
+                                'f' => s.push_str(&format!("{}", *((*vars) as *mut f32))),
+                                's' =>
+                                {
+                                    let mut strlen = 0;
+                                    while *cstring_bytes.offset(strlen as isize) != 0
+                                    {
+                                        strlen += 1;
+                                    }
+                                    let orig_string = String::from_utf8_lossy(&std::slice::from_raw_parts(cstring_bytes, strlen));
+                                    s.push_str(&orig_string);
+                                }
+                                'c' =>
+                                {
+                                    if let Some(c) = char::from_u32(*((*vars) as *mut u32))
+                                    {
+                                        s.push(c);
+                                    }
+                                }
+                                _ =>
+                                {
+                                    s.push('%');
+                                    s.push(c);
+                                }
+                            }
+                            vars = vars.offset(1);
+                        }
+                    }
+                    _ => panic!(),
+                }
+            }
+            print!("{}", s);
+        }
+    }
+    import_function::<unsafe extern "C" fn(*mut u8, *mut *mut u8) -> ()>(&types, &mut parser, &mut imports, "print_fmt", print_fmt, print_fmt as usize, "funcptr(void, (ptr(u8), ptr(ptr(u8))))");
     
     unsafe extern "C" fn print_bytes(bytes : *mut u8, count : u64) -> ()
     {
