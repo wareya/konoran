@@ -86,7 +86,7 @@ ptr(type)
 funcptr(returntype, (arg1type, arg2type, ...))
 ```
 
-Pointers can be casted back and forth with u64 using the `bit_as` operator (e.g. `(my_ptr) bit_as u64`). With regards to the values stored in this u64 after casting, the in-memory "size" of a u8 must be 1, of a u16 must be 2, etc.
+Pointers can be casted back and forth with `u64` (or whatever the target's pointer-sized int type is) using the `bit_as` operator (e.g. `(my_ptr) bit_as u64`). With regards to the values stored in this u64 after casting, the in-memory "size" of a u8 must be 1, of a u16 must be 2, etc.
 
 Konoran has the following composite types:
 

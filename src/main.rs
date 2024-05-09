@@ -16,7 +16,6 @@ use parser::ast::ASTNode;
 /*
 TODO list:
 high:
-- make pointer casts use inttoptr/ptrtoint
 - add +, -, and & (mask) operators to pointers (left side must be ptr, right side must be u64)
 
 mid:
@@ -42,7 +41,7 @@ enum TypeData
     Void,
     Primitive,
     Struct(Vec<(String, Type)>), // property name, property type
-    Pointer(Rc<RefCell<Type>>, bool),
+    Pointer(Rc<RefCell<Type>>, bool), // bool is whether the pointer is volatile
     VirtualPointer(Box<Type>, bool),
     FuncPointer(Box<FunctionSig>),
     Array(Box<Type>, usize),
@@ -148,6 +147,7 @@ impl Type
     {
         matches!(self.data, TypeData::Array(_, _))
     }
+#[allow(dead_code)]
     fn is_composite(&self) -> bool
     {
         self.is_struct() || self.is_array()
@@ -155,6 +155,15 @@ impl Type
     fn is_pointer(&self) -> bool
     {
         matches!(self.data, TypeData::Pointer(_, _))
+    }
+    fn is_pointer_or_fpointer(&self) -> bool
+    {
+        match &self.data
+        {
+            TypeData::Pointer(_, _) => return true,
+            TypeData::FuncPointer(_) => return true,
+            _ => return false,
+        }
     }
     fn is_virtual_pointer(&self) -> bool
     {
@@ -804,7 +813,7 @@ struct Environment<'a, 'b, 'c, 'e, 'f>
     function_types : &'a mut BTreeMap<String, inkwell::types::FunctionType<'c>>,
     func_val       : inkwell::values::FunctionValue<'c>,
     blocks         : HashMap<String, inkwell::basic_block::BasicBlock<'c>>,
-    //ptr_int_type   : inkwell::types::IntType<'c>,
+    ptr_int_type   : inkwell::types::IntType<'c>,
     target_data    : &'f inkwell::targets::TargetData,
     
     return_type    : Option<Type>,
@@ -1634,8 +1643,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     else if let (Ok(_ptr_type), Ok(ptr_val)) = (inkwell::types::PointerType::try_from(backend_type), inkwell::values::PointerValue::try_from(val))
                     {
-                        let int_val = env.builder.build_ptr_to_int(ptr_val, u64_type, "").unwrap();
-                        let zero = u64_type.const_int(0, true);
+                        let int_val = env.builder.build_ptr_to_int(ptr_val, env.ptr_int_type, "").unwrap();
+                        let zero = env.ptr_int_type.const_int(0, true);
                         let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap();
                         env.builder.build_conditional_branch(int_val, *then_block, else_block).unwrap();
                         env.builder.position_at_end(else_block);
@@ -1659,16 +1668,33 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let (left_size, right_size) = (store_size_of_type(&env.target_data, env.backend_types, env.types, &left_type), store_size_of_type(&env.target_data, env.backend_types, env.types, &right_type));
                 
-                let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &right_type);
-                // FIXME double check that this is correct
-                if right_type.is_pointer() && left_type.is_composite()
+                let right_basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &right_type);
+                // cast as own type (replace type, aka do nothing)
+                if left_type.name == right_type.name
                 {
                     env.stack.push((right_type, left_val));
                 }
-                // FIXME fix pointer type casts (currently emitted wrong)
+                // cast from pointer to pointer (replace type)
+                else if left_type.is_pointer_or_fpointer() && right_type.is_pointer_or_fpointer()
+                {
+                    env.stack.push((right_type, left_val));
+                }
+                // pointer-to-int cast
+                else if left_type.is_pointer_or_fpointer() && right_basic_type == env.ptr_int_type.into()
+                {
+                    let ret = env.builder.build_ptr_to_int(left_val.into_pointer_value(), env.ptr_int_type, "").unwrap().into();
+                    env.stack.push((right_type, ret));
+                }
+                // int-to-pointer cast
+                else if right_type.is_pointer_or_fpointer() && left_val.get_type() == env.ptr_int_type.into()
+                {
+                    let ptr_type = env.context.ptr_type(inkwell::AddressSpace::default());
+                    let ret = env.builder.build_int_to_ptr(left_val.into_pointer_value(), ptr_type, "").unwrap().into();
+                    env.stack.push((right_type, ret));
+                }
                 else if left_size == right_size
                 {
-                    let ret = env.builder.build_bit_cast(left_val, basic_type, "").unwrap();
+                    let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
                     env.stack.push((right_type, ret));
                 }
                 else
@@ -1689,7 +1715,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 if left_type.name == right_type.name
                 {
-                    panic_error!("unsupported unsafe cast from type {} to same type", left_type.to_string());
+                    panic_error!("unsupported unsafe cast from type {} to same type (unsafe casts are only for type pairs with expensive standard casts)", left_type.to_string());
                 }
                 // cast from float to int (must be int, not pointer)
                 else if left_type.is_float() && right_type.is_int_unsigned()
@@ -1718,7 +1744,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 else
                 {
-                    panic_error!("unsupported unsafe cast from type {} to type {}", left_type.to_string(), right_type.to_string());
+                    panic_error!("unsupported unsafe cast from type {} to type {} (unsafe casts are only for type pairs with expensive standard casts)", left_type.to_string(), right_type.to_string());
                 }
             }
             "cast" =>
@@ -1737,7 +1763,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     env.stack.push((right_type, left_val));
                 }
                 // cast from pointer to pointer (replace type)
-                else if left_type.is_pointer() && right_type.is_pointer()
+                else if left_type.is_pointer_or_fpointer() && right_type.is_pointer_or_fpointer()
                 {
                     env.stack.push((right_type, left_val));
                 }
@@ -1755,9 +1781,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                 }
                 // cast between types of same size, non-float. bitcast.
-                else if !left_type.is_float() && !right_type.is_float() && left_basic_type.size_of() == right_basic_type.size_of() && right_basic_type.is_sized()
+                else if !left_type.is_float() && !right_type.is_float() && left_basic_type.size_of() == right_basic_type.size_of() && right_basic_type.is_sized() && !left_type.is_pointer_or_fpointer() && !right_type.is_pointer_or_fpointer()
                 {
-                    // FIXME fix pointer type casts (currently emitted wrong)
                     let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
                     env.stack.push((right_type, ret));
                 }
@@ -1820,7 +1845,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                 }
                 // cast to larger int type, signed
-                else if left_type.size() < right_type.size() && left_type.is_int_signed() && right_type.is_int_signed()
+                else if left_type.is_int_signed() && right_type.is_int_signed() && left_type.size() < right_type.size()
                 {
                     
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
@@ -1834,7 +1859,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                 }
                 // cast to larger int type, unsigned
-                else if left_type.size() < right_type.size() && left_type.is_int_unsigned() && right_type.is_int_unsigned()
+                else if left_type.is_int_unsigned() && right_type.is_int_unsigned() && left_type.size() < right_type.size()
                 {
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
                     {
@@ -1847,7 +1872,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                 }
                 // cast to smaller int type
-                else if left_type.size() > right_type.size() && left_type.is_int() && right_type.is_int()
+                else if left_type.is_int() && right_type.is_int() && left_type.size() > right_type.size()
                 {
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
                     {
@@ -2203,7 +2228,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             }
             let target_data = executor.as_ref().unwrap().get_target_data();
             
-            //let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
+            let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
             
             let intrinsic_imports = [
                 ("sqrt", "llvm.sqrt.f64", "funcptr(f64, (f64))"),
@@ -2368,7 +2393,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, /*ptr_int_type,*/ target_data, return_type : None, just_returned : false };
+                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : None, just_returned : false };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -2539,7 +2564,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 });
                 
                 let stack = Vec::new();
-                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, /*ptr_int_type,*/ target_data, return_type : Some(function.return_type.clone()), just_returned : false };
+                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : Some(function.return_type.clone()), just_returned : false };
                 
                 //println!("\n\ncompiling function {}...", function.name);
                 //println!("{}", function.body.pretty_debug());

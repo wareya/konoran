@@ -492,6 +492,11 @@ export_extern void main()
     print_float(((-6140.6f64) as u64) as f64);
     print_float(((-6140.6f64) as i64) as f64);
     print_float(((614964387123894585389674754327468474265740.6f64) as f32) as f64);
+    
+    u8 x;
+    ptr(u8) xp = &x;
+    u64 xp_int = (xp) bit_as u64;
+    ptr(u8) xp_recover = (xp_int) bit_as ptr(u8);
     // early return test (must not crash)
     return;
     print_float(0.0f64);
