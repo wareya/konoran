@@ -72,6 +72,9 @@ $lvar_name$
 cast: HIDELITERALS
 ( $expr$ ) as $type$
 
+unsafe_cast: HIDELITERALS
+( $expr$ ) unsafe_as $type$
+
 bitcast: HIDELITERALS
 ( $expr$ ) bit_as $type$
 
@@ -86,6 +89,7 @@ $struct_type$ { $expr$..., $unusedcomma$? }
 
 supersimplexpr: SIMPLIFY
 $cast$
+$unsafe_cast$
 $bitcast$
 $array_literal$
 $struct_literal$
@@ -97,6 +101,7 @@ $rvarname$
 simplexpr: SIMPLIFY
 $intrinsic$
 $cast$
+$unsafe_cast$
 $bitcast$
 $array_literal$
 $struct_literal$

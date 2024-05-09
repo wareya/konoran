@@ -16,7 +16,6 @@ use parser::ast::ASTNode;
 /*
 TODO list:
 high:
-- float cast overflow fix
 - make pointer casts use inttoptr/ptrtoint
 - add +, -, and & (mask) operators to pointers (left side must be ptr, right side must be u64)
 
@@ -793,6 +792,7 @@ struct Environment<'a, 'b, 'c, 'e, 'f>
 {
     source_text    : &'e Vec<String>,
     context        : &'c inkwell::context::Context,
+    module         : &'a inkwell::module::Module<'c>,
     stack          : Vec<(Type, inkwell::values::BasicValueEnum<'c>)>,
     variables      : BTreeMap<String, (Type, inkwell::values::PointerValue<'c>)>,
     builder        : &'b inkwell::builder::Builder<'c>,
@@ -1672,6 +1672,51 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     panic_error!("error: unsupported bitcast from type {} to type {} (types must have the same size and be sized to be bitcasted)", left_type.to_string(), right_type.to_string());
                 }
             }
+            "unsafe_cast" =>
+            {
+                compile(env, node.child(0).unwrap(), WantPointer::None);
+                let (left_type, left_val) = env.stack.pop().unwrap();
+                let _left_basic_type : BasicTypeEnum = get_backend_type(&mut env.backend_types, &env.types, &left_type).try_into().unwrap();
+                
+                let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
+                let right_backend_type = get_backend_type(&mut env.backend_types, &env.types, &right_type);
+                let _right_basic_type : BasicTypeEnum = right_backend_type.try_into().unwrap();
+                
+                
+                if left_type.name == right_type.name
+                {
+                    panic_error!("unsupported unsafe cast from type {} to same type", left_type.to_string());
+                }
+                // cast from float to int (must be int, not pointer)
+                else if left_type.is_float() && right_type.is_int_unsigned()
+                {
+                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
+                    {
+                        let ret = env.builder.build_float_to_unsigned_int(left_val, target_type.into(), "").unwrap();
+                        env.stack.push((right_type, ret.into()));
+                    }
+                    else
+                    {
+                        panic_error!("internal error: float-to-uint cast internal and backend type mismatch");
+                    }
+                }
+                else if left_type.is_float() && right_type.is_int_signed()
+                {
+                    if let (Ok(left_val), Ok(target_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
+                    {
+                        let ret = env.builder.build_float_to_signed_int(left_val, target_type.into(), "").unwrap();
+                        env.stack.push((right_type, ret.into()));
+                    }
+                    else
+                    {
+                        panic_error!("internal error: float-to-sint cast internal and backend type mismatch");
+                    }
+                }
+                else
+                {
+                    panic_error!("unsupported unsafe cast from type {} to type {}", left_type.to_string(), right_type.to_string());
+                }
+            }
             "cast" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
@@ -1742,8 +1787,12 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
                     {
-                        let ret = env.builder.build_float_to_unsigned_int(left_val, target_type.into(), "").unwrap();
-                        env.stack.push((right_type, ret.into()));
+                        let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.fptoui.sat").unwrap();
+                        let function = intrinsic.get_declaration(&env.module, &[target_type.into(), left_basic_type]).unwrap();
+                        
+                        let callval = env.builder.build_direct_call(function, &[left_val.into()], "").unwrap();
+                        let result = callval.try_as_basic_value().left().unwrap();
+                        env.stack.push((right_type.clone(), result));
                     }
                     else
                     {
@@ -1754,8 +1803,12 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
                     {
-                        let ret = env.builder.build_float_to_signed_int(left_val, target_type.into(), "").unwrap();
-                        env.stack.push((right_type, ret.into()));
+                        let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.fptosi.sat").unwrap();
+                        let function = intrinsic.get_declaration(&env.module, &[target_type.into(), left_basic_type]).unwrap();
+                        
+                        let callval = env.builder.build_direct_call(function, &[left_val.into()], "").unwrap();
+                        let result = callval.try_as_basic_value().left().unwrap();
+                        env.stack.push((right_type.clone(), result));
                     }
                     else
                     {
@@ -2311,7 +2364,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { source_text : &program_lines, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : None, just_returned : false };
+                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : None, just_returned : false };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -2482,7 +2535,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 });
                 
                 let stack = Vec::new();
-                let mut env = Environment { source_text : &program_lines, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : Some(function.return_type.clone()), just_returned : false };
+                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : Some(function.return_type.clone()), just_returned : false };
                 
                 //println!("\n\ncompiling function {}...", function.name);
                 //println!("{}", function.body.pretty_debug());

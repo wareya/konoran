@@ -143,8 +143,7 @@ Implementations are allowed to specify unaligned memory accesses as UB, but this
 
 The following things are currently UB, but they are oversights and will be made non-UB in the future:
 
-1) Overflowing floating-point casts (they will be changed to saturate, with an unsafe_cast alternative)
-2) NaN floating-point casts to integer (they will be changed to produce 0, with an unsafe_cast alternative)
+1) NaN floating-point casts to integer (they will be changed to produce 0, with an unsafe_cast alternative)
 
 ## Non-undefined behaviors
 

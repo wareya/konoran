@@ -487,6 +487,11 @@ export_extern void main()
 {
     func_etc();
     nbody_bench();
+    // fp cast tests (must saturate)
+    print_float((( 6140.6f64) as u64) as f64);
+    print_float(((-6140.6f64) as u64) as f64);
+    print_float(((-6140.6f64) as i64) as f64);
+    print_float(((614964387123894585389674754327468474265740.6f64) as f32) as f64);
     // early return test (must not crash)
     return;
     print_float(0.0f64);
