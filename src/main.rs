@@ -15,9 +15,6 @@ use parser::ast::ASTNode;
 
 /*
 TODO list:
-high:
-- add +, -, and & (mask) operators to pointers (left side must be ptr, right side must be u64)
-
 mid:
 - varargs (for printf mainly)
 - sizeof operator (no parens)
@@ -195,6 +192,18 @@ impl Type
     fn is_int_unsigned(&self) -> bool
     {
         ["u8", "u16", "u32", "u64"].contains(&self.name.as_str())
+    }
+#[allow(dead_code)]
+    fn to_signed(&self) -> Type
+    {
+        match self.name.as_str()
+        {
+            "u8"  | "i8"  => Type { name :  "i8".to_string(), data : TypeData::Primitive },
+            "u16" | "i16" => Type { name : "i16".to_string(), data : TypeData::Primitive },
+            "u32" | "i32" => Type { name : "i32".to_string(), data : TypeData::Primitive },
+            "u64" | "i64" => Type { name : "i64".to_string(), data : TypeData::Primitive },
+            _ => panic!("internal error: tried to directly convert a non-int type to signed")
+        }
     }
     fn is_void(&self) -> bool
     {
@@ -1680,26 +1689,26 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     env.stack.push((right_type, left_val));
                 }
                 // pointer-to-int cast
-                else if left_type.is_pointer_or_fpointer() && right_basic_type == env.ptr_int_type.into()
+                else if left_type.is_pointer_or_fpointer() && right_type.is_int_unsigned() && right_type.size() as u32 * 8 == env.ptr_int_type.get_bit_width()
                 {
                     let ret = env.builder.build_ptr_to_int(left_val.into_pointer_value(), env.ptr_int_type, "").unwrap().into();
                     env.stack.push((right_type, ret));
                 }
                 // int-to-pointer cast
-                else if right_type.is_pointer_or_fpointer() && left_val.get_type() == env.ptr_int_type.into()
+                else if right_type.is_pointer_or_fpointer() && left_type.is_int_unsigned() && left_type.size() as u32 * 8 == env.ptr_int_type.get_bit_width()
                 {
                     let ptr_type = env.context.ptr_type(inkwell::AddressSpace::default());
-                    let ret = env.builder.build_int_to_ptr(left_val.into_pointer_value(), ptr_type, "").unwrap().into();
+                    let ret = env.builder.build_int_to_ptr(left_val.into_int_value(), ptr_type, "").unwrap().into();
                     env.stack.push((right_type, ret));
                 }
-                else if left_size == right_size
+                else if left_size == right_size && right_type.is_pointer_or_fpointer() == left_type.is_pointer_or_fpointer()
                 {
                     let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
                     env.stack.push((right_type, ret));
                 }
                 else
                 {
-                    panic_error!("error: unsupported bitcast from type {} to type {} (types must have the same size and be sized to be bitcasted)", left_type.to_string(), right_type.to_string());
+                    panic_error!("error: unsupported bitcast from type {} to type {}\n(types must have the same size and be sized to be bitcasted, and ptrs can only be casted to the target's ptr-sized int type, which is: {:?} - compare {:?})", left_type.to_string(), right_type.to_string(), env.ptr_int_type, right_basic_type);
                 }
             }
             "unsafe_cast" =>
@@ -1901,163 +1910,205 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     let is_u = left_type.name.starts_with("u");
                     
-                    match (left_type.name.as_str(), right_type.name.as_str())
+                    if left_type.is_pointer() && right_type.is_int()
                     {
-                        ("f32", "f32") | ("f64", "f64") =>
+                        let right_backend_type = get_backend_type(&mut env.backend_types, &env.types, &right_type);
+                        let right_basic_type : BasicTypeEnum = right_backend_type.try_into().unwrap();
+                        
+                        match op.as_str()
                         {
-                            let left_val = left_val.into_float_value();
-                            let right_val = right_val.into_float_value();
-                            match op.as_str()
+                            "&" =>
                             {
-                                "+" | "-" | "*" | "/" | "%" =>
-                                {
-                                    let res = match op.as_str()
-                                    {
-                                        "+" => env.builder.build_float_add(left_val, right_val, "").unwrap(),
-                                        "-" => env.builder.build_float_sub(left_val, right_val, "").unwrap(),
-                                        "*" => env.builder.build_float_mul(left_val, right_val, "").unwrap(),
-                                        "/" => env.builder.build_float_div(left_val, right_val, "").unwrap(),
-                                        "%" => env.builder.build_float_rem(left_val, right_val, "").unwrap(),
-                                        _ => panic_error!("internal error: operator mismatch")
-                                    };
-                                    env.stack.push((left_type.clone(), res.into()));
-                                }
                                 
-                                ">" | "<" | ">=" | "<=" | "==" | "!=" =>
+                                if !right_type.is_int_unsigned() || right_type.size() as u32 * 8 != env.ptr_int_type.get_bit_width()
                                 {
-                                    let op = match op.as_str()
-                                    {
-                                        "==" => inkwell::FloatPredicate::OEQ,
-                                        "!=" => inkwell::FloatPredicate::ONE,
-                                        "<"  => inkwell::FloatPredicate::OLT,
-                                        "<=" => inkwell::FloatPredicate::OLE,
-                                        ">"  => inkwell::FloatPredicate::OGT,
-                                        ">=" => inkwell::FloatPredicate::OGE,
-                                        _ => panic_error!("internal error: operator mismatch")
-                                    };
-                                    let res = env.builder.build_float_compare(op, left_val, right_val, "").unwrap();
-                                    let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
-                                    env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
+                                    panic_error!("ptr mask (&) operation is only supported with a right-hand operand of the target's pointer-sized int type (usually u64 or u32) {:?}", right_basic_type);
                                 }
-                                _ => panic_error!("operator {} not supported on type pair {}, {}", op, left_type.name, right_type.name)
+                                let ptr_type = env.context.ptr_type(inkwell::AddressSpace::default());
+                                let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.ptrmask").unwrap();
+                                let function = intrinsic.get_declaration(&env.module, &[ptr_type.into(), env.ptr_int_type.into()]).unwrap();
+                                
+                                let callval = env.builder.build_direct_call(function, &[left_val.into(), right_val.into()], "").unwrap();
+                                let result = callval.try_as_basic_value().left().unwrap();
+                                env.stack.push((left_type.clone(), result));
                             }
+                            "+" | "-" =>
+                            {
+                                let mut offset_val = right_val;
+                                if op == "-"
+                                {
+                                    offset_val = env.builder.build_int_neg(offset_val.into_int_value(), "").unwrap().into();
+                                }
+                                let offset_addr = unsafe
+                                {
+                                    env.builder.build_gep(u8_type, left_val.into_pointer_value(), &[offset_val.try_into().unwrap()], "").unwrap()
+                                };
+                                
+                                env.stack.push((left_type.clone(), offset_addr.into()));
+                            }
+                            _ => panic_error!("the only binary operators allowed for pointers are &, +, and -"),
                         }
-                        ("i8", "i8") | ("i16", "i16") | ("i32", "i32") | ("i64", "i64") |
-                        ("u8", "u8") | ("u16", "u16") | ("u32", "u32") | ("u64", "u64") =>
+                    }
+                    else
+                    {
+                        match (left_type.name.as_str(), right_type.name.as_str())
                         {
-                            let left_val = left_val.into_int_value();
-                            let right_val = right_val.into_int_value();
-                            match op.as_str()
+                            ("f32", "f32") | ("f64", "f64") =>
                             {
-                                "&&" | "||" | "and" | "or" =>
+                                let left_val = left_val.into_float_value();
+                                let right_val = right_val.into_float_value();
+                                match op.as_str()
                                 {
-                                    let zero = left_val.get_type().const_int(0, true);
-                                    let left_bool  = env.builder.build_int_compare(inkwell::IntPredicate::NE, left_val , zero, "").unwrap();
-                                    let left_bool  = env.builder.build_int_cast_sign_flag(left_bool , u8_type, false, "").unwrap();
-                                    let right_bool = env.builder.build_int_compare(inkwell::IntPredicate::NE, right_val, zero, "").unwrap();
-                                    let right_bool = env.builder.build_int_cast_sign_flag(right_bool, u8_type, false, "").unwrap();
-                                    
-                                    let res = match op.as_str()
+                                    "+" | "-" | "*" | "/" | "%" =>
                                     {
-                                        "||" | "or"  => env.builder.build_or (left_bool, right_bool, ""),
-                                        "&&" | "and" => env.builder.build_and(left_bool, right_bool, ""),
-                                        _ => panic_error!("internal error: operator mismatch")
-                                    }.unwrap();
-                                    env.stack.push((u8_type_frontend.clone(), res.into()));
-                                }
-                                "|" | "&" | "^" =>
-                                {
-                                    let res = match op.as_str()
-                                    {
-                                        "|" => env.builder.build_or (left_val, right_val, ""),
-                                        "&" => env.builder.build_and(left_val, right_val, ""),
-                                        "^" => env.builder.build_xor(left_val, right_val, ""),
-                                        _ => panic_error!("internal error: operator mismatch")
-                                    }.unwrap();
-                                    env.stack.push((left_type.clone(), res.into()));
-                                }
-                                "+" | "-" | "*" | "div_unsafe" | "rem_unsafe" =>
-                                {
-                                    let res = match op.as_str()
-                                    {
-                                        "+" => env.builder.build_int_add(left_val, right_val, ""),
-                                        "-" => env.builder.build_int_sub(left_val, right_val, ""),
-                                        "*" => env.builder.build_int_mul(left_val, right_val, ""),
-                                        "div_unsafe" => if is_u
+                                        let res = match op.as_str()
                                         {
-                                            env.builder.build_int_unsigned_div(left_val, right_val, "")
-                                        }
-                                        else
-                                        {
-                                            env.builder.build_int_signed_div(left_val, right_val, "")
-                                        },
-                                        "rem_unsafe" => if is_u
-                                        {
-                                            env.builder.build_int_unsigned_rem(left_val, right_val, "")
-                                        }
-                                        else
-                                        {
-                                            env.builder.build_int_signed_rem(left_val, right_val, "")
-                                        },
-                                        _ => panic_error!("internal error: operator mismatch")
-                                    }.unwrap();
-                                    env.stack.push((left_type.clone(), res.into()));
-                                }
-                                "/" | "%" =>
-                                {
-                                    let then_block = env.context.append_basic_block(env.func_val, "");
-                                    let else_block = env.context.append_basic_block(env.func_val, "");
-                                    let out_block = env.context.append_basic_block(env.func_val, "");
+                                            "+" => env.builder.build_float_add(left_val, right_val, "").unwrap(),
+                                            "-" => env.builder.build_float_sub(left_val, right_val, "").unwrap(),
+                                            "*" => env.builder.build_float_mul(left_val, right_val, "").unwrap(),
+                                            "/" => env.builder.build_float_div(left_val, right_val, "").unwrap(),
+                                            "%" => env.builder.build_float_rem(left_val, right_val, "").unwrap(),
+                                            _ => panic_error!("internal error: operator mismatch")
+                                        };
+                                        env.stack.push((left_type.clone(), res.into()));
+                                    }
                                     
-                                    let zero = left_val.get_type().const_int(0, true);
-                                    let temp_slot = env.builder.build_alloca(left_val.get_type(), "").unwrap();
-                                    
-                                    let comp_val = env.builder.build_int_compare(inkwell::IntPredicate::EQ, left_val, zero, "").unwrap();
-                                    env.builder.build_conditional_branch(comp_val, then_block, else_block).unwrap();
-                                    
-                                    env.builder.position_at_end(then_block);
-                                    env.builder.build_store(temp_slot, zero).unwrap();
-                                    
-                                    env.builder.build_unconditional_branch(out_block).unwrap();
-                                    env.builder.position_at_end(else_block);
-                                    
-                                    let res = match (op.as_str(), is_u)
+                                    ">" | "<" | ">=" | "<=" | "==" | "!=" =>
                                     {
-                                        ("/",  true) => env.builder.build_int_unsigned_div(left_val, right_val, ""),
-                                        ("/", false) => env.builder.build_int_signed_div(left_val, right_val, ""),
-                                        ("%",  true) => env.builder.build_int_unsigned_rem(left_val, right_val, ""),
-                                        ("%", false) => env.builder.build_int_signed_rem(left_val, right_val, ""),
-                                        _ => panic_error!("internal error: div/rem operator mismatch"),
-                                    }.unwrap();
-                                    env.builder.build_store(temp_slot, res).unwrap();
-                                    
-                                    env.builder.build_unconditional_branch(out_block).unwrap();
-                                    env.builder.position_at_end(out_block);
-                                    
-                                    let res = env.builder.build_load(left_val.get_type(), temp_slot, "").unwrap();
-                                    env.stack.push((left_type.clone(), res.into()));
+                                        let op = match op.as_str()
+                                        {
+                                            "==" => inkwell::FloatPredicate::OEQ,
+                                            "!=" => inkwell::FloatPredicate::ONE,
+                                            "<"  => inkwell::FloatPredicate::OLT,
+                                            "<=" => inkwell::FloatPredicate::OLE,
+                                            ">"  => inkwell::FloatPredicate::OGT,
+                                            ">=" => inkwell::FloatPredicate::OGE,
+                                            _ => panic_error!("internal error: operator mismatch")
+                                        };
+                                        let res = env.builder.build_float_compare(op, left_val, right_val, "").unwrap();
+                                        let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
+                                        env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
+                                    }
+                                    _ => panic_error!("operator {} not supported on type pair {}, {}", op, left_type.name, right_type.name)
                                 }
-                                ">" | "<" | ">=" | "<=" | "==" | "!=" =>
-                                {
-                                    let op = match op.as_str()
-                                    {
-                                        "==" => inkwell::IntPredicate::EQ,
-                                        "!=" => inkwell::IntPredicate::NE,
-                                        "<"  => if left_type.is_int_signed() { inkwell::IntPredicate::SLT } else  { inkwell::IntPredicate::ULT },
-                                        "<=" => if left_type.is_int_signed() { inkwell::IntPredicate::SLE } else  { inkwell::IntPredicate::ULE },
-                                        ">"  => if left_type.is_int_signed() { inkwell::IntPredicate::SGT } else  { inkwell::IntPredicate::UGT },
-                                        ">=" => if left_type.is_int_signed() { inkwell::IntPredicate::SGE } else  { inkwell::IntPredicate::UGE },
-                                        _ => panic_error!("internal error: operator mismatch")
-                                    };
-                                    let res = env.builder.build_int_compare(op, left_val, right_val, "").unwrap();
-                                    let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
-                                    env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
-                                }
-                                
-                                _ => panic_error!("operator {} not supported on type {}", op, left_type.name)
                             }
+                            ("i8", "i8") | ("i16", "i16") | ("i32", "i32") | ("i64", "i64") |
+                            ("u8", "u8") | ("u16", "u16") | ("u32", "u32") | ("u64", "u64") =>
+                            {
+                                let left_val = left_val.into_int_value();
+                                let right_val = right_val.into_int_value();
+                                match op.as_str()
+                                {
+                                    "&&" | "||" | "and" | "or" =>
+                                    {
+                                        let zero = left_val.get_type().const_int(0, true);
+                                        let left_bool  = env.builder.build_int_compare(inkwell::IntPredicate::NE, left_val , zero, "").unwrap();
+                                        let left_bool  = env.builder.build_int_cast_sign_flag(left_bool , u8_type, false, "").unwrap();
+                                        let right_bool = env.builder.build_int_compare(inkwell::IntPredicate::NE, right_val, zero, "").unwrap();
+                                        let right_bool = env.builder.build_int_cast_sign_flag(right_bool, u8_type, false, "").unwrap();
+                                        
+                                        let res = match op.as_str()
+                                        {
+                                            "||" | "or"  => env.builder.build_or (left_bool, right_bool, ""),
+                                            "&&" | "and" => env.builder.build_and(left_bool, right_bool, ""),
+                                            _ => panic_error!("internal error: operator mismatch")
+                                        }.unwrap();
+                                        env.stack.push((u8_type_frontend.clone(), res.into()));
+                                    }
+                                    "|" | "&" | "^" =>
+                                    {
+                                        let res = match op.as_str()
+                                        {
+                                            "|" => env.builder.build_or (left_val, right_val, ""),
+                                            "&" => env.builder.build_and(left_val, right_val, ""),
+                                            "^" => env.builder.build_xor(left_val, right_val, ""),
+                                            _ => panic_error!("internal error: operator mismatch")
+                                        }.unwrap();
+                                        env.stack.push((left_type.clone(), res.into()));
+                                    }
+                                    "+" | "-" | "*" | "div_unsafe" | "rem_unsafe" =>
+                                    {
+                                        let res = match op.as_str()
+                                        {
+                                            "+" => env.builder.build_int_add(left_val, right_val, ""),
+                                            "-" => env.builder.build_int_sub(left_val, right_val, ""),
+                                            "*" => env.builder.build_int_mul(left_val, right_val, ""),
+                                            "div_unsafe" => if is_u
+                                            {
+                                                env.builder.build_int_unsigned_div(left_val, right_val, "")
+                                            }
+                                            else
+                                            {
+                                                env.builder.build_int_signed_div(left_val, right_val, "")
+                                            },
+                                            "rem_unsafe" => if is_u
+                                            {
+                                                env.builder.build_int_unsigned_rem(left_val, right_val, "")
+                                            }
+                                            else
+                                            {
+                                                env.builder.build_int_signed_rem(left_val, right_val, "")
+                                            },
+                                            _ => panic_error!("internal error: operator mismatch")
+                                        }.unwrap();
+                                        env.stack.push((left_type.clone(), res.into()));
+                                    }
+                                    "/" | "%" =>
+                                    {
+                                        let then_block = env.context.append_basic_block(env.func_val, "");
+                                        let else_block = env.context.append_basic_block(env.func_val, "");
+                                        let out_block = env.context.append_basic_block(env.func_val, "");
+                                        
+                                        let zero = left_val.get_type().const_int(0, true);
+                                        let temp_slot = env.builder.build_alloca(left_val.get_type(), "").unwrap();
+                                        
+                                        let comp_val = env.builder.build_int_compare(inkwell::IntPredicate::EQ, left_val, zero, "").unwrap();
+                                        env.builder.build_conditional_branch(comp_val, then_block, else_block).unwrap();
+                                        
+                                        env.builder.position_at_end(then_block);
+                                        env.builder.build_store(temp_slot, zero).unwrap();
+                                        
+                                        env.builder.build_unconditional_branch(out_block).unwrap();
+                                        env.builder.position_at_end(else_block);
+                                        
+                                        let res = match (op.as_str(), is_u)
+                                        {
+                                            ("/",  true) => env.builder.build_int_unsigned_div(left_val, right_val, ""),
+                                            ("/", false) => env.builder.build_int_signed_div(left_val, right_val, ""),
+                                            ("%",  true) => env.builder.build_int_unsigned_rem(left_val, right_val, ""),
+                                            ("%", false) => env.builder.build_int_signed_rem(left_val, right_val, ""),
+                                            _ => panic_error!("internal error: div/rem operator mismatch"),
+                                        }.unwrap();
+                                        env.builder.build_store(temp_slot, res).unwrap();
+                                        
+                                        env.builder.build_unconditional_branch(out_block).unwrap();
+                                        env.builder.position_at_end(out_block);
+                                        
+                                        let res = env.builder.build_load(left_val.get_type(), temp_slot, "").unwrap();
+                                        env.stack.push((left_type.clone(), res.into()));
+                                    }
+                                    ">" | "<" | ">=" | "<=" | "==" | "!=" =>
+                                    {
+                                        let op = match op.as_str()
+                                        {
+                                            "==" => inkwell::IntPredicate::EQ,
+                                            "!=" => inkwell::IntPredicate::NE,
+                                            "<"  => if left_type.is_int_signed() { inkwell::IntPredicate::SLT } else  { inkwell::IntPredicate::ULT },
+                                            "<=" => if left_type.is_int_signed() { inkwell::IntPredicate::SLE } else  { inkwell::IntPredicate::ULE },
+                                            ">"  => if left_type.is_int_signed() { inkwell::IntPredicate::SGT } else  { inkwell::IntPredicate::UGT },
+                                            ">=" => if left_type.is_int_signed() { inkwell::IntPredicate::SGE } else  { inkwell::IntPredicate::UGE },
+                                            _ => panic_error!("internal error: operator mismatch")
+                                        };
+                                        let res = env.builder.build_int_compare(op, left_val, right_val, "").unwrap();
+                                        let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
+                                        env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
+                                    }
+                                    
+                                    _ => panic_error!("operator {} not supported on type {}", op, left_type.name)
+                                }
+                            }
+                            _ => panic_error!("unhandled type pair `{}`, `{}`", left_type.name, right_type.name)
                         }
-                        _ => panic_error!("unhandled type pair `{}`, `{}`", left_type.name, right_type.name)
                     }
                 }
                 else

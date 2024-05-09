@@ -497,6 +497,15 @@ export_extern void main()
     ptr(u8) xp = &x;
     u64 xp_int = (xp) bit_as u64;
     ptr(u8) xp_recover = (xp_int) bit_as ptr(u8);
+    ptr(u8) xp_buh = xp_recover & 0xFFFFFFFFFFFFFFF0u64;
+    xp_buh = xp_recover + 16u8;
+    xp_buh = xp_recover + 16u32;
+    xp_buh = xp_recover + 16u64;
+    xp_buh = xp_recover - 16u8;
+    xp_buh = xp_recover - 16u32;
+    xp_buh = xp_recover - 16u64;
+    print_float((xp_int) as f64);
+    print_float(((xp_buh) bit_as u64) as f64);
     // early return test (must not crash)
     return;
     print_float(0.0f64);
