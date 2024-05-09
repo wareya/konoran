@@ -521,8 +521,16 @@ export_extern void main()
         (0u64) bit_as ptr(u8),
     ];
     
+    u64 size_of_f64 = sizeof f64;
+    
+    array(ptr(u8), 2) testargs3 = [
+        (&size_of_f64) bit_as ptr(u8),
+        (0u64) bit_as ptr(u8),
+    ];
+    
     print_fmt((&fmt_spec) bit_as ptr(u8), (&testargs) bit_as ptr(ptr(u8)));
     print_fmt((&fmt_spec_2) bit_as ptr(u8), (&testargs2) bit_as ptr(ptr(u8)));
+    print_fmt((&fmt_spec) bit_as ptr(u8), (&testargs3) bit_as ptr(ptr(u8)));
     // early return test (must not crash)
     return;
     print_float(0.0f64);

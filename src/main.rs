@@ -16,7 +16,6 @@ use parser::ast::ASTNode;
 /*
 TODO list:
 mid:
-- sizeof operator (no parens)
 - const literals
 - strings (const u8 array syntax sugar)
 
@@ -1666,6 +1665,20 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 else
                 {
                     panic_error!("error: no such label {}", label);
+                }
+            }
+            "sizeof" =>
+            {
+                let type_ = parse_type(&env.types, &node.child(0).unwrap()).unwrap();
+                let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
+                if let Some(size) = backend_type.size_of()
+                {
+                    // FIXME cast up to u64 if not u64 large
+                    env.stack.push((env.types.get("u64").unwrap().clone(), size.into()));
+                }
+                else
+                {
+                    panic_error!("error: type `{}` is not sized", type_.name);
                 }
             }
             "bitcast" =>
