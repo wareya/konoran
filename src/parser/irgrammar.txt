@@ -311,11 +311,17 @@ $type$ $name$ ;
 fulldeclaration: HIDELITERALS
 $type$ $name$ = $expr$ ;
 
+constexpr_fulldeclaration: HIDELITERALS
+constexpr $type$ $name$ = $expr$ ;
+
 globaldeclaration: HIDELITERALS
 $vismodifier$ $type$ $name$ ;
 
 globalfulldeclaration: HIDELITERALS
 $vismodifier$ $type$ $name$ = $expr$ ;
+
+constexpr_globalfulldeclaration: HIDELITERALS
+constexpr $type$ $name$ = $expr$ ;
 
 importsource:
 import_extern
@@ -332,6 +338,7 @@ $instruction$
 $statementlist$
 $declaration$
 $fulldeclaration$
+$constexpr_fulldeclaration$
 $ifcondition$
 $binstate$
 $label$
@@ -342,6 +349,7 @@ $importglobal$
 $importfunc$
 $globaldeclaration$
 $globalfulldeclaration$
+$constexpr_globalfulldeclaration$
 $structdef$
 $funcdef$
 

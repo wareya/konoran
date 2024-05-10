@@ -589,6 +589,7 @@ struct Program
     funcs : BTreeMap<String, (Function, Visibility)>,
     func_imports : BTreeMap<String, (FunctionSig, Visibility)>,
     globals : BTreeMap<String, (Type, Option<ASTNode>, Visibility)>,
+    constants : BTreeMap<String, (Type, ASTNode)>,
     globals_order : Vec<String>,
 }
 
@@ -643,6 +644,7 @@ impl Program
         let mut funcs = BTreeMap::new();
         let mut func_imports = BTreeMap::new();
         let mut globals = BTreeMap::new();
+        let mut constants = BTreeMap::new();
         let mut globals_order = Vec::new();
         
         //println!("starting struct defs...");
@@ -795,8 +797,17 @@ impl Program
                     globals_order.push(name.clone());
                 }
             }
+            else if child.is_parent() && child.text == "constexpr_globalfulldeclaration"
+            {
+                let type_ = parse_type(&types, child.child(0)?).unwrap();
+                let name = child.child(1)?.child(0)?.text.clone();
+                
+                let initializer = child.child(2)?.clone();
+                constants.insert(name.clone(), (type_, initializer));
+                globals_order.push(name.clone());
+            }
         }
-        Ok(Program { funcs, func_imports, globals, globals_order })
+        Ok(Program { funcs, func_imports, globals, constants, globals_order })
     }
 }
 
@@ -807,6 +818,7 @@ struct Environment<'a, 'b, 'c, 'e, 'f>
     module         : &'a inkwell::module::Module<'c>,
     stack          : Vec<(Type, inkwell::values::BasicValueEnum<'c>)>,
     variables      : BTreeMap<String, (Type, inkwell::values::PointerValue<'c>)>,
+    constants      : BTreeMap<String, (Type, inkwell::values::BasicValueEnum<'c>)>,
     builder        : &'b inkwell::builder::Builder<'c>,
     func_decs      : &'a BTreeMap<String, (inkwell::values::FunctionValue<'c>, FunctionSig)>,
     global_decs    : &'a BTreeMap<String, (Type, inkwell::values::GlobalValue<'c>, Option<inkwell::values::FunctionValue<'c>>)>,
@@ -1056,6 +1068,31 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     panic_error!("internal error: failed to find variable in full declaration");
                 }
             }
+            "constexpr_fulldeclaration" =>
+            {
+                let name = &node.child(1).unwrap().child(0).unwrap().text;
+                if !env.constants.contains_key(name)
+                {
+                    let type_var = parse_type(&env.types, &node.child(0).unwrap()).unwrap();
+                    //let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &type_var);
+                    
+                    compile(env, node.child(2).unwrap(), want_pointer);
+                    let (type_val, val) = env.stack.pop().unwrap();
+                    
+                    assert!(type_val == type_var, "fulldec type failure, {:?} vs {:?}, line {}", type_val, type_var, node.line);
+                    
+                    if !val_is_const(true, val)
+                    {
+                        panic_error!("error: constexpr contains non-constant parts");
+                    }
+                    
+                    env.constants.insert(name.clone(), (type_var, val));
+                }
+                else
+                {
+                    panic_error!("error: tried to redeclare constant {}", name);
+                }
+            }
             "binstate" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
@@ -1106,6 +1143,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     panic_error!("error: found global but not implemented yet");
                 }
+                else if env.constants.contains_key(name)
+                {
+                    panic_error!("error: cannot assign to constant `{}`", name);
+                }
                 else
                 {
                     panic_error!("error: unrecognized variable `{}`", name);
@@ -1120,6 +1161,13 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     check_struct_incomplete(env, &mut type_);
                     
                     push_val_or_ptr!(type_, slot);
+                }
+                else if env.constants.contains_key(name)
+                {
+                    let (mut type_, val) = env.constants[name].clone();
+                    check_struct_incomplete(env, &mut type_);
+                    
+                    env.stack.push((type_, val));
                 }
                 else if let Some((type_, val, _)) = env.global_decs.get(name)
                 {
@@ -2536,6 +2584,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     
     let mut func_decs = BTreeMap::new();
     let mut global_decs = BTreeMap::new();
+    let mut constants = BTreeMap::new();
     
     macro_rules! load_module
     {
@@ -2701,48 +2750,107 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             
             for g_name in &program.globals_order
             {
-                let (g_type, g_init, visibility) = program.globals.get(g_name).unwrap();
-                let backend_type = get_backend_type(&mut backend_types, &types, &g_type);
-                if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
+                if let Some((g_type, g_init, visibility)) = program.globals.get(g_name)
                 {
-                    let linkage = match *visibility
+                    let backend_type = get_backend_type(&mut backend_types, &types, &g_type);
+                    if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
                     {
-                        Visibility::Import => 
-                            // get from anywhere possible
-                            // exact semantics are implementation-defined; may be a dll import!
-                            inkwell::module::Linkage::AvailableExternally,
-                        Visibility::ImportLocal =>
-                            // get from external module or object
-                            inkwell::module::Linkage::AvailableExternally,
-                        Visibility::Export =>
-                            // expose as much as possible
-                            // exact semantics are implementation-defined; may be a dll export!
-                            inkwell::module::Linkage::External,
-                        Visibility::Local =>
-                            // expose to other modules and objects
-                            inkwell::module::Linkage::External,
-                        Visibility::Private =>
-                            // do not expose to other modules
-                            inkwell::module::Linkage::Internal,
-                    };
-                    
-                    let storage_class = match *visibility
+                        let linkage = match *visibility
+                        {
+                            Visibility::Import => 
+                                // get from anywhere possible
+                                // exact semantics are implementation-defined; may be a dll import!
+                                inkwell::module::Linkage::AvailableExternally,
+                            Visibility::ImportLocal =>
+                                // get from external module or object
+                                inkwell::module::Linkage::AvailableExternally,
+                            Visibility::Export =>
+                                // expose as much as possible
+                                // exact semantics are implementation-defined; may be a dll export!
+                                inkwell::module::Linkage::External,
+                            Visibility::Local =>
+                                // expose to other modules and objects
+                                inkwell::module::Linkage::External,
+                            Visibility::Private =>
+                                // do not expose to other modules
+                                inkwell::module::Linkage::Internal,
+                        };
+                        
+                        let storage_class = match *visibility
+                        {
+                            Visibility::Import =>
+                                // get from anywhere possible
+                                // exact semantics are implementation-defined; may be a dll import!
+                                inkwell::DLLStorageClass::Import,
+                            Visibility::Export =>
+                                // expose as much as possible
+                                // exact semantics are implementation-defined; may be a dll export!
+                                inkwell::DLLStorageClass::Export,
+                            _ =>
+                                inkwell::DLLStorageClass::Default,
+                        };
+                        
+                        if let Some(node) = g_init
+                        {
+                            let f_name = format!("__init_global_{}_asdf1g0q", g_name);
+                            let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
+                            let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                            let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
+                            
+                            let block = context.append_basic_block(func_val, "entry");
+                            let builder = context.create_builder();
+                            builder.position_at_end(block);
+                            
+                            let stack = Vec::new();
+                            let blocks = HashMap::new();
+                            let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : None, just_returned : false };
+                            
+                            compile(&mut env, &node, WantPointer::None);
+                            let (type_val, val) = env.stack.pop().unwrap();
+                            assert!(type_val == *g_type);
+                            
+                            if val_is_const(true, val)
+                            {
+                                let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                                global.set_initializer(&val);
+                                global.set_linkage(linkage);
+                                global.set_dll_storage_class(storage_class);
+                                env.builder.build_return(None).unwrap();
+                                
+                                global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
+                            }
+                            else
+                            {
+                                let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                                global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
+                                global.set_linkage(linkage);
+                                global.set_dll_storage_class(storage_class);
+                                env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
+                                env.builder.build_return(None).unwrap();
+                                
+                                global_decs.insert(g_name.clone(), (g_type.clone(), global, Some(func_val)));
+                            }
+                        }
+                        else
+                        {
+                            let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                            global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
+                            global.set_linkage(linkage);
+                            global.set_dll_storage_class(storage_class);
+                            global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
+                        }
+                    }
+                    else
                     {
-                        Visibility::Import =>
-                            // get from anywhere possible
-                            // exact semantics are implementation-defined; may be a dll import!
-                            inkwell::DLLStorageClass::Import,
-                        Visibility::Export =>
-                            // expose as much as possible
-                            // exact semantics are implementation-defined; may be a dll export!
-                            inkwell::DLLStorageClass::Export,
-                        _ =>
-                            inkwell::DLLStorageClass::Default,
-                    };
-                    
-                    if let Some(node) = g_init
+                        panic!("internal error: tried to make global with unsized type");
+                    }
+                }
+                else if let Some((g_type, node)) = program.constants.get(g_name)
+                {
+                    let backend_type = get_backend_type(&mut backend_types, &types, &g_type);
+                    if let Ok(_) = inkwell::types::BasicTypeEnum::try_from(backend_type)
                     {
-                        let f_name = format!("__init_global_{}_asdf1g0q", g_name);
+                        let f_name = format!("__init_const_{}_asdf1g0q", g_name);
                         let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
                         let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
                         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
@@ -2753,7 +2861,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : None, just_returned : false };
+                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : None, just_returned : false };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -2761,38 +2869,18 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         
                         if val_is_const(true, val)
                         {
-                            let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
-                            global.set_initializer(&val);
-                            global.set_linkage(linkage);
-                            global.set_dll_storage_class(storage_class);
                             env.builder.build_return(None).unwrap();
-                            
-                            global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
+                            constants.insert(g_name.clone(), (g_type.clone(), val));
                         }
                         else
                         {
-                            let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
-                            global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
-                            global.set_linkage(linkage);
-                            global.set_dll_storage_class(storage_class);
-                            env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
-                            env.builder.build_return(None).unwrap();
-                            
-                            global_decs.insert(g_name.clone(), (g_type.clone(), global, Some(func_val)));
+                            panic!("error: tried to make global constexpr with non-constexpr expression");
                         }
                     }
                     else
                     {
-                        let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
-                        global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
-                        global.set_linkage(linkage);
-                        global.set_dll_storage_class(storage_class);
-                        global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
+                        panic!("internal error: tried to make global constexpr with unsized type");
                     }
-                }
-                else
-                {
-                    panic!("internal error: tried to make global with unsized type");
                 }
             }
             
@@ -2937,7 +3025,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 });
                 
                 let stack = Vec::new();
-                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : Some(function.return_type.clone()), just_returned : false };
+                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, ptr_int_type, target_data, return_type : Some(function.return_type.clone()), just_returned : false };
                 
                 //println!("\n\ncompiling function {}...", function.name);
                 //println!("{}", function.body.pretty_debug());
