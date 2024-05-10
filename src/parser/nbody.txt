@@ -3,17 +3,8 @@
 // composite types: structs, array(type, len)
 
 
-
-
-/*
-f32 return_literal()
-{
-    f32 x;
-exit:
-    return 16.1f32;
-}
-*/
-
+// an implementation of the infamous nbody benchmark!
+// ported from https://benchmarksgame-team.pages.debian.net/benchmarksgame/performance/nbody.html
 
 struct Vector3 {
     f64 x;
@@ -213,6 +204,9 @@ void nbody_bench(u64 count)
 
 export_extern void main()
 {
-    nbody_bench(50000000u64);
+    u64 n = 50000000u64;
+    // do volatile pointer read to ensure the loop isn't unrolled at all
+    u64 count = *@&n;
+    nbody_bench(count);
     return;
 }
