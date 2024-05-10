@@ -15,6 +15,9 @@ use parser::ast::ASTNode;
 
 /*
 TODO list:
+high:
+- move struct/array loads to allocas
+
 low:
 - standard io functions
 
@@ -2378,7 +2381,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
 
 const VERBOSE : bool = false;
 const PRINT_COMP_TIME : bool = true;
-const DEBUG_FIRST_MODULE : bool = false;
+const DEBUG_FIRST_MODULE : bool = true;
 const DEBUG_FIRST_MODULE_ASM : bool = false;
 
 fn run_program(modules : Vec<String>, _args : Vec<String>)
