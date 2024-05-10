@@ -2325,6 +2325,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                                 's' =>
                                 {
                                     let mut strlen = 0;
+                                    let cstring_bytes = *vars;
                                     while *cstring_bytes.offset(strlen as isize) != 0
                                     {
                                         strlen += 1;

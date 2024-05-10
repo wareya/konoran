@@ -535,11 +535,8 @@ export_extern void main()
         (&agidkr) bit_as ptr(u8),
         (0u64) bit_as ptr(u8),
     ];
-    array(u8, 5) fmt_spec   = ['!', '%', 'X', '\n', 0u8];
-    array(u8, 4) fmt_spec_2 = ['%', 's', '\n', 0u8];
-    
     array(ptr(u8), 2) testargs2 = [
-        (&fmt_spec) bit_as ptr(u8),
+        (&['!', '%', 'X', '\n', 0u8]) bit_as ptr(u8),
         (0u64) bit_as ptr(u8),
     ];
     
@@ -552,9 +549,9 @@ export_extern void main()
     
     // test printing format strings
     
-    print_fmt((&fmt_spec) bit_as ptr(u8), (&testargs) bit_as ptr(ptr(u8)));
-    print_fmt((&fmt_spec_2) bit_as ptr(u8), (&testargs2) bit_as ptr(ptr(u8)));
-    print_fmt((&fmt_spec) bit_as ptr(u8), (&testargs3) bit_as ptr(ptr(u8)));
+    print_fmt((&['!', '%', 'X', '\n', 0u8]) bit_as ptr(u8), (&testargs) bit_as ptr(ptr(u8)));
+    print_fmt((&['%', 's', '\n', 0u8]) bit_as ptr(u8), (&testargs2) bit_as ptr(ptr(u8)));
+    print_fmt((&['!', '%', 'X', '\n', 0u8]) bit_as ptr(u8), (&testargs3) bit_as ptr(ptr(u8)));
     
     // test bitcasting between array and struct
     
