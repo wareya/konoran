@@ -17,6 +17,7 @@ u64 beepboop = (constexpr (main) bit_as u64) + 8523u64;
 
 ptr(u8) fgigei = constexpr "bk4ui34i\n";
 
+    
 export_extern void main()
 {
     u8 asdf = constexpr (52u8 + 242u8);
@@ -56,6 +57,8 @@ export_extern void main()
     i64 sgke4 = constexpr (sgke3) as i64;
     print_fmt("%i\n", (&[(&sgke4) bit_as ptr(u8)]) as ptr(ptr(u8)));
     print_float((sgke3) as f64);
+    
+    ptr(u8) fudge = constexpr ("sdaoagweog" & 0xFFFFFFFFFFFFFFF0u64);
     
     //print_fmt("An invalid print that's going to crash: %f\n", (&[(95138u64) bit_as ptr(u8)]) as ptr(ptr(u8)));
     

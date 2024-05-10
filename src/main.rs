@@ -2255,14 +2255,27 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 {
                                     panic_error!("ptr mask (&) operation is only supported with a right-hand operand of the target's pointer-sized int type (usually u64 or u32) {:?}", right_basic_type);
                                 }
-                                // FIXME: this isn't constexpr
                                 let ptr_type = env.context.ptr_type(inkwell::AddressSpace::default());
-                                let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.ptrmask").unwrap();
-                                let function = intrinsic.get_declaration(&env.module, &[ptr_type.into(), env.ptr_int_type.into()]).unwrap();
-                                
-                                let callval = env.builder.build_direct_call(function, &[left_val.into(), right_val.into()], "").unwrap();
-                                let result = callval.try_as_basic_value().left().unwrap();
-                                env.stack.push((left_type.clone(), result));
+                                if val_is_const(true, left_val) && val_is_const(true, right_val)
+                                {
+                                    let intptr : inkwell::values::IntValue = env.builder.build_ptr_to_int(left_val.into_pointer_value(), env.ptr_int_type, "").unwrap().into();
+                                    let masked = env.builder.build_and(intptr, right_val.into_int_value(), "").unwrap();
+                                    let diff = env.builder.build_int_sub(masked, intptr, "").unwrap();
+                                    let offset_addr = unsafe
+                                    {
+                                        env.builder.build_gep(u8_type, left_val.into_pointer_value(), &[diff.try_into().unwrap()], "").unwrap()
+                                    };
+                                    env.stack.push((left_type.clone(), offset_addr.into()));
+                                }
+                                else
+                                {
+                                    let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.ptrmask").unwrap();
+                                    let function = intrinsic.get_declaration(&env.module, &[ptr_type.into(), env.ptr_int_type.into()]).unwrap();
+                                    
+                                    let callval = env.builder.build_direct_call(function, &[left_val.into(), right_val.into()], "").unwrap();
+                                    let result = callval.try_as_basic_value().left().unwrap();
+                                    env.stack.push((left_type.clone(), result));
+                                }
                             }
                             "+" | "-" =>
                             {
