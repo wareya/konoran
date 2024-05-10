@@ -2255,6 +2255,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 {
                                     panic_error!("ptr mask (&) operation is only supported with a right-hand operand of the target's pointer-sized int type (usually u64 or u32) {:?}", right_basic_type);
                                 }
+                                // FIXME: this isn't constexpr
                                 let ptr_type = env.context.ptr_type(inkwell::AddressSpace::default());
                                 let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.ptrmask").unwrap();
                                 let function = intrinsic.get_declaration(&env.module, &[ptr_type.into(), env.ptr_int_type.into()]).unwrap();
