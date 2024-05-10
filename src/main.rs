@@ -2379,6 +2379,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
 const VERBOSE : bool = false;
 const PRINT_COMP_TIME : bool = true;
 const DEBUG_FIRST_MODULE : bool = false;
+const DEBUG_FIRST_MODULE_ASM : bool = false;
 
 fn run_program(modules : Vec<String>, _args : Vec<String>)
 {
@@ -2593,6 +2594,11 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     
     let mut parse_time = 0.0f64;
     
+    let config = inkwell::targets::InitializationConfig::default();
+    inkwell::targets::Target::initialize_native(&config).unwrap();
+    
+    let default_triple = inkwell::targets::TargetMachine::get_default_triple();
+    
     macro_rules! load_module
     {
         ($fname:expr) =>
@@ -2625,6 +2631,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             //}
             
             let module = context.create_module("main");
+            module.set_triple(&default_triple);
             let program = Program::new(&mut types, &ast).unwrap();
             
             if executor.is_none()
@@ -2649,7 +2656,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 executor.as_ref().unwrap().add_module(&module).unwrap();
             }
             let target_data = executor.as_ref().unwrap().get_target_data();
-            
+            module.set_data_layout(&target_data.get_data_layout());
             let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
             
             let intrinsic_imports = [
@@ -3074,9 +3081,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     
     // set up IR-level optimization pass manager
     let pass_manager = {
-        let config = inkwell::targets::InitializationConfig::default();
-        inkwell::targets::Target::initialize_native(&config).unwrap();
-        
         let builder = inkwell::passes::PassManagerBuilder::create();
         builder.set_optimization_level(opt_level);
         builder.set_inliner_with_threshold(1);
@@ -3175,7 +3179,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         }
     }
 
-    /*
+    if DEBUG_FIRST_MODULE_ASM
     {
         use inkwell::targets::*;
 
@@ -3195,9 +3199,8 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             )
             .unwrap();
 
-        machine.write_to_file(&module, FileType::Assembly, "out.asm".as_ref()).unwrap();
+        machine.write_to_file(&loaded_modules[0], FileType::Assembly, "out.asm".as_ref()).unwrap();
     }
-    */
     
     executor.run_static_destructors();
 }
