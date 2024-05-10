@@ -2325,6 +2325,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
 }
 
 const VERBOSE : bool = false;
+const PRINT_COMP_TIME : bool = true;
+const DEBUG_FIRST_MODULE : bool = false;
 
 fn run_program(modules : Vec<String>, _args : Vec<String>)
 {
@@ -2332,6 +2334,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     {
         println!("startup...");
     }
+    let true_start = std::time::Instant::now();
     
     let start = std::time::Instant::now();
     let context = inkwell::context::Context::create();
@@ -2624,10 +2627,8 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             
             if VERBOSE
             {
-                println!("compile time: {}", start.elapsed().as_secs_f64());
-                println!("module:\n{}", module.to_string());
+                println!("individual module compile time: {}", start.elapsed().as_secs_f64());
                 println!("adding global mappings...");
-                println!("executor build time: {}", start.elapsed().as_secs_f64());
             }
             
             for (f_name, (function, visibility)) in &program.funcs
@@ -2953,21 +2954,19 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         loaded_modules.push(load_module!(arg));
     }
     
-    //let module = load_module!("src/parser/irexample.txt");
-    //let module2 = load_module!("src/parser/irexample_other.txt");
-    
-    loaded_modules[0].print_to_file("out_unopt.ll").unwrap();
-    //module.print_to_file("out_unopt.ll").unwrap();
-    //module2.print_to_file("out_2_unopt.ll").unwrap();
+    if DEBUG_FIRST_MODULE
+    {
+        loaded_modules[0].print_to_file("out_unopt.ll").unwrap();
+    }
     
     let executor = executor.unwrap();
     
     if VERBOSE
     {
         println!("compilation time: {}", start.elapsed().as_secs_f64());
+        //println!("features: {}", inkwell::targets::TargetMachine::get_host_cpu_features());
     }
     
-    //println!("features: {}", inkwell::targets::TargetMachine::get_host_cpu_features());
     
     let start = std::time::Instant::now();
     
@@ -3007,9 +3006,10 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         println!("done doing IR optimizations. time: {}", start.elapsed().as_secs_f64());
     }
     
-    //module.print_to_file("out.ll").unwrap();
-    loaded_modules[0].print_to_file("out.ll").unwrap();
-    //module2.print_to_file("out_2.ll").unwrap();
+    if DEBUG_FIRST_MODULE
+    {
+        loaded_modules[0].print_to_file("out.ll").unwrap();
+    }
     
     if VERBOSE
     {
@@ -3043,6 +3043,12 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             }
         }
     }
+    
+    if VERBOSE || PRINT_COMP_TIME
+    {
+        println!("full compilation time: {}", true_start.elapsed().as_secs_f64());
+    }
+    
     
     unsafe
     {
