@@ -918,8 +918,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
     let u8_type = env.backend_types.get("u8").unwrap().into_int_type();
     let u64_type = env.backend_types.get("u64").unwrap().into_int_type();
     
-    macro_rules! panic_error {
-        ($($t:tt)*) => {{
+    macro_rules! panic_error
+    {
+        ($($t:tt)*) =>
+        {{
             eprintln!("\x1b[91mError:\x1b[0m {}", format!($($t)*));
             eprintln!("at line {}, column {}", node.line, node.position);
             
@@ -941,8 +943,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             panic!($($t)*);
         }};
     }
-    macro_rules! unwrap_or_panic {
-        ($($t:tt)*) => {{
+    macro_rules! unwrap_or_panic
+    {
+        ($($t:tt)*) =>
+        {{
             let x = ($($t)*);
             let mut unwrappable = false;
             x.as_ref().inspect(|_| unwrappable = true).unwrap();
@@ -2422,6 +2426,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     let ir_grammar = include_str!("parser/irgrammar.txt");
     let mut parser = parser::Parser::new_from_grammar(&ir_grammar).unwrap();
     
+    //let opt_level = inkwell::OptimizationLevel::None;
     let opt_level = inkwell::OptimizationLevel::Aggressive;
     
     let mut imports : BTreeMap<String, (*const u8, FunctionSig)> = BTreeMap::new();
@@ -2586,6 +2591,8 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     let mut global_decs = BTreeMap::new();
     let mut constants = BTreeMap::new();
     
+    let mut parse_time = 0.0f64;
+    
     macro_rules! load_module
     {
         ($fname:expr) =>
@@ -2597,8 +2604,13 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             }
             let program_text = fs::read_to_string($fname).unwrap();
             let program_lines : Vec<String> = program_text.lines().map(|x| x.to_string()).collect();
+            
+            let parse_start = std::time::Instant::now();
+            
             let tokens = parser.tokenize(&program_lines, true).unwrap();
             let ast = parser.parse_program(&tokens, &program_lines, true).unwrap().unwrap();
+            
+            parse_time += parse_start.elapsed().as_secs_f64();
             
             let start = std::time::Instant::now();
             if VERBOSE
@@ -3052,7 +3064,8 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     
     if VERBOSE
     {
-        println!("compilation time: {}", start.elapsed().as_secs_f64());
+        let comptime = start.elapsed().as_secs_f64();
+        println!("compilation time: {}", comptime);
         //println!("features: {}", inkwell::targets::TargetMachine::get_host_cpu_features());
     }
     
@@ -3135,7 +3148,10 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     
     if VERBOSE || PRINT_COMP_TIME
     {
-        println!("full compilation time: {}", true_start.elapsed().as_secs_f64());
+        let comptime = true_start.elapsed().as_secs_f64();
+        println!("full compilation time: {}ms", (comptime) * 1000.0);
+        println!("parse time (included in comp time): {}ms", (parse_time) * 1000.0);
+        println!("compilation time without parsing: {}ms", (comptime - parse_time) * 1000.0);
     }
     
     
