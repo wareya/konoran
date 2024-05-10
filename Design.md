@@ -99,6 +99,8 @@ Struct types consist of a series of members (also called variables, properties, 
 
 Structs have a fixed, known size, and their members are not reordered. Structs do not have any invisible padding; even if `u32`s need to be aligned to 4 bytes on the target platform, a struct that goes `struct ... { u8 a; u32 b; }` will have the `b` property start at the second byte of the struct, and the struct will be 5 bytes long. Alignment must be done manually. To make this easier, structs can have multiple members with the name `_`, none of which are accessible, and are assumed to have an unknown (possibly undefined/poison) value if accessed with pointer arithmetic.
 
+Composite types (structs/arrays) are passed by value when calling functions with them as arguments, or returning them from functions.
+
 The konoran implementation is allowed, but not encouraged, to produce an error if structs have misaligned members for the target platform.
 
 ## Functions
@@ -161,3 +163,19 @@ Having a value magically change between consecutive *volatile* accesses is allow
 
 Volatile memory acceses must be treated as though they have (non-UB-producing) side effects. In particular, optimizations must not change volatile memory accesses in order, number, or address. Implementations are allowed to specify arbitrary side-effects for volatile memory accesses. Volatile memory accesses are not typically assumed to modify variables or memory that they do not point at, but implementations are allowed to specify situations where they do. For example, an implementation might specify that doing a volatile read of a status register can cause an interrupt handler to run; normally, the implementation's optimizer is allowed to assume that this interrupt handler doesn't modify any variables or memory that the current non-interrupt code is working on, but the implementation is allowed to specify that it does, and prevent its own optimizer from assuming that those variables or memory are unchanged during the interrupt. If the implementation does not specify such a situation, then it is assumed that volatile memory accesses do not alter unrelated variables/memory, and the optimizer is free to use that assumption.
 
+## Casting
+
+Konoran has three types of cast: basic casts, bit casts, and unsafe casts. A given casting operation is only defined for a given type pair; you cannot arbitrarily cast any type to any other type. If you want to do so, you have to do type punning instead.
+
+Defined basic casts (with the `as` operator):
+
+- the same type
+- ints of the same size but different signedness
+- integers of the same signedness but different size
+- float-to-int and vice versa (any size; converts value instead of bits, saturating, and NaN goes to zero)
+- any pointer to any other pointer
+- different array/struct types of the same size
+
+## Operators
+
+Infix operators like `+`, `-`, `==`, etc. generally only operate on the same type on both sides. For example, to add a u8 to a u16, you have to use casts to make them the same type.

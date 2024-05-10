@@ -143,7 +143,6 @@ impl Type
     {
         matches!(self.data, TypeData::Array(_, _))
     }
-#[allow(dead_code)]
     fn is_composite(&self) -> bool
     {
         self.is_struct() || self.is_array()
@@ -1708,14 +1707,35 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     env.stack.push((right_type, ret));
                 }
                 // int-to-pointer cast
-                else if right_type.is_pointer_or_fpointer() && left_type.is_int_unsigned() && left_type.size() as u32 * 8 == env.ptr_int_type.get_bit_width()
+                else if left_type.is_int_unsigned() && right_type.is_pointer_or_fpointer() && left_type.size() as u32 * 8 == env.ptr_int_type.get_bit_width()
                 {
                     let ptr_type = env.context.ptr_type(inkwell::AddressSpace::default());
                     let ret = env.builder.build_int_to_ptr(left_val.into_int_value(), ptr_type, "").unwrap().into();
                     env.stack.push((right_type, ret));
                 }
-                else if left_size == right_size && right_type.is_pointer_or_fpointer() == left_type.is_pointer_or_fpointer()
+                // both primitive (non-pointer)
+                else if left_size == right_size && right_type.is_pointer_or_fpointer() == left_type.is_pointer_or_fpointer() && !right_type.is_composite() && !left_type.is_composite()
                 {
+                    let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
+                    env.stack.push((right_type, ret));
+                }
+                // both composite
+                else if left_size == right_size && right_type.is_composite() && left_type.is_composite()
+                {
+                    let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
+                    env.stack.push((right_type, ret));
+                }
+                // composite to primitive
+                else if left_size == right_size && left_type.is_composite() && !right_type.is_composite() && !right_type.is_pointer_or_fpointer()
+                {
+                    //let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
+                    let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
+                    env.stack.push((right_type, ret));
+                }
+                // primitive to composite
+                else if left_size == right_size && right_type.is_composite() && !left_type.is_composite() && !left_type.is_pointer_or_fpointer()
+                {
+                    //let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
                     let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
                     env.stack.push((right_type, ret));
                 }
@@ -1803,7 +1823,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                 }
                 // cast between types of same size, non-float. bitcast.
-                else if !left_type.is_float() && !right_type.is_float() && left_basic_type.size_of() == right_basic_type.size_of() && right_basic_type.is_sized() && !left_type.is_pointer_or_fpointer() && !right_type.is_pointer_or_fpointer()
+                else if !left_type.is_float() && !right_type.is_float() && right_basic_type.is_sized() && left_basic_type.size_of() == right_basic_type.size_of() && !left_type.is_pointer_or_fpointer() && !right_type.is_pointer_or_fpointer()
                 {
                     let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
                     env.stack.push((right_type, ret));
@@ -2238,7 +2258,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             
             let mut s = "".to_string();
             
-            let mut state = ' '; // ' ' - normal, '\' - in escape sequence, '%' - in format specifier
+            let mut state = ' '; // ' ' - normal, '%' - in format specifier
             for c in orig_string.chars()
             {
                 match state
@@ -2248,24 +2268,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         match c
                         {
                             '%' => state = '%',
-                            '\\' => state = '\\',
                             _ => s.push(c),
-                        }
-                    }
-                    '\\' =>
-                    {
-                        state = ' ';
-                        match c
-                        {
-                            '%' | '\\' => s.push(c),
-                            'n' => s.push('\n'),
-                            'r' => s.push('\r'),
-                            't' => s.push('\t'),
-                            _ =>
-                            {
-                                s.push('\\');
-                                s.push(c);
-                            }
                         }
                     }
                     '%' =>
