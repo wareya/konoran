@@ -861,7 +861,7 @@ fn val_is_const<'a>(mut is_const : bool, val : inkwell::values::BasicValueEnum<'
     match val
     {
         BasicValueEnum::ArrayValue(v) => is_const = is_const && v.is_const(),
-        BasicValueEnum::IntValue(v) => is_const = is_const && v.is_constant_int(),
+        BasicValueEnum::IntValue(v) => is_const = is_const && v.is_const(),
         BasicValueEnum::FloatValue(v) => is_const = is_const && v.is_const(),
         BasicValueEnum::PointerValue(v) => is_const = is_const && v.is_const(),
         BasicValueEnum::StructValue(v) => is_const = is_const && { unsafe { llvm_sys::core::LLVMIsConstant(v.as_value_ref()) == 1 }},

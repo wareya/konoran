@@ -9,7 +9,10 @@ struct Vec2
     f32 y;
 }
 
+
 Vec2 bruh = constexpr Vec2 { 529.19f32, 3.14f32 };
+
+u64 beepboop = (constexpr (main) bit_as u64) + 8523u64;
 
 export_extern void main()
 {
@@ -26,5 +29,6 @@ export_extern void main()
     print_float((asdf2) as f64);
     
     print_float((bruh.x) as f64);
+    print_float((beepboop) as f64);
     return;
 }
