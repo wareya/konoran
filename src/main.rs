@@ -1195,6 +1195,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             }
             "arrayindex_head" =>
             {
+                // FIXME: pretty sure this doesn't work with constexprs
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
                 compile(env, node.child(1).unwrap(), WantPointer::None);
                 
@@ -1229,6 +1230,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             }
             "indirection_head" =>
             {
+                // FIXME: pretty sure this doesn't work with constexprs
+                
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
                 let (struct_type, struct_addr) = env.stack.pop().unwrap();
                 let mut struct_type = unwrap_or_panic!(struct_type.deref_vptr());
@@ -2097,12 +2100,37 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
                     {
-                        let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.fptoui.sat").unwrap();
-                        let function = intrinsic.get_declaration(&env.module, &[target_type.into(), left_basic_type]).unwrap();
-                        
-                        let callval = env.builder.build_direct_call(function, &[left_val.into()], "").unwrap();
-                        let result = callval.try_as_basic_value().left().unwrap();
-                        env.stack.push((right_type.clone(), result));
+                        if left_val.is_const()
+                        {
+                            let (constant, _) = left_val.get_constant().unwrap();
+                            
+                            let min = 0.0;
+                            let max_int = target_type.const_all_ones().get_zero_extended_constant().unwrap();
+                            let max = max_int as f64;
+                            
+                            if constant.is_nan() || constant <= min
+                            {
+                                env.stack.push((right_type, target_type.const_int(0, true).into()));
+                            }
+                            else if constant >= max
+                            {
+                                env.stack.push((right_type, target_type.const_int(max_int, true).into()));
+                            }
+                            else
+                            {
+                                let ret = env.builder.build_float_to_signed_int(left_val, target_type.into(), "").unwrap();
+                                env.stack.push((right_type, ret.into()));
+                            }
+                        }
+                        else
+                        {
+                            let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.fptoui.sat").unwrap();
+                            let function = intrinsic.get_declaration(&env.module, &[target_type.into(), left_basic_type]).unwrap();
+                            
+                            let callval = env.builder.build_direct_call(function, &[left_val.into()], "").unwrap();
+                            let result = callval.try_as_basic_value().left().unwrap();
+                            env.stack.push((right_type.clone(), result));
+                        }
                     }
                     else
                     {
@@ -2113,12 +2141,43 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
                     {
-                        let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.fptosi.sat").unwrap();
-                        let function = intrinsic.get_declaration(&env.module, &[target_type.into(), left_basic_type]).unwrap();
-                        
-                        let callval = env.builder.build_direct_call(function, &[left_val.into()], "").unwrap();
-                        let result = callval.try_as_basic_value().left().unwrap();
-                        env.stack.push((right_type.clone(), result));
+                        if left_val.is_const()
+                        {
+                            let (constant, _) = left_val.get_constant().unwrap();
+                            
+                            let ones_int : u64 = target_type.const_all_ones().get_zero_extended_constant().unwrap();
+                            let min_int = -((ones_int >> 1) as i64) - 1;
+                            let min = min_int as f64;
+                            let max_int = ones_int >> 1;
+                            let max = max_int as f64;
+                            
+                            if constant.is_nan()
+                            {
+                                env.stack.push((right_type, target_type.const_int(0, true).into()));
+                            }
+                            else if constant <= min
+                            {
+                                env.stack.push((right_type, target_type.const_int(min_int as u64, true).into()));
+                            }
+                            else if constant >= max
+                            {
+                                env.stack.push((right_type, target_type.const_int(max_int, true).into()));
+                            }
+                            else
+                            {
+                                let ret = env.builder.build_float_to_signed_int(left_val, target_type.into(), "").unwrap();
+                                env.stack.push((right_type, ret.into()));
+                            }
+                        }
+                        else
+                        {
+                            let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.fptosi.sat").unwrap();
+                            let function = intrinsic.get_declaration(&env.module, &[target_type.into(), left_basic_type]).unwrap();
+                            
+                            let callval = env.builder.build_direct_call(function, &[left_val.into()], "").unwrap();
+                            let result = callval.try_as_basic_value().left().unwrap();
+                            env.stack.push((right_type.clone(), result));
+                        }
                     }
                     else
                     {

@@ -11,6 +11,7 @@ struct Vec2
 
 
 Vec2 bruh = constexpr Vec2 { 529.19f32, 3.14f32 };
+constexpr Vec2 bruh2 = constexpr Vec2 { 529.19f32, 3.14f32 };
 
 u64 beepboop = (constexpr (main) bit_as u64) + 8523u64;
 
@@ -41,6 +42,20 @@ export_extern void main()
     print_fmt("a cute float: %f\n", (&[(&myfloat) bit_as ptr(u8)]) as ptr(ptr(u8)));
     f64 mydouble = 3.14159265358979f64;
     print_fmt("a cute f64 float: %F\n", (&[(&mydouble) bit_as ptr(u8)]) as ptr(ptr(u8)));
+    
+    // FIXME
+    //f32 asge = bruh2.x;
+    //print_float((asge) as f64);
+    
+    constexpr f32 sgke = constexpr (46u8) as f32;
+    print_float((sgke) as f64);
+    
+    u8 sgke2 = constexpr (546.0543f32) as u8;
+    print_float((sgke2) as f64);
+    constexpr i64 sgke3 = constexpr (9223372036854775806.0543f64) as i64;
+    i64 sgke4 = constexpr (sgke3) as i64;
+    print_fmt("%i\n", (&[(&sgke4) bit_as ptr(u8)]) as ptr(ptr(u8)));
+    print_float((sgke3) as f64);
     
     //print_fmt("An invalid print that's going to crash: %f\n", (&[(95138u64) bit_as ptr(u8)]) as ptr(ptr(u8)));
     
