@@ -15,9 +15,6 @@ use parser::ast::ASTNode;
 
 /*
 TODO list:
-mid:
-- strings (const u8 array syntax sugar)
-
 low:
 - standard io functions
 
@@ -1128,6 +1125,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     let mut type_ = type_.clone();
                     check_struct_incomplete(env, &mut type_);
+                    
                     push_val_or_ptr!(type_, val.as_pointer_value());
                 }
                 else if let Some((func_val, funcsig)) = env.func_decs.get(name)
@@ -1518,6 +1516,76 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let int_type = backend_type.into_int_type();
                     let res = int_type.const_int(val as u64, false);
                     env.stack.push((type_.clone(), res.into()));
+                }
+            }
+            "string" =>
+            {
+                let text = &node.child(0).unwrap().text;
+                let text = text.split_once('"').unwrap().1;
+                let (text, suffix) = text.rsplit_once('"').unwrap();
+                let mut full_text = "".to_string();
+                let mut char_iter = text.chars();
+                let mut maybe_c = char_iter.next();
+                while let Some(mut c) = maybe_c
+                {
+                    if c == '\\'
+                    {
+                        c = match char_iter.next()
+                        {
+                            Some('\\') => '\\',
+                            Some('\'') => '\'',
+                            Some('n') => '\n',
+                            Some('r') => '\r',
+                            Some('t') => '\t',
+                            _ => panic_error!("unknown or missing string escape code"),
+                        }
+                    }
+                    full_text.push(c);
+                    maybe_c = char_iter.next();
+                }
+                let mut bytes = full_text.into_bytes();
+                if !suffix.ends_with("nonull")
+                {
+                    bytes.push(0);
+                }
+                
+                let vals = bytes.iter().map(|x| u8_type.const_int(*x as u64, false).into()).collect::<Vec<_>>();
+                let array_val = basic_const_array(u8_type.into(), &vals);
+                if suffix.starts_with("array")
+                {
+                    let array_type = u8_type_frontend.to_array(bytes.len());
+                    let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &array_type);
+                    
+                    if want_pointer != WantPointer::None
+                    {
+                        let global = env.module.add_global(basic_type, Some(inkwell::AddressSpace::default()), "");
+                        global.set_initializer(&array_val);
+                        global.set_linkage(inkwell::module::Linkage::Internal);
+                        
+                        env.stack.push((array_type.to_ptr(), global.as_pointer_value().into()));
+                    }
+                    else
+                    {
+                        env.stack.push((array_type.clone(), array_val.into()));
+                    }
+                }
+                else
+                {
+                    let type_ = u8_type_frontend.to_ptr();
+                    let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &type_);
+                    
+                    if want_pointer == WantPointer::None
+                    {
+                        let global = env.module.add_global(basic_type, Some(inkwell::AddressSpace::default()), "");
+                        global.set_initializer(&array_val);
+                        global.set_linkage(inkwell::module::Linkage::Internal);
+                        
+                        env.stack.push((type_.clone(), global.as_pointer_value().into()));
+                    }
+                    else
+                    {
+                        panic_error!("tried to get pointer of pointer-to-string literal");
+                    }
                 }
             }
             "integer" =>
@@ -2419,6 +2487,21 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         }
     }
     import_function::<unsafe extern "C" fn(*mut u8, *mut *mut u8) -> ()>(&types, &mut parser, &mut imports, "print_fmt", print_fmt, print_fmt as usize, "funcptr(void, (ptr(u8), ptr(ptr(u8))))");
+    
+    unsafe extern "C" fn print_str(cstring_bytes : *mut u8) -> ()
+    {
+        unsafe
+        {
+            let mut strlen = 0;
+            while *cstring_bytes.offset(strlen as isize) != 0
+            {
+                strlen += 1;
+            }
+            let orig_string = String::from_utf8_lossy(&std::slice::from_raw_parts(cstring_bytes, strlen));
+            print!("{}", orig_string);
+        }
+    }
+    import_function::<unsafe extern "C" fn(*mut u8) -> ()>(&types, &mut parser, &mut imports, "print_str", print_str, print_str as usize, "funcptr(void, (ptr(u8)))");
     
     unsafe extern "C" fn print_bytes(bytes : *mut u8, count : u64) -> ()
     {

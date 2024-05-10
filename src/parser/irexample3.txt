@@ -14,6 +14,8 @@ Vec2 bruh = constexpr Vec2 { 529.19f32, 3.14f32 };
 
 u64 beepboop = (constexpr (main) bit_as u64) + 8523u64;
 
+ptr(u8) fgigei = constexpr "bk4ui34i";
+
 export_extern void main()
 {
     u8 asdf = constexpr (52u8 + 242u8);
@@ -30,5 +32,21 @@ export_extern void main()
     
     print_float((bruh.x) as f64);
     print_float((beepboop) as f64);
+    
+    ptr(u8) wah = constexpr "fkg3ui";
+    array(u8, 6) wah2 = constexpr "skgue"array;
+    //array(u8, 6) wah2 = constexpr ['s', 'k', 'g', 'u', 'e', 0u8];
+    
+    array(ptr(u8), 1) buh2 = [
+        (0u64) bit_as ptr(u8)
+    ];
+    
+    print_str((&wah2) as ptr(u8));
+    print_str("\n");
+    print_str(fgigei);
+    print_str("\n");
+    print_str(wah);
+    print_str("\n");
+    print_fmt(wah, (&buh2) as ptr(ptr(u8)));
     return;
 }
