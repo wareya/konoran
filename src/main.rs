@@ -2593,6 +2593,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             
             let intrinsic_imports = [
                 ("sqrt", "llvm.sqrt.f64", "funcptr(f64, (f64))"),
+                ("sqrt_f32", "llvm.sqrt.f32", "funcptr(f32, (f32))"),
                 ("memset"    , "llvm.memset.p0.i64", "funcptr(void, (ptr(u8), u8, u64))"),
                 ("memset_vol", "llvm.memset.p0.i64", "funcptr(void, (ptr(u8), u8, u64))"),
                 ("memcpy"    , "llvm.memcpy.p0.i64", "funcptr(void, (ptr(u8), ptr(u8), u64))"),

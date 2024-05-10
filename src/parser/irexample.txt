@@ -1,7 +1,8 @@
 // core types: u8, i8, u16, i16, u32, i32, u64, i64, f32, f64
 // pointer types: ptr(type), funcptr(returntype, (arg1type, arg2type, ...))
 // composite types: structs, array(type, len)
-// operator precedence:
+
+// must be linked together with irexample_other.txt
 
 struct Vec2
 {
