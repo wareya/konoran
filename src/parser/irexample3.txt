@@ -1,0 +1,30 @@
+// core types: u8, i8, u16, i16, u32, i32, u64, i64, f32, f64
+// pointer types: ptr(type), funcptr(returntype, (arg1type, arg2type, ...))
+// composite types: structs, array(type, len)
+
+
+struct Vec2
+{
+    f32 x;
+    f32 y;
+}
+
+Vec2 bruh = constexpr Vec2 { 529.19f32, 3.14f32 };
+
+export_extern void main()
+{
+    u8 asdf = constexpr (52u8 + 242u8);
+    array(u8, 4) myvar = constexpr [' ', ' ', ' ', 8u8 + 15u8];
+    print_float((myvar[3i64]) as f64);
+    
+    Vec2 buh = constexpr Vec2 { 9153.9f32 / 402.630f32, 8152.852f32 };
+    print_float((buh.x) as f64);
+    
+    u8 asdf2 = constexpr (242u8 / 7u8);
+    print_float((asdf2) as f64);
+    asdf2 = constexpr (242u8 / 0u8);
+    print_float((asdf2) as f64);
+    
+    print_float((bruh.x) as f64);
+    return;
+}

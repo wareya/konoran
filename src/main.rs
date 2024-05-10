@@ -16,7 +16,6 @@ use parser::ast::ASTNode;
 /*
 TODO list:
 mid:
-- const literals
 - strings (const u8 array syntax sugar)
 
 low:
@@ -855,6 +854,53 @@ fn check_struct_incomplete<'a>(env : &'a mut Environment, type_ : &mut Type)
     }
     
 }
+fn val_is_const<'a>(mut is_const : bool, val : inkwell::values::BasicValueEnum<'a>) -> bool
+{
+    use inkwell::values::BasicValueEnum;
+    use inkwell::values::AsValueRef;
+    match val
+    {
+        BasicValueEnum::ArrayValue(v) => is_const = is_const && v.is_const(),
+        BasicValueEnum::IntValue(v) => is_const = is_const && v.is_constant_int(),
+        BasicValueEnum::FloatValue(v) => is_const = is_const && v.is_const(),
+        BasicValueEnum::PointerValue(v) => is_const = is_const && v.is_const(),
+        BasicValueEnum::StructValue(v) => is_const = is_const && { unsafe { llvm_sys::core::LLVMIsConstant(v.as_value_ref()) == 1 }},
+        _ => is_const = false,
+    }
+    return is_const;
+}
+fn basic_const_array<'ctx>(type_ : inkwell::types::BasicTypeEnum<'ctx>, vals : &[inkwell::values::BasicValueEnum<'ctx>]) -> inkwell::values::ArrayValue<'ctx>
+{
+    match type_
+    {
+        BasicTypeEnum::ArrayType(v) =>
+        {
+            let vals = vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>();
+            v.const_array(&vals)
+        }
+        BasicTypeEnum::IntType(v) =>
+        {
+            let vals = vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>();
+            v.const_array(&vals)
+        }
+        BasicTypeEnum::FloatType(v) =>
+        {
+            let vals = vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>();
+            v.const_array(&vals)
+        }
+        BasicTypeEnum::PointerType(v) =>
+        {
+            let vals = vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>();
+            v.const_array(&vals)
+        }
+        BasicTypeEnum::StructType(v) =>
+        {
+            let vals = vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>();
+            v.const_array(&vals)
+        }
+        _ => panic!("internal error: unsupported type for array"),
+    }
+}
 fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : WantPointer)
 {
     // used to build constants for some lowerings, and to cast to bool
@@ -1267,6 +1313,14 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 //println!("done compiling func call");
             }
+            "constexpr" =>
+            {
+                compile(env, node.child(0).unwrap(), want_pointer);
+                if !val_is_const(true, env.stack.last().unwrap().1)
+                {
+                    panic_error!("error: constexpr contains non-constant parts");
+                }
+            }
             "array_literal" =>
             {
                 let stack_size = env.stack.len();
@@ -1278,7 +1332,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 //println!("array length: {}", array_length);
                 let mut vals = Vec::new();
                 let mut element_type = None;
-                
+                let mut is_const = true;
                 for _ in 0..array_length
                 {
                     let (type_, val) = env.stack.pop().unwrap();
@@ -1290,6 +1344,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         panic_error!("error: array literals must entirely be of a single type");
                     }
+                    is_const = val_is_const(is_const, val);
                     vals.push(val);
                 }
                 vals.reverse();
@@ -1301,22 +1356,31 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let element_backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &element_type);
                     
                     let size = u64_type.const_int(array_length as u64, false);
-                    let slot = env.builder.build_array_alloca(element_backend_type, size, "").unwrap();
                     
-                    let mut offset = 0;
-                    for val in vals
+                    if !is_const || want_pointer != WantPointer::None
                     {
-                        let offset_val = u64_type.const_int(offset as u64, false);
-                        let offset_addr = unsafe
-                        {
-                            env.builder.build_in_bounds_gep(element_backend_type, slot, &[offset_val], "").unwrap()
-                        };
+                        let slot = env.builder.build_array_alloca(element_backend_type, size, "").unwrap();
                         
-                        env.builder.build_store(offset_addr, val).unwrap();
-                        offset += 1;
+                        let mut offset = 0;
+                        for val in vals
+                        {
+                            let offset_val = u64_type.const_int(offset as u64, false);
+                            let offset_addr = unsafe
+                            {
+                                env.builder.build_in_bounds_gep(element_backend_type, slot, &[offset_val], "").unwrap()
+                            };
+                            
+                            env.builder.build_store(offset_addr, val).unwrap();
+                            offset += 1;
+                        }
+                        
+                        push_val_or_ptr!(array_type, slot);
                     }
-                    
-                    push_val_or_ptr!(array_type, slot);
+                    else
+                    {
+                        let val = basic_const_array(element_backend_type, &vals);
+                        env.stack.push((array_type.clone(), val.into()));
+                    }
                 }
                 else
                 {
@@ -1339,10 +1403,12 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 assert!(member_count == struct_member_types.len());
                 //println!("struct member count: {}", member_count);
                 
+                let mut is_const = true;
                 let mut vals = Vec::new();
                 for _ in 0..member_count
                 {
                     let (type_, val) = env.stack.pop().unwrap();
+                    is_const = val_is_const(is_const, val);
                     vals.push((type_, val));
                 }
                 vals.reverse();
@@ -1352,19 +1418,31 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &struct_type);
                 
-                //let size = alloc_size_of_type(&env.target_data, env.backend_types, &struct_type);
-                //println!("{:?}", backend_type);
-                let slot = env.builder.build_alloca(backend_type, "").unwrap();
-                for (index, (type_, val)) in vals.into_iter().enumerate()
+                if !is_const || want_pointer != WantPointer::None
                 {
-                    let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, index as u32, "").unwrap();
+                    let slot = env.builder.build_alloca(backend_type, "").unwrap();
+                    for (index, (type_, val)) in vals.into_iter().enumerate()
+                    {
+                        let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, index as u32, "").unwrap();
+                        
+                        assert!(type_ == stack_val_types[index]);
+                        
+                        env.builder.build_store(index_addr, val).unwrap();
+                    }
                     
-                    assert!(type_ == stack_val_types[index]);
-                    
-                    env.builder.build_store(index_addr, val).unwrap();
+                    push_val_or_ptr!(struct_type, slot);
                 }
-                
-                push_val_or_ptr!(struct_type, slot);
+                else
+                {
+                    let mut newvals = Vec::new();
+                    for (index, (type_, val)) in vals.into_iter().enumerate()
+                    {
+                        assert!(type_ == stack_val_types[index]);
+                        newvals.push(val);
+                    }
+                    let val = backend_type.into_struct_type().const_named_struct(&newvals);
+                    env.stack.push((struct_type, val.into()));
+                }
             }
             "float" =>
             {
@@ -2126,23 +2204,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                     }
                                     "/" | "%" =>
                                     {
-                                        let then_block = env.context.append_basic_block(env.func_val, "");
-                                        let else_block = env.context.append_basic_block(env.func_val, "");
-                                        let out_block = env.context.append_basic_block(env.func_val, "");
-                                        
                                         let zero = left_val.get_type().const_int(0, true);
-                                        let temp_slot = env.builder.build_alloca(left_val.get_type(), "").unwrap();
+                                        let comp_val = env.builder.build_int_compare(inkwell::IntPredicate::EQ, right_val, zero, "").unwrap();
                                         
-                                        let comp_val = env.builder.build_int_compare(inkwell::IntPredicate::EQ, left_val, zero, "").unwrap();
-                                        env.builder.build_conditional_branch(comp_val, then_block, else_block).unwrap();
-                                        
-                                        env.builder.position_at_end(then_block);
-                                        env.builder.build_store(temp_slot, zero).unwrap();
-                                        
-                                        env.builder.build_unconditional_branch(out_block).unwrap();
-                                        env.builder.position_at_end(else_block);
-                                        
-                                        let res = match (op.as_str(), is_u)
+                                        let op_res = match (op.as_str(), is_u)
                                         {
                                             ("/",  true) => env.builder.build_int_unsigned_div(left_val, right_val, ""),
                                             ("/", false) => env.builder.build_int_signed_div(left_val, right_val, ""),
@@ -2150,12 +2215,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                             ("%", false) => env.builder.build_int_signed_rem(left_val, right_val, ""),
                                             _ => panic_error!("internal error: div/rem operator mismatch"),
                                         }.unwrap();
-                                        env.builder.build_store(temp_slot, res).unwrap();
                                         
-                                        env.builder.build_unconditional_branch(out_block).unwrap();
-                                        env.builder.position_at_end(out_block);
-                                        
-                                        let res = env.builder.build_load(left_val.get_type(), temp_slot, "").unwrap();
+                                        let res = env.builder.build_select(comp_val, zero, op_res, "").unwrap();
                                         env.stack.push((left_type.clone(), res.into()));
                                     }
                                     ">" | "<" | ">=" | "<=" | "==" | "!=" =>
@@ -2613,14 +2674,27 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         let (type_val, val) = env.stack.pop().unwrap();
                         assert!(type_val == *g_type);
                         
-                        let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
-                        global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
-                        global.set_linkage(linkage);
-                        global.set_dll_storage_class(storage_class);
-                        env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
-                        env.builder.build_return(None).unwrap();
-                        
-                        global_decs.insert(g_name.clone(), (g_type.clone(), global, Some(func_val)));
+                        if val_is_const(true, val)
+                        {
+                            let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                            global.set_initializer(&val);
+                            global.set_linkage(linkage);
+                            global.set_dll_storage_class(storage_class);
+                            env.builder.build_return(None).unwrap();
+                            
+                            global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
+                        }
+                        else
+                        {
+                            let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                            global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
+                            global.set_linkage(linkage);
+                            global.set_dll_storage_class(storage_class);
+                            env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
+                            env.builder.build_return(None).unwrap();
+                            
+                            global_decs.insert(g_name.clone(), (g_type.clone(), global, Some(func_val)));
+                        }
                     }
                     else
                     {
@@ -2799,6 +2873,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     //let module = load_module!("src/parser/irexample.txt");
     //let module2 = load_module!("src/parser/irexample_other.txt");
     
+    loaded_modules[0].print_to_file("out_unopt.ll").unwrap();
     //module.print_to_file("out_unopt.ll").unwrap();
     //module2.print_to_file("out_2_unopt.ll").unwrap();
     
@@ -2850,6 +2925,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     }
     
     //module.print_to_file("out.ll").unwrap();
+    loaded_modules[0].print_to_file("out.ll").unwrap();
     //module2.print_to_file("out_2.ll").unwrap();
     
     if VERBOSE

@@ -9,6 +9,7 @@ edition = "2021"
 [dependencies]
 regex = "1.7.1"
 inkwell = { git = "https://github.com/TheDan64/inkwell.git", rev = "5d5a531c765a6ad37aa6591c0287d0f9109fff62", features = ["llvm16-0"], default-features = false }
+llvm-sys = "160"
 
 [profile.release]
 opt-level = 2
