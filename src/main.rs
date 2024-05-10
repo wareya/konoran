@@ -1404,6 +1404,44 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     panic_error!("unknown float suffix pattern {}", parts.1)
                 }
             }
+            "char" =>
+            {
+                let text = &node.child(0).unwrap().text;
+                let mut c = text.chars().nth(1).unwrap();
+                if c == '\\'
+                {
+                    c = match text.chars().nth(2).unwrap()
+                    {
+                        '\\' => '\\',
+                        '\'' => '\'',
+                        'n' => '\n',
+                        'r' => '\r',
+                        't' => '\t',
+                        _ => panic_error!("unknown char escape code"),
+                    }
+                }
+                let val = u32::from(c);
+                if text.ends_with("u32")
+                {
+                    let type_ = env.types.get("u32").unwrap();
+                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
+                    let int_type = backend_type.into_int_type();
+                    let res = int_type.const_int(val as u64, false);
+                    env.stack.push((type_.clone(), res.into()));
+                }
+                else
+                {
+                    if val > 0xFF
+                    {
+                        panic_error!("u8 char literal has a value greater than 255");
+                    }
+                    let type_ = env.types.get("u8").unwrap();
+                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
+                    let int_type = backend_type.into_int_type();
+                    let res = int_type.const_int(val as u64, false);
+                    env.stack.push((type_.clone(), res.into()));
+                }
+            }
             "integer" =>
             {
                 let text = &node.child(0).unwrap().text;

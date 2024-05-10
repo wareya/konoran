@@ -11,6 +11,15 @@ integer_token: TOKEN
 %[0-9]+%
 %0x[0-9A-Fa-f]+%
 
+string: TOKEN
+%"([^"\\]|\\.)*"%
+
+char: TOKEN
+%'\\[\\'nrt]'u32%
+%'[^\\]'u32%
+%'\\[\\'nrt]'%
+%'[^\\]'%
+
 name: TOKEN
 %[a-zA-Z_][0-9a-zA-Z_]*%
 
@@ -100,6 +109,7 @@ $struct_literal$
 $parenexpr$
 $float$
 $integer$
+$char$
 $rvarname$
 
 simplexpr: SIMPLIFY
@@ -114,6 +124,7 @@ $rhunexpr$
 $parenexpr$
 $float$
 $integer$
+$char$
 $rvarname$
 
 expr: SIMPLIFY
