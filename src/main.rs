@@ -2283,6 +2283,8 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     // \n, \r, \t - LF, CR, and horizontal tab characters
     //
     // vars is allowed to be null if no format specifiers are used
+    // vars is a pointer to a list of pointers. these pointers are reinterpreted as pointers to the correct type
+    // optionally, the last pointer in the list of pointers can be null, to signal that there are no more vars
     unsafe extern "C" fn print_fmt(cstring_bytes : *mut u8, mut vars : *mut *mut u8) -> ()
     {
         unsafe
