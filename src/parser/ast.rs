@@ -4,6 +4,7 @@ pub struct LexToken {
     pub (crate) text: String,
     pub (crate) line: usize,
     pub (crate) position: usize,
+    pub (crate) span: usize,
 }
 
 #[derive(Clone)]
@@ -12,6 +13,7 @@ pub struct ASTNode {
     pub (crate) text: String,
     pub (crate) line: usize,
     pub (crate) position: usize,
+    pub (crate) span: usize,
     pub (crate) children: Option<Vec<ASTNode>>,
 }
 
@@ -127,5 +129,5 @@ impl ASTNode {
 
 pub (crate) fn dummy_astnode() -> ASTNode
 {
-    ASTNode{text: "".to_string(), line: 0, position: 0, children: None}
+    ASTNode{text: "".to_string(), line: 0, position: 0, span: 0, children: None}
 }

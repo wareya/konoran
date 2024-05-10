@@ -871,7 +871,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             let s = env.source_text[node.line-1].clone();
             let ix = s.char_indices().map(|(p, _)| p).collect::<Vec<_>>();
             let start = ix[node.position - 1];
-            let end = (start + node.text.len()).min(s.len());
+            let end = (start + node.span).min(s.len());
             let a = &s[0..start];
             let b = &s[start..end];
             let c = &s[end..s.len()];

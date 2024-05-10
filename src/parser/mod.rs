@@ -307,13 +307,29 @@ impl Parser {
                     continue;
                 }
                 
+                // FIXME modify token spans to cross lines properly
+                macro_rules! fix_prev_span
+                {
+                    () => {{
+                        if ret.len() >= 2
+                        {
+                            let s = ret.len();
+                            if ret[s-2].line == ret[s-1].line
+                            {
+                                ret[s-2].span += (ret[s-1].position - ret[s-2].position) - ret[s-2].text.len();
+                            }
+                        }
+                    }};
+                }
+                
                 let mut continue_the_while = false;
                 for rule in &self.regex_list
                 {
                     if let Some(text) = self.internal_regexes.match_at(&rule, &line, offset)
                     {
                         // TODO: fix position everywhere to be codepoints instead of bytes
-                        ret.push(LexToken{text : text.clone(), line : linecount, position : offset+1});
+                        ret.push(LexToken{text : text.clone(), line : linecount, span : text.len(), position : offset+1});
+                        fix_prev_span!();
                         offset += text.len();
                         continue_the_while = true;
                         break;
@@ -326,7 +342,8 @@ impl Parser {
                     {
                         if segment == text.as_str()
                         {
-                            ret.push(LexToken{text : text.clone(), line : linecount, position : offset+1});
+                            ret.push(LexToken{text : text.clone(), line : linecount, span : text.len(), position : offset+1});
+                            fix_prev_span!();
                             offset += text.len();
                             continue_the_while = true;
                             break;
@@ -345,7 +362,8 @@ impl Parser {
                             {
                                 continue;
                             }
-                            ret.push(LexToken{text : text.clone(), line : linecount, position : offset+1});
+                            ret.push(LexToken{text : text.clone(), line : linecount, span : text.len(), position : offset+1});
+                            fix_prev_span!();
                             offset += text.len();
                             continue_the_while = true;
                             break;
@@ -519,7 +537,7 @@ impl Parser {
                     {
                         if token.text == *text
                         {
-                            nodes.push(ASTNode{text : token.text.to_string(), line : token.line, position : token.position, children : None});
+                            nodes.push(ASTNode{text : token.text.to_string(), line : token.line, position : token.position, span : token.span, children : None});
                             totalconsumed += 1;
                             continue;
                         }
@@ -534,7 +552,7 @@ impl Parser {
                     {
                         if self.internal_regexes.is_exact_immut(text, &token.text)?
                         {
-                            nodes.push(ASTNode{text : token.text.to_string(), line : token.line, position : token.position, children : None});
+                            nodes.push(ASTNode{text : token.text.to_string(), line : token.line, position : token.position, span : token.span, children : None});
                             totalconsumed += 1;
                             continue;
                         }
@@ -559,7 +577,7 @@ impl Parser {
     {
         if tokens.len() == 0
         {
-            return Ok((Some(ASTNode{text : "program".to_string(), line : 0, position : 0, children : Some(Vec::new()) }), 0, None, None));
+            return Ok((Some(ASTNode{text : "program".to_string(), line : 0, position : 0, span : 0, children : Some(Vec::new()) }), 0, None, None));
         }
         
         let mut latesterror : Option<ParseError> = None;
@@ -579,7 +597,17 @@ impl Parser {
             {
                 if let Some(nodes) = nodes
                 {
-                    return Ok((Some(ASTNode{text : nodetype.name.clone(), line : token.line, position : token.position, children : Some(nodes) }), consumed, latesterror, latestnode));
+                    // FIXME modify token spans to cross lines properly
+                    let mut span = 0;
+                    for t in &tokens[index..index+consumed]
+                    {
+                        if t.line != token.line
+                        {
+                            break;
+                        }
+                        span += t.span;
+                    }
+                    return Ok((Some(ASTNode{text : nodetype.name.clone(), line : token.line, position : token.position, span, children : Some(nodes) }), consumed, latesterror, latestnode));
                 }
             }
         }
@@ -734,6 +762,7 @@ impl Parser {
                             text: format!("{}_head", ast_right.text),
                             line,
                             position,
+                            span: ast_right.span,
                             children: Some(Vec::new()),
                         };
                         std::mem::swap(&mut ast_left, ast);
