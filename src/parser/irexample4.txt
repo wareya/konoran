@@ -1,0 +1,38 @@
+
+
+struct Vec2
+{
+    f32 x;
+    f32 y;
+}
+
+struct Vec2d
+{
+    f64 x;
+    f64 y;
+}
+
+struct Vec3d
+{
+    f64 x;
+    f64 y;
+    f64 z;
+}
+
+struct TestStruct
+{
+    u8 a;
+    u8 _;
+    u16 b;
+}
+
+using void myfun2(Vec2);
+using void myfun2d(Vec2d);
+using void myfun3d(Vec3d);
+
+void main()
+{
+    TestStruct asdf = TestStruct {0u8, 0u16};
+    *@&asdf = TestStruct {10u8, 0u16};
+    return;
+}

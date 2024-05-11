@@ -36,7 +36,7 @@ enum TypeData
     Primitive,
     Struct(Vec<(String, Type)>), // property name, property type
     Pointer(Rc<RefCell<Type>>, bool), // bool is whether the pointer is volatile
-    VirtualPointer(Box<Type>, bool),
+    VirtualPointer(Box<Type>, bool), // bool is whether the pointer is volatile
     FuncPointer(Box<FunctionSig>),
     Array(Box<Type>, usize),
 }
@@ -85,9 +85,9 @@ impl Type
     {
         Type { name : "array".to_string(), data : TypeData::Array(Box::new(self.clone()), count as usize) }
     }
-    fn to_ptr(&self) -> Type
+    fn to_ptr(&self, volatile : bool) -> Type
     {
-        Type { name : "ptr".to_string(), data : TypeData::Pointer(Rc::new(RefCell::new(self.clone())), false) }
+        Type { name : "ptr".to_string(), data : TypeData::Pointer(Rc::new(RefCell::new(self.clone())), volatile) }
     }
     fn ptr_to_vptr(&self) -> Result<Type, String>
     {
@@ -97,9 +97,9 @@ impl Type
             _ => Err("internal error: tried to convert non-ptr to vptr".to_string())
         }
     }
-    fn to_vptr(&self) -> Type
+    fn to_vptr(&self, volatile : bool) -> Type
     {
-        Type { name : "vptr".to_string(), data : TypeData::VirtualPointer(Box::new(self.clone()), false) }
+        Type { name : "vptr".to_string(), data : TypeData::VirtualPointer(Box::new(self.clone()), volatile) }
     }
     fn deref_ptr(&self) -> Result<(Type, bool), String>
     {
@@ -109,11 +109,11 @@ impl Type
             _ => Err(format!("error: attempted to dereference non-pointer type `{}`", self.to_string())),
         }
     }
-    fn deref_vptr(&self) -> Result<Type, String>
+    fn deref_vptr(&self) -> Result<(Type, bool), String>
     {
         match &self.data
         {
-            TypeData::VirtualPointer(inner, _) => Ok(*inner.clone()),
+            TypeData::VirtualPointer(inner, volatile) => Ok((*inner.clone(), *volatile)),
             _ => Err(format!("error: attempted to virtually dereference non-virtual-pointer type `{}`", self.to_string())),
         }
     }
@@ -286,7 +286,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
                     res.data = TypeData::IncompleteStruct;
                 }
             }
-            res.map(|x| x.to_ptr())
+            res.map(|x| x.to_ptr(false))
         }
         // FIXME // why was this fixme here?
         (_, name) => Err(format!("error: unsupported type (culprit: `{}`)", name)),
@@ -966,20 +966,21 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
     
     macro_rules! push_val_or_ptr
     {
-        ($type:expr, $addr:expr) =>
+        ($type:expr, $addr:expr, $volatile:expr) =>
         {
             if want_pointer == WantPointer::Real
             {
-                env.stack.push(($type.to_ptr(), $addr.into()));
+                env.stack.push(($type.to_ptr($volatile), $addr.into()));
             }
             else if want_pointer == WantPointer::Virtual
             {
-                env.stack.push(($type.to_vptr(), $addr.into()));
+                env.stack.push(($type.to_vptr($volatile), $addr.into()));
             }
             else
             {
                 let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &$type);
                 let val = env.builder.build_load(basic_type, $addr, "").unwrap();
+                val.as_instruction_value().unwrap().set_volatile($volatile).unwrap();
                 env.stack.push(($type.clone(), val));
             }
         }
@@ -1107,7 +1108,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let (type_val, val) = env.stack.pop().unwrap();
                 let (type_left_incomplete, left_addr) = env.stack.pop().unwrap();
                 
-                let type_left = if type_left_incomplete.is_virtual_pointer()
+                let (type_left, volatile) = if type_left_incomplete.is_virtual_pointer()
                 {
                     unwrap_or_panic!(type_left_incomplete.deref_vptr())
                 }
@@ -1119,7 +1120,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 if let Ok(addr) = inkwell::values::PointerValue::try_from(left_addr)
                 {
-                    env.builder.build_store(addr, val).unwrap();
+                    let store = env.builder.build_store(addr, val).unwrap();
+                    store.set_volatile(volatile).unwrap();
                 }
                 else
                 {
@@ -1143,7 +1145,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     assert!(want_pointer != WantPointer::None);
                     
-                    push_val_or_ptr!(type_, slot);
+                    push_val_or_ptr!(type_, slot, false);
                 }
                 else if env.global_decs.contains_key(name)
                 {
@@ -1166,7 +1168,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let (mut type_, slot) = env.variables[name].clone();
                     check_struct_incomplete(env, &mut type_);
                     
-                    push_val_or_ptr!(type_, slot);
+                    push_val_or_ptr!(type_, slot, false);
                 }
                 else if env.constants.contains_key(name)
                 {
@@ -1180,7 +1182,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let mut type_ = type_.clone();
                     check_struct_incomplete(env, &mut type_);
                     
-                    push_val_or_ptr!(type_, val.as_pointer_value());
+                    push_val_or_ptr!(type_, val.as_pointer_value(), false);
                 }
                 else if let Some((func_val, funcsig)) = env.func_decs.get(name)
                 {
@@ -1202,7 +1204,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let (offset_type, offset_val) = env.stack.pop().unwrap();
                 let (base_type, base_addr) = env.stack.pop().unwrap();
-                let base_type = unwrap_or_panic!(base_type.deref_vptr());
+                let (base_type, volatile) = unwrap_or_panic!(base_type.deref_vptr());
                 
                 if offset_type.name == "i64"
                 {
@@ -1215,7 +1217,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "").unwrap()
                     };
                     
-                    push_val_or_ptr!(inner_type, inner_addr);
+                    push_val_or_ptr!(inner_type, inner_addr, volatile);
                     
                 }
                 else
@@ -1229,7 +1231,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
                 let (struct_type, struct_addr) = env.stack.pop().unwrap();
-                let mut struct_type = unwrap_or_panic!(struct_type.deref_vptr());
+                let (mut struct_type, volatile) = unwrap_or_panic!(struct_type.deref_vptr());
                 check_struct_incomplete(env, &mut struct_type);
                 let backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &struct_type);
                 
@@ -1248,7 +1250,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), struct_addr, inner_index as u32, "").unwrap();
                     
-                    push_val_or_ptr!(inner_type, index_addr);
+                    push_val_or_ptr!(inner_type, index_addr, volatile);
                 }
                 else
                 {
@@ -1425,7 +1427,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             offset += 1;
                         }
                         
-                        push_val_or_ptr!(array_type, slot);
+                        push_val_or_ptr!(array_type, slot, false);
                     }
                     else
                     {
@@ -1481,7 +1483,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         env.builder.build_store(index_addr, val).unwrap();
                     }
                     
-                    push_val_or_ptr!(struct_type, slot);
+                    push_val_or_ptr!(struct_type, slot, false);
                 }
                 else
                 {
@@ -1604,7 +1606,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let vals = bytes.iter().map(|x| u8_type.const_int(*x as u64, false).into()).collect::<Vec<_>>();
                 let array_val = basic_const_array(u8_type.into(), &vals);
-                let type_ = u8_type_frontend.to_ptr();
+                let type_ = u8_type_frontend.to_ptr(false);
                 if suffix.starts_with("array")
                 {
                     if want_pointer != WantPointer::None
@@ -1752,6 +1754,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         TypeData::Pointer(_, ref mut is_volatile) => *is_volatile = true,
                                         _ => panic_error!("internal error: broken pointer volatility test"),
                                     }
+                                    println!("marked pointer as volatile");
                                     env.stack.push((type_, val));
                                     
                                 }
@@ -1780,6 +1783,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         }
                                         let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
                                         res.as_instruction_value().unwrap().set_volatile(volatile).unwrap();
+                                        println!("load volatility: {}", volatile);
                                         env.stack.push((inner_type, res));
                                     }
                                     "@" =>
