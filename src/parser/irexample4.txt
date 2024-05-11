@@ -33,10 +33,11 @@ using void myfun3d(Vec3d);
 
 void main()
 {
-    TestStruct asdf = TestStruct {0u8, 15u16};
+    TestStruct asdf = TestStruct {8u8, 15u16};
     print_float((asdf.a) as f64);
     print_float((asdf.b) as f64);
-    *@&asdf = TestStruct {10u8, 45u16};
+    asdf = TestStruct {10u8, 45u16};
+    asdf = asdf;
     print_float((asdf.a) as f64);
     print_float((asdf.b) as f64);
     return;
