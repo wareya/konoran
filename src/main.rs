@@ -6,7 +6,6 @@ use core::cell::RefCell;
 use alloc::collections::BTreeMap;
 use std::collections::HashMap;
 
-use inkwell::context::Context;
 use inkwell::types::BasicType;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValue;
@@ -1605,32 +1604,28 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 let vals = bytes.iter().map(|x| u8_type.const_int(*x as u64, false).into()).collect::<Vec<_>>();
                 let array_val = basic_const_array(u8_type.into(), &vals);
+                let type_ = u8_type_frontend.to_ptr();
                 if suffix.starts_with("array")
                 {
-                    let array_type = u8_type_frontend.to_array(bytes.len());
-                    let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &array_type);
-                    
                     if want_pointer != WantPointer::None
                     {
-                        let global = env.module.add_global(basic_type, Some(inkwell::AddressSpace::default()), "");
+                        let global = env.module.add_global(array_val.get_type(), Some(inkwell::AddressSpace::default()), "");
                         global.set_initializer(&array_val);
                         global.set_linkage(inkwell::module::Linkage::Internal);
                         
-                        env.stack.push((array_type.to_ptr(), global.as_pointer_value().into()));
+                        env.stack.push((type_.clone(), global.as_pointer_value().into()));
                     }
                     else
                     {
+                        let array_type = u8_type_frontend.to_array(bytes.len());
                         env.stack.push((array_type.clone(), array_val.into()));
                     }
                 }
                 else
                 {
-                    let type_ = u8_type_frontend.to_ptr();
-                    let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &type_);
-                    
                     if want_pointer == WantPointer::None
                     {
-                        let global = env.module.add_global(basic_type, Some(inkwell::AddressSpace::default()), "");
+                        let global = env.module.add_global(array_val.get_type(), Some(inkwell::AddressSpace::default()), "");
                         global.set_initializer(&array_val);
                         global.set_linkage(inkwell::module::Linkage::Internal);
                         
@@ -2656,8 +2651,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         println!("startup done! time: {}", start.elapsed().as_secs_f64());
     }
     
-    let context = Context::create();
-    
     let mut executor = None;
     
     let mut func_decs = BTreeMap::new();
@@ -2711,7 +2704,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 for (f_name, (_, funcsig)) in &imports
                 {
                     let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
-                    let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::AvailableExternally));
+                    let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
                     func_val.as_global_value().set_dll_storage_class(inkwell::DLLStorageClass::Import);
                     func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
                 }
@@ -2815,10 +2808,10 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                     Visibility::Import => 
                         // get from anywhere possible
                         // exact semantics are implementation-defined; may be a dll import!
-                        inkwell::module::Linkage::AvailableExternally,
+                        inkwell::module::Linkage::External,
                     Visibility::ImportLocal =>
                         // get from external module or object
-                        inkwell::module::Linkage::AvailableExternally,
+                        inkwell::module::Linkage::External,
                     _ => panic!("internal error, invalid visibility class for function import"),
                 };
                 
@@ -2851,10 +2844,10 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                             Visibility::Import => 
                                 // get from anywhere possible
                                 // exact semantics are implementation-defined; may be a dll import!
-                                inkwell::module::Linkage::AvailableExternally,
+                                inkwell::module::Linkage::External,
                             Visibility::ImportLocal =>
                                 // get from external module or object
-                                inkwell::module::Linkage::AvailableExternally,
+                                inkwell::module::Linkage::External,
                             Visibility::Export =>
                                 // expose as much as possible
                                 // exact semantics are implementation-defined; may be a dll export!
@@ -3122,6 +3115,12 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 //println!("{}", function.body.pretty_debug());
                 
                 compile(&mut env, &function.body, WantPointer::None);
+            }
+            
+            if let Err(err) = module.verify()
+            {
+                println!("Internal compiler error:\n{}", err.to_string());
+                //panic!();
             }
             
             module

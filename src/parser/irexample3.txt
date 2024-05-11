@@ -36,6 +36,7 @@ export_extern void main()
     print_float((beepboop) as f64);
     
     array(u8, 7) wah2 = constexpr "skgue\n"array;
+    print_str((&"rrjthf\n"array) as ptr(u8));
     print_str((&wah2) as ptr(u8));
     print_str("fkg3ui\n");
     print_fmt("fkg3ui\n", (&[(0u64) bit_as ptr(u8)]) as ptr(ptr(u8)));
