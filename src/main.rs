@@ -3229,7 +3229,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         println!("compilation time without parsing: {}ms", (comptime - parse_time) * 1000.0);
     }
     
-    
     unsafe
     {
         let name = "main";
