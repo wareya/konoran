@@ -1,6 +1,6 @@
 # Konoran
 
-  <img align="right" height="500" src="logo.png" style="float: right">
+  <img align="right" width="380" src="logo.png" style="float: right">
 
 Konoran is a very simple low-level programming language (simpler than C) designed to be used as a compiler target. It is meant to be human readable and writeable, and provide high-level features like structs and arrays. At the same time, it aims to be simple enough that a new, from-scratch reimplementation of Konoran can (in theory) be built by a single skilled developer given a few weeks. The core of the compiler is under 3000 LoC (lines of code) long.
 
