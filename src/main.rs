@@ -1207,10 +1207,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 if offset_type.name == "i64"
                 {
-                    // FIXME: double check that nested types work properly
-                    //println!("\ntype: {:?}", base_type);
-                    //println!("\nval: {:?}\n", base_addr);
-                    
                     let mut inner_type = unwrap_or_panic!(base_type.array_to_inner());
                     check_struct_incomplete(env, &mut inner_type);
                     
