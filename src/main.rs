@@ -392,6 +392,18 @@ fn get_any_type_context<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTy
         inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
     }
 }
+fn get_any_type_poison<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum<'c>) -> inkwell::values::BasicValueEnum<'c>
+{
+    match sdkawuidsguisagugarewudsga
+    {
+        inkwell::types::BasicTypeEnum::ArrayType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        inkwell::types::BasicTypeEnum::FloatType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        inkwell::types::BasicTypeEnum::IntType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        inkwell::types::BasicTypeEnum::PointerType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        inkwell::types::BasicTypeEnum::StructType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+    }
+}
 fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, type_ : &Type) -> inkwell::types::AnyTypeEnum<'c>
 {
     let key = type_.to_string();
@@ -446,7 +458,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                         }
                         if let Some(_) = prop_types.first()
                         {
-                            let ptr_type = context.struct_type(&prop_types, false).into();
+                            let ptr_type = context.struct_type(&prop_types, true).into();
                             backend_types.insert(key, ptr_type);
                             ptr_type
                         }
@@ -475,7 +487,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                 }
                 if let Some(_) = prop_types.first()
                 {
-                    let ptr_type = context.struct_type(&prop_types, false).into();
+                    let ptr_type = context.struct_type(&prop_types, true).into();
                     backend_types.insert(key, ptr_type);
                     ptr_type
                 }
@@ -673,10 +685,7 @@ impl Program
                     {
                         panic!("error: void struct properties are not allowed");
                     }
-                    if prop_name != "_" // use non-placeholder variables only
-                    {
-                        struct_data.push((prop_name, prop_type.clone()));
-                    }
+                    struct_data.push((prop_name, prop_type.clone()));
                 }
                 
                 let struct_type = Type { name : name.clone(), data : TypeData::Struct(struct_data) };
@@ -1445,7 +1454,18 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let stack_size = env.stack.len();
                 
                 let struct_type = parse_type(&env.types, &node.child(0).unwrap()).unwrap();
-                let struct_member_types = unwrap_or_panic!(struct_type.struct_to_info()).iter().map(|x| x.1.clone()).collect::<Vec<_>>();
+                let all_struct_members = unwrap_or_panic!(struct_type.struct_to_info()).iter().map(|x| x.clone()).collect::<Vec<_>>();
+                let mut struct_member_types = Vec::new();
+                let mut struct_members = Vec::new();
+                for (index, (name, type_)) in all_struct_members.iter().enumerate()
+                {
+                    if name == "_"
+                    {
+                        continue;
+                    }
+                    struct_member_types.push(type_.clone());
+                    struct_members.push((type_.clone(), index));
+                }
                 //println!("struct type: {:?}", struct_type);
                 
                 for child in &node.get_children().unwrap()[1..]
@@ -1476,9 +1496,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let slot = env.builder.build_alloca(backend_type, "").unwrap();
                     for (index, (type_, val)) in vals.into_iter().enumerate()
                     {
-                        let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, index as u32, "").unwrap();
+                        let real_index = struct_members[index].1;
+                        let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, real_index as u32, "").unwrap();
                         
-                        assert!(type_ == stack_val_types[index]);
+                        assert!(type_ == stack_val_types[real_index]);
                         
                         env.builder.build_store(index_addr, val).unwrap();
                     }
@@ -1488,10 +1509,24 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 else
                 {
                     let mut newvals = Vec::new();
-                    for (index, (type_, val)) in vals.into_iter().enumerate()
+                    let mut i = 0;
+                    for (name, type_) in all_struct_members.iter()
                     {
-                        assert!(type_ == stack_val_types[index]);
-                        newvals.push(val);
+                        if name == "_"
+                        {
+                            let backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &type_);
+                            let zero_val = get_any_type_poison(backend_type);
+                            newvals.push(zero_val);
+                        }
+                        else
+                        {
+                            let (inner_type_, val) = &vals[i];
+                            assert!(*type_ == stack_val_types[i]);
+                            assert!(*type_ == *inner_type_);
+                            newvals.push(val.clone());
+                            
+                            i += 1;
+                        }
                     }
                     let val = backend_type.into_struct_type().const_named_struct(&newvals);
                     env.stack.push((struct_type, val.into()));
@@ -3262,16 +3297,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         let features = TargetMachine::get_host_cpu_features().to_string();
 
         let target = Target::from_triple(&triple).unwrap();
-        let machine = target
-            .create_target_machine(
-                &triple,
-                &cpu,
-                &features,
-                opt_level,
-                RelocMode::Default,
-                CodeModel::Default,
-            )
-            .unwrap();
+        let machine = target.create_target_machine(&triple, &cpu, &features, opt_level, RelocMode::Default, CodeModel::Default).unwrap();
 
         machine.write_to_file(&loaded_modules[0], FileType::Assembly, "out.asm".as_ref()).unwrap();
     }
