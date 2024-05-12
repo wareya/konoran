@@ -421,16 +421,12 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
 {
     let key = type_.to_string();
     
-    //println!("{}", key);
-    
     if let Some(backend_type) = backend_types.get(&key)
     {
-        //println!("^- found in map as `{:?}`", backend_type);
         *backend_type
     }
     else
     {
-        //println!("^- not found in map");
         let context = get_any_type_context(inkwell::types::BasicTypeEnum::try_from(*backend_types.values().next().unwrap()).unwrap());
         
         match &type_.data
@@ -457,35 +453,14 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
             }
             TypeData::IncompleteStruct =>
             {
-                //panic!("asdokgfaowiurgasd");
-                if let Some(complete_type) = types.get(&type_.name)
+                let complete_type = types.get(&type_.name).unwrap_or_else(|| panic!("internal error: tried to use incomplete struct type"));
+                if let TypeData::Struct(_) = &complete_type.data
                 {
-                    if let TypeData::Struct(struct_data) = &complete_type.data
-                    {
-                        let mut prop_types = Vec::new();
-                        for (_, type_) in struct_data
-                        {
-                            prop_types.push(get_backend_type_sized(backend_types, types, type_));
-                        }
-                        if prop_types.first().is_some()
-                        {
-                            let ptr_type = context.struct_type(&prop_types, true).into();
-                            backend_types.insert(key, ptr_type);
-                            ptr_type
-                        }
-                        else
-                        {
-                            panic!("internal error: structs cannot be empty");
-                        }
-                    }
-                    else
-                    {
-                        panic!("internal error: struct type broken");
-                    }
+                    get_backend_type(backend_types, types, complete_type)
                 }
                 else
                 {
-                    panic!("internal error: tried to use incomplete struct type");
+                    panic!("internal error: struct type broken");
                 }
             }
             TypeData::Struct(struct_data) =>
@@ -493,19 +468,15 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                 let mut prop_types = Vec::new();
                 for (_, type_) in struct_data
                 {
-                    let backend_type = get_backend_type_sized(backend_types, types, type_);
-                    prop_types.push(backend_type);
+                    prop_types.push(get_backend_type_sized(backend_types, types, type_));
                 }
-                if prop_types.first().is_some()
-                {
-                    let ptr_type = context.struct_type(&prop_types, true).into();
-                    backend_types.insert(key, ptr_type);
-                    ptr_type
-                }
-                else
+                if prop_types.is_empty()
                 {
                     panic!("internal error: structs cannot be empty");
                 }
+                let ptr_type = context.struct_type(&prop_types, true).into();
+                backend_types.insert(key, ptr_type);
+                ptr_type
             }
             TypeData::FuncPointer(_sig) =>
             {
@@ -636,7 +607,6 @@ fn struct_check_recursive(types : &BTreeMap<String, Type>, root_type : &Type, ty
     match &type_.data
     {
         TypeData::Struct(struct_data) =>
-        {
             for inner_type in struct_data
             {
                 if inner_type.1.name == root_type.name
@@ -645,30 +615,20 @@ fn struct_check_recursive(types : &BTreeMap<String, Type>, root_type : &Type, ty
                 }
                 struct_check_recursive(types, root_type, &inner_type.1);
             }
-        }
         TypeData::IncompleteStruct =>
         {
-            if let Some(complete_type) = types.get(&type_.name)
+            let complete_type = types.get(&type_.name).unwrap_or_else(|| panic!("error: tried to use incomplete struct type"));
+            if complete_type.name == root_type.name
             {
-                if complete_type.name == root_type.name
-                {
-                    panic!("struct {} is directly recursive; directly recursive structs are forbidden", root_type.name);
-                }
-                if let TypeData::Struct(struct_data) = &complete_type.data
-                {
-                    for inner_type in struct_data
-                    {
-                        if inner_type.1.name == root_type.name
-                        {
-                            panic!("struct {} is directly recursive; directly recursive structs are forbidden", root_type.name);
-                        }
-                        struct_check_recursive(types, root_type, &inner_type.1);
-                    }
-                }
+                panic!("struct {} is directly recursive; directly recursive structs are forbidden", root_type.name);
+            }
+            if let TypeData::Struct(_) = &complete_type.data
+            {
+                struct_check_recursive(types, root_type, &complete_type);
             }
             else
             {
-                panic!("error: tried to use incomplete struct type");
+                panic!("internal error: struct type broken");
             }
         }
         _ => {}
@@ -886,14 +846,8 @@ fn check_struct_incomplete(env : &mut Environment, type_ : &mut Type)
     {
         TypeData::IncompleteStruct =>
         {
-            if let Some(new_type) = env.types.get(&type_.name)
-            {
-                type_.data = new_type.data.clone();
-            }
-            else
-            {
-                panic!("tried to use incomplete struct type {}", type_.name);
-            }
+            let new_type = env.types.get(&type_.name).unwrap_or_else(|| panic!("tried to use incomplete struct type {}", type_.name));
+            type_.data = new_type.data.clone();
         }
         TypeData::VirtualPointer(ref mut inner_type, _) => check_struct_incomplete(env, inner_type),
         TypeData::Pointer(inner_type, _) => check_struct_incomplete(env, &mut inner_type.borrow_mut()),
@@ -1085,10 +1039,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             env.anon_globals.insert(global.as_pointer_value(), $initializer.into());
             
             global
-            // make a global
-            // set its static initializer
-            // set it as private
-            // set it as constant
         }}
     }
     
@@ -1343,26 +1293,21 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 let right_name = &node.child(1).unwrap().child(0).unwrap().text;
                 
-                if let Some(found) = match &struct_type.data
+                let found = match &struct_type.data
                 {
                     TypeData::Struct(ref props) => props.iter().enumerate().find(|x| x.1.0 == *right_name),
                     _ => panic_error!("error: tried to use indirection (.) operator on non-struct {:?}", struct_type),
-                }
-                {
-                    let inner_index = found.0;
-                    let mut inner_type = found.1.1.clone();
-                    check_struct_incomplete(env, &mut inner_type);
-                    
-                    let struct_addr = struct_addr.into_pointer_value();
-                    
-                    let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type, struct_addr, inner_index as u32, "").unwrap();
-                    
-                    push_val_or_ptr!(inner_type, index_addr, volatile);
-                }
-                else
-                {
-                    panic_error!("error: no such property {} in struct type {}", right_name, struct_type.name);
-                }
+                }.unwrap_or_else(|| panic_error!("error: no such property {} in struct type {}", right_name, struct_type.name));
+                
+                let inner_index = found.0;
+                let mut inner_type = found.1.1.clone();
+                check_struct_incomplete(env, &mut inner_type);
+                
+                let struct_addr = struct_addr.into_pointer_value();
+                
+                let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type, struct_addr, inner_index as u32, "").unwrap();
+                
+                push_val_or_ptr!(inner_type, index_addr, volatile);
             }
             "funcargs_head" =>
             {
@@ -1446,53 +1391,49 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "intrinsic" =>
             {
                 let intrinsic_name = &node.child(0).unwrap().child(0).unwrap().text;
-                if let Some((funcaddr, funcsig)) = env.intrinsic_decs.get(intrinsic_name)
+                let (funcaddr, funcsig) = env.intrinsic_decs.get(intrinsic_name)
+                    .unwrap_or_else(|| panic_error!("error: tried to call non-existent intrinsic {}", intrinsic_name));
+                
+                let stack_len_start = env.stack.len();
+                compile(env, node.child(1).unwrap(), WantPointer::None);
+                let stack_len_end = env.stack.len();
+                
+                let num_args = node.child(1).unwrap().child_count().unwrap();
+                assert!(num_args == stack_len_end - stack_len_start);
+                assert!(num_args == funcsig.args.len(), "incorrect number of arguments to function on line {}", node.line);
+                
+                let mut args = Vec::new();
+                for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                 {
-                    let stack_len_start = env.stack.len();
-                    compile(env, node.child(1).unwrap(), WantPointer::None);
-                    let stack_len_end = env.stack.len();
-                    
-                    let num_args = node.child(1).unwrap().child_count().unwrap();
-                    assert!(num_args == stack_len_end - stack_len_start);
-                    assert!(num_args == funcsig.args.len(), "incorrect number of arguments to function on line {}", node.line);
-                    
-                    let mut args = Vec::new();
-                    for (i, arg_type) in funcsig.args.iter().rev().enumerate()
+                    let (type_, val) = env.stack.pop().unwrap();
+                    if type_ != *arg_type
                     {
-                        let (type_, val) = env.stack.pop().unwrap();
-                        if type_ != *arg_type
-                        {
-                            panic_error!("mismatched types for parameter {} in call to intrinsic {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
-                        }
-                        args.push(val.into());
+                        panic_error!("mismatched types for parameter {} in call to intrinsic {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
                     }
-                    
-                    args.reverse();
-                    
-                    // intrinsics whose function signatures lie because they have hidden arguments
-                    match intrinsic_name.as_str()
-                    {
-                        "memcpy" => args.push(zero_bool.into()),
-                        "memcpy_vol" => args.push(one_bool.into()),
-                        "memmove" => args.push(zero_bool.into()),
-                        "memmove_vol" => args.push(one_bool.into()),
-                        "memset" => args.push(zero_bool.into()),
-                        "memset_vol" => args.push(one_bool.into()),
-                        _ => {}
-                    }
-                    
-                    //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
-                    let callval = env.builder.build_direct_call(*funcaddr, &args, "").unwrap();
-                    let result = callval.try_as_basic_value().left();
-                    //println!("number of results {}", results.len());
-                    for (result, type_) in result.iter().zip([&funcsig.return_type])
-                    {
-                        env.stack.push((type_.clone(), *result));
-                    }
+                    args.push(val.into());
                 }
-                else
+                
+                args.reverse();
+                
+                // intrinsics whose function signatures lie because they have hidden arguments
+                match intrinsic_name.as_str()
                 {
-                    panic_error!("error: tried to call non-existent intrinsic {}", intrinsic_name);
+                    "memcpy"      => args.push(zero_bool.into()),
+                    "memmove"     => args.push(zero_bool.into()),
+                    "memset"      => args.push(zero_bool.into()),
+                    "memcpy_vol"  => args.push(one_bool.into()),
+                    "memmove_vol" => args.push(one_bool.into()),
+                    "memset_vol"  => args.push(one_bool.into()),
+                    _ => {}
+                }
+                
+                //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
+                let callval = env.builder.build_direct_call(*funcaddr, &args, "").unwrap();
+                let result = callval.try_as_basic_value().left();
+                //println!("number of results {}", results.len());
+                for (result, type_) in result.iter().zip([&funcsig.return_type])
+                {
+                    env.stack.push((type_.clone(), *result));
                 }
                 //println!("done compiling func call");
             }
@@ -1667,36 +1608,25 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let location = text.rfind("f").unwrap();
                 let parts = text.split_at(location);
                 let text = parts.0;
-                if let Some(type_) = env.types.get(parts.1)
+                let type_ = env.types.get(parts.1).unwrap_or_else(|| panic_error!("unknown float suffix pattern {}", parts.1));
+                let backend_type = get_backend_type(env.backend_types, env.types, type_);
+                let float_type = inkwell::types::FloatType::try_from(backend_type).unwrap_or_else(|()| panic_error!("unknown float suffix pattern {}", parts.1));
+                
+                match parts.1
                 {
-                    let backend_type = get_backend_type(env.backend_types, env.types, type_);
-                    if let Ok(float_type) = inkwell::types::FloatType::try_from(backend_type)
+                    "f32" =>
                     {
-                        match parts.1
-                        {
-                            "f32" =>
-                            {
-                                let val : f32 = text.parse().unwrap();
-                                let res = float_type.const_float(val as f64);
-                                env.stack.push((type_.clone(), res.into()));
-                            }
-                            "f64" =>
-                            {
-                                let val : f64 = text.parse().unwrap();
-                                let res = float_type.const_float(val);
-                                env.stack.push((type_.clone(), res.into()));
-                            }
-                            _ => panic_error!("unknown float suffix pattern {}", parts.1)
-                        }
+                        let val : f32 = text.parse().unwrap();
+                        let res = float_type.const_float(val as f64);
+                        env.stack.push((type_.clone(), res.into()));
                     }
-                    else
+                    "f64" =>
                     {
-                        panic_error!("unknown float suffix pattern {}", parts.1)
+                        let val : f64 = text.parse().unwrap();
+                        let res = float_type.const_float(val);
+                        env.stack.push((type_.clone(), res.into()));
                     }
-                }
-                else
-                {
-                    panic_error!("unknown float suffix pattern {}", parts.1)
+                    _ => panic_error!("unknown float suffix pattern {}", parts.1)
                 }
             }
             "char" =>
@@ -1836,42 +1766,30 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     text.to_string()
                 };
                 
-                if let Some(type_) = env.types.get(parts.1)
+                let type_ = env.types.get(parts.1).unwrap_or_else(|| panic_error!("unknown int suffix pattern {}", parts.1));
+                let backend_type = get_backend_type(env.backend_types, env.types, type_);
+                let int_type = inkwell::types::IntType::try_from(backend_type).unwrap_or_else(|()| panic_error!("unknown int suffix pattern {}", parts.1));
+                let res = int_type.const_int(match (is_hex, parts.1)
                 {
-                    let backend_type = get_backend_type(env.backend_types, env.types, type_);
-                    if let Ok(int_type) = inkwell::types::IntType::try_from(backend_type)
-                    {
-                        let res = int_type.const_int(match (is_hex, parts.1)
-                        {
-                            (false, "u8")  => text.parse::< u8>().unwrap() as u64,
-                            (false, "u16") => text.parse::<u16>().unwrap() as u64,
-                            (false, "u32") => text.parse::<u32>().unwrap() as u64,
-                            (false, "u64") => text.parse::<u64>().unwrap(),
-                            (false, "i8")  => text.parse::< i8>().unwrap() as u64,
-                            (false, "i16") => text.parse::<i16>().unwrap() as u64,
-                            (false, "i32") => text.parse::<i32>().unwrap() as u64,
-                            (false, "i64") => text.parse::<i64>().unwrap() as u64,
-                            (true , "u8")  =>  u8::from_str_radix(&text, 16).unwrap() as u64,
-                            (true , "u16") => u16::from_str_radix(&text, 16).unwrap() as u64,
-                            (true , "u32") => u32::from_str_radix(&text, 16).unwrap() as u64,
-                            (true , "u64") => u64::from_str_radix(&text, 16).unwrap(),
-                            (true , "i8")  =>  i8::from_str_radix(&text, 16).unwrap() as u64,
-                            (true , "i16") => i16::from_str_radix(&text, 16).unwrap() as u64,
-                            (true , "i32") => i32::from_str_radix(&text, 16).unwrap() as u64,
-                            (true , "i64") => i64::from_str_radix(&text, 16).unwrap() as u64,
-                            _ => panic_error!("unknown int suffix pattern {}", parts.1)
-                        }, signed);
-                        env.stack.push((type_.clone(), res.into()));
-                    }
-                    else
-                    {
-                        panic_error!("unknown int suffix pattern {}", parts.1)
-                    }
-                }
-                else
-                {
-                    panic_error!("unknown int suffix pattern {}", parts.1)
-                }
+                    (false, "u8")  => text.parse::< u8>().unwrap() as u64,
+                    (false, "u16") => text.parse::<u16>().unwrap() as u64,
+                    (false, "u32") => text.parse::<u32>().unwrap() as u64,
+                    (false, "u64") => text.parse::<u64>().unwrap(),
+                    (false, "i8")  => text.parse::< i8>().unwrap() as u64,
+                    (false, "i16") => text.parse::<i16>().unwrap() as u64,
+                    (false, "i32") => text.parse::<i32>().unwrap() as u64,
+                    (false, "i64") => text.parse::<i64>().unwrap() as u64,
+                    (true , "u8")  =>  u8::from_str_radix(&text, 16).unwrap() as u64,
+                    (true , "u16") => u16::from_str_radix(&text, 16).unwrap() as u64,
+                    (true , "u32") => u32::from_str_radix(&text, 16).unwrap() as u64,
+                    (true , "u64") => u64::from_str_radix(&text, 16).unwrap(),
+                    (true , "i8")  =>  i8::from_str_radix(&text, 16).unwrap() as u64,
+                    (true , "i16") => i16::from_str_radix(&text, 16).unwrap() as u64,
+                    (true , "i32") => i32::from_str_radix(&text, 16).unwrap() as u64,
+                    (true , "i64") => i64::from_str_radix(&text, 16).unwrap() as u64,
+                    _ => panic_error!("unknown int suffix pattern {}", parts.1)
+                }, signed);
+                env.stack.push((type_.clone(), res.into()));
             }
             "unary" =>
             {
@@ -2002,28 +1920,16 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "label" =>
             {
                 let label = &node.child(0).unwrap().child(0).unwrap().text;
-                if let Some(block) = env.blocks.get(label)
-                {
-                    env.builder.build_unconditional_branch(*block).unwrap();
-                    env.builder.position_at_end(*block);
-                }
-                else
-                {
-                    panic_error!("error: no such block {}", label);
-                }
+                let block = env.blocks.get(label).unwrap_or_else(|| panic_error!("error: no such block {}", label));
+                env.builder.build_unconditional_branch(*block).unwrap();
+                env.builder.position_at_end(*block);
             }
             "goto" =>
             {
                 let label = &node.child(0).unwrap().child(0).unwrap().text;
-                if let Some(then_block) = env.blocks.get(label)
-                {
-                    env.builder.build_unconditional_branch(*then_block).unwrap();
-                    env.builder.position_at_end(env.context.append_basic_block(env.func_val, ""));
-                }
-                else
-                {
-                    panic_error!("error: no such label {}", label);
-                }
+                let then_block = env.blocks.get(label).unwrap_or_else(|| panic_error!("error: no such label {}", label));
+                env.builder.build_unconditional_branch(*then_block).unwrap();
+                env.builder.position_at_end(env.context.append_basic_block(env.func_val, ""));
             }
             // TODO: all the other C-style control flow mechanisms
             "ifcondition" =>
@@ -2033,47 +1939,35 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let label = &node.child(1).unwrap().child(0).unwrap().text;
                 // anonymous block for "else" case
                 let else_block = env.context.append_basic_block(env.func_val, "");
-                if let Some(then_block) = env.blocks.get(label)
+                let then_block = env.blocks.get(label).unwrap_or_else(|| panic_error!("error: no such label {}", label));
+                let backend_type = get_backend_type(env.backend_types, env.types, &type_);
+                if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
                 {
-                    let backend_type = get_backend_type(env.backend_types, env.types, &type_);
-                    if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
-                    {
-                        let zero = int_type.const_int(0, true);
-                        let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap();
-                        env.builder.build_conditional_branch(int_val, *then_block, else_block).unwrap();
-                        env.builder.position_at_end(else_block);
-                    }
-                    else if let (Ok(_ptr_type), Ok(ptr_val)) = (inkwell::types::PointerType::try_from(backend_type), inkwell::values::PointerValue::try_from(val))
-                    {
-                        let int_val = env.builder.build_ptr_to_int(ptr_val, env.ptr_int_type, "").unwrap();
-                        let zero = env.ptr_int_type.const_int(0, true);
-                        let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap();
-                        env.builder.build_conditional_branch(int_val, *then_block, else_block).unwrap();
-                        env.builder.position_at_end(else_block);
-                    }
-                    else
-                    {
-                        panic_error!("error: tried to branch on non-integer expression");
-                    }
+                    let zero = int_type.const_int(0, true);
+                    let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap();
+                    env.builder.build_conditional_branch(int_val, *then_block, else_block).unwrap();
+                    env.builder.position_at_end(else_block);
+                }
+                else if let (Ok(_ptr_type), Ok(ptr_val)) = (inkwell::types::PointerType::try_from(backend_type), inkwell::values::PointerValue::try_from(val))
+                {
+                    let int_val = env.builder.build_ptr_to_int(ptr_val, env.ptr_int_type, "").unwrap();
+                    let zero = env.ptr_int_type.const_int(0, true);
+                    let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap();
+                    env.builder.build_conditional_branch(int_val, *then_block, else_block).unwrap();
+                    env.builder.position_at_end(else_block);
                 }
                 else
                 {
-                    panic_error!("error: no such label {}", label);
+                    panic_error!("error: tried to branch on non-integer expression");
                 }
             }
             "sizeof" =>
             {
                 let type_ = parse_type(env.types, node.child(0).unwrap()).unwrap();
                 let backend_type = get_backend_type(env.backend_types, env.types, &type_);
-                if let Some(size) = backend_type.size_of()
-                {
-                    // FIXME cast up to u64 if not u64 large
-                    env.stack.push((env.types.get("u64").unwrap().clone(), size.into()));
-                }
-                else
-                {
-                    panic_error!("error: type `{}` is not sized", type_.name);
-                }
+                let size = backend_type.size_of().unwrap_or_else(|| panic_error!("error: type `{}` is not sized", type_.name));
+                // FIXME cast up to u64 if not u64 large
+                env.stack.push((env.types.get("u64").unwrap().clone(), size.into()));
             }
             // FIXME: fix casts now that structs/arrays are pointer-based
             "bitcast" =>
@@ -2579,7 +2473,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                                         let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
                                         env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
                                     }
-                                    
                                     _ => panic_error!("operator {} not supported on type {}", op, left_type.name)
                                 }
                             }
@@ -2982,119 +2875,38 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 if let Some((g_type, g_init, visibility)) = program.globals.get(g_name)
                 {
                     let backend_type = get_backend_type(&mut backend_types, &types, &g_type);
-                    if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
+                    let basic_type = inkwell::types::BasicTypeEnum::try_from(backend_type)
+                        .unwrap_or_else(|()| panic!("internal error: tried to make global with unsized type"));
+                    let linkage = match *visibility
                     {
-                        let linkage = match *visibility
-                        {
-                            // get from anywhere possible
-                            // exact semantics are implementation-defined; may be a dll import!
-                            Visibility::Import => inkwell::module::Linkage::External,
-                            // get from external module or object
-                            Visibility::ImportLocal => inkwell::module::Linkage::External,
-                            // expose as much as possible
-                            // exact semantics are implementation-defined; may be a dll export!
-                            Visibility::Export => inkwell::module::Linkage::External,
-                            // expose to other modules and objects
-                            Visibility::Local => inkwell::module::Linkage::External,
-                            // do not expose to other modules
-                            Visibility::Private => inkwell::module::Linkage::Internal,
-                        };
-                        
-                        let storage_class = match *visibility
-                        {
-                            // get from anywhere possible
-                            // exact semantics are implementation-defined; may be a dll import!
-                            Visibility::Import => inkwell::DLLStorageClass::Import,
-                            // expose as much as possible
-                            // exact semantics are implementation-defined; may be a dll export!
-                            Visibility::Export => inkwell::DLLStorageClass::Export,
-                            _ => inkwell::DLLStorageClass::Default,
-                        };
-                        
-                        if let Some(node) = g_init
-                        {
-                            let f_name = format!("__init_global_{}_asdf1g0q", g_name);
-                            let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
-                            let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
-                            let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
-                            
-                            let entry_block = context.append_basic_block(func_val, "entry");
-                            let builder = context.create_builder();
-                            builder.position_at_end(entry_block);
-                            
-                            let body_block = context.append_basic_block(func_val, "body");
-                            builder.position_at_end(body_block);
-                            
-                            let stack = Vec::new();
-                            let blocks = HashMap::new();
-                            let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false };
-                            
-                            compile(&mut env, &node, WantPointer::None);
-                            let (type_val, val) = env.stack.pop().unwrap();
-                            assert!(type_val == *g_type);
-                            
-                            if val_is_const(true, val)
-                            {
-                                let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
-                                if g_type.is_composite() && val.as_instruction_value().is_none()
-                                {
-                                    //let global2 = unsafe { inkwell::values::GlobalValue::new(val.as_value_ref()) };
-                                    //global.set_initializer(&global2.get_initializer().unwrap());
-                                    let val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
-                                    global.set_initializer(&val);
-                                }
-                                else if g_type.is_composite()
-                                {
-                                    panic!("INTERNAL ERROR THIS SHOULD BE UNREACHABLE PLEASE REPORT 28753489");
-                                    //global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
-                                    //env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
-                                }
-                                else
-                                {
-                                    global.set_initializer(&val);
-                                }
-                                //global.set_constant(true);
-                                global.set_linkage(linkage);
-                                global.set_dll_storage_class(storage_class);
-                                env.builder.build_return(None).unwrap();
-                                
-                                global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
-                            }
-                            else
-                            {
-                                let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
-                                global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
-                                global.set_linkage(linkage);
-                                global.set_dll_storage_class(storage_class);
-                                env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
-                                env.builder.build_return(None).unwrap();
-                                
-                                global_decs.insert(g_name.clone(), (g_type.clone(), global, Some(func_val)));
-                            }
-                            
-                            builder.position_at_end(entry_block);
-                            builder.build_unconditional_branch(body_block).unwrap();
-                        }
-                        else
-                        {
-                            let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
-                            global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
-                            global.set_linkage(linkage);
-                            global.set_dll_storage_class(storage_class);
-                            global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
-                        }
-                    }
-                    else
+                        // get from anywhere possible
+                        // exact semantics are implementation-defined; may be a dll import!
+                        Visibility::Import => inkwell::module::Linkage::External,
+                        // get from external module or object
+                        Visibility::ImportLocal => inkwell::module::Linkage::External,
+                        // expose as much as possible
+                        // exact semantics are implementation-defined; may be a dll export!
+                        Visibility::Export => inkwell::module::Linkage::External,
+                        // expose to other modules and objects
+                        Visibility::Local => inkwell::module::Linkage::External,
+                        // do not expose to other modules
+                        Visibility::Private => inkwell::module::Linkage::Internal,
+                    };
+                    
+                    let storage_class = match *visibility
                     {
-                        panic!("internal error: tried to make global with unsized type");
-                    }
-                }
-                else if let Some((g_type, node)) = program.constants.get(g_name)
-                {
-                    let backend_type = get_backend_type(&mut backend_types, &types, &g_type);
-                    if let Ok(_) = inkwell::types::BasicTypeEnum::try_from(backend_type)
+                        // get from anywhere possible
+                        // exact semantics are implementation-defined; may be a dll import!
+                        Visibility::Import => inkwell::DLLStorageClass::Import,
+                        // expose as much as possible
+                        // exact semantics are implementation-defined; may be a dll export!
+                        Visibility::Export => inkwell::DLLStorageClass::Export,
+                        _ => inkwell::DLLStorageClass::Default,
+                    };
+                    
+                    if let Some(node) = g_init
                     {
-                        let f_name = format!("__init_const_{}_asdf1g0q", g_name);
+                        let f_name = format!("__init_global_{}_asdf1g0q", g_name);
                         let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
                         let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
                         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
@@ -3116,21 +2928,89 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         
                         if val_is_const(true, val)
                         {
+                            let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                            if g_type.is_composite() && val.as_instruction_value().is_none()
+                            {
+                                //let global2 = unsafe { inkwell::values::GlobalValue::new(val.as_value_ref()) };
+                                //global.set_initializer(&global2.get_initializer().unwrap());
+                                let val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
+                                global.set_initializer(&val);
+                            }
+                            else if g_type.is_composite()
+                            {
+                                panic!("INTERNAL ERROR THIS SHOULD BE UNREACHABLE PLEASE REPORT 28753489");
+                                //global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
+                                //env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
+                            }
+                            else
+                            {
+                                global.set_initializer(&val);
+                            }
+                            //global.set_constant(true);
+                            global.set_linkage(linkage);
+                            global.set_dll_storage_class(storage_class);
                             env.builder.build_return(None).unwrap();
-                            constants.insert(g_name.clone(), (g_type.clone(), val));
                             
-                            builder.position_at_end(entry_block);
-                            builder.build_unconditional_branch(body_block).unwrap();
+                            global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
                         }
                         else
                         {
-                            panic!("error: tried to make global constexpr with non-constexpr expression");
+                            let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                            global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
+                            global.set_linkage(linkage);
+                            global.set_dll_storage_class(storage_class);
+                            env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
+                            env.builder.build_return(None).unwrap();
+                            
+                            global_decs.insert(g_name.clone(), (g_type.clone(), global, Some(func_val)));
                         }
+                        
+                        builder.position_at_end(entry_block);
+                        builder.build_unconditional_branch(body_block).unwrap();
                     }
                     else
                     {
-                        panic!("internal error: tried to make global constexpr with unsized type");
+                        let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                        global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
+                        global.set_linkage(linkage);
+                        global.set_dll_storage_class(storage_class);
+                        global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
                     }
+                }
+                else if let Some((g_type, node)) = program.constants.get(g_name)
+                {
+                    let backend_type = get_backend_type(&mut backend_types, &types, &g_type);
+                    inkwell::types::BasicTypeEnum::try_from(backend_type).unwrap_or_else(|()| panic!("internal error: tried to make global constexpr with unsized type"));
+                    
+                    let f_name = format!("__init_const_{}_asdf1g0q", g_name);
+                    let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
+                    let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                    let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
+                    
+                    let entry_block = context.append_basic_block(func_val, "entry");
+                    let builder = context.create_builder();
+                    builder.position_at_end(entry_block);
+                    
+                    let body_block = context.append_basic_block(func_val, "body");
+                    builder.position_at_end(body_block);
+                    
+                    let stack = Vec::new();
+                    let blocks = HashMap::new();
+                    let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false };
+                    
+                    compile(&mut env, &node, WantPointer::None);
+                    let (type_val, val) = env.stack.pop().unwrap();
+                    assert!(type_val == *g_type);
+                    
+                    if !val_is_const(true, val)
+                    {
+                        panic!("error: tried to make global constexpr with non-constexpr expression")
+                    }
+                    env.builder.build_return(None).unwrap();
+                    constants.insert(g_name.clone(), (g_type.clone(), val));
+                    
+                    builder.position_at_end(entry_block);
+                    builder.build_unconditional_branch(body_block).unwrap();
                 }
             }
             
@@ -3400,23 +3280,21 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     macro_rules! get_func
     {
         ($name:expr, $T:ty) =>
-        {
+        {{
+            let dec = func_decs.get(&$name.to_string());
+            if dec.is_none()
             {
-                let dec = func_decs.get(&$name.to_string());
-                if dec.is_none()
-                {
-                    panic!("error: no `{}` function", $name);
-                }
-                let dec = dec.unwrap();
-                let type_string = dec.1.to_string_rusttype();
-                
-                let want_type_string = std::any::type_name::<$T>(); // FIXME: not guaranteed to be stable across rust versions
-                assert!(want_type_string == type_string, "types do not match:\n{}\n{}\n", want_type_string, type_string);
-                assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
-                
-                executor.get_function::<$T>(&$name).unwrap()
+                panic!("error: no `{}` function", $name);
             }
-        }
+            let dec = dec.unwrap();
+            let type_string = dec.1.to_string_rusttype();
+            
+            let want_type_string = std::any::type_name::<$T>(); // FIXME: not guaranteed to be stable across rust versions
+            assert!(want_type_string == type_string, "types do not match:\n{}\n{}\n", want_type_string, type_string);
+            assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
+            
+            executor.get_function::<$T>(&$name).unwrap()
+        }}
     }
     
     if VERBOSE || PRINT_COMP_TIME
