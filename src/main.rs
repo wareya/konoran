@@ -16,9 +16,8 @@ use core::cell::RefCell;
 use alloc::collections::BTreeMap;
 use std::collections::HashMap;
 
-use inkwell::types::BasicType;
-use inkwell::types::BasicTypeEnum;
-use inkwell::values::BasicValue;
+use inkwell::types::{BasicTypeEnum, BasicType};
+use inkwell::values::{BasicValue, BasicValueEnum, AsValueRef};
 
 use parser::ast::ASTNode;
 
@@ -201,18 +200,6 @@ impl Type
     fn is_int_unsigned(&self) -> bool
     {
         ["u8", "u16", "u32", "u64"].contains(&self.name.as_str())
-    }
-#[allow(dead_code)]
-    fn to_signed(&self) -> Type
-    {
-        match self.name.as_str()
-        {
-            "u8"  | "i8"  => Type { name :  "i8".to_string(), data : TypeData::Primitive },
-            "u16" | "i16" => Type { name : "i16".to_string(), data : TypeData::Primitive },
-            "u32" | "i32" => Type { name : "i32".to_string(), data : TypeData::Primitive },
-            "u64" | "i64" => Type { name : "i64".to_string(), data : TypeData::Primitive },
-            _ => panic!("internal error: tried to directly convert a non-int type to signed")
-        }
     }
     fn is_void(&self) -> bool
     {
@@ -465,8 +452,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
             }
             TypeData::Array(inner, size) =>
             {
-                let backend_inner = get_backend_type_sized(backend_types, types, inner);
-                let ptr_type = backend_inner.array_type(*size as u32).into();
+                let ptr_type = get_backend_type_sized(backend_types, types, inner).array_type(*size as u32).into();
                 backend_types.insert(key, ptr_type);
                 ptr_type
             }
@@ -480,8 +466,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                         let mut prop_types = Vec::new();
                         for (_, type_) in struct_data
                         {
-                            let backend_type = get_backend_type_sized(backend_types, types, type_);
-                            prop_types.push(backend_type);
+                            prop_types.push(get_backend_type_sized(backend_types, types, type_));
                         }
                         if prop_types.first().is_some()
                         {
@@ -902,7 +887,6 @@ fn check_struct_incomplete(env : &mut Environment, type_ : &mut Type)
         {
             if let Some(new_type) = env.types.get(&type_.name)
             {
-                //println!("----incomplete struct found!!!!!----");
                 type_.data = new_type.data.clone();
             }
             else
@@ -918,15 +902,13 @@ fn check_struct_incomplete(env : &mut Environment, type_ : &mut Type)
 }
 fn val_is_const(mut is_const : bool, val : inkwell::values::BasicValueEnum) -> bool
 {
-    use inkwell::values::BasicValueEnum;
-    use inkwell::values::AsValueRef;
     match val
     {
-        BasicValueEnum::ArrayValue(v) => is_const = is_const && v.is_const(),
-        BasicValueEnum::IntValue(v) => is_const = is_const && v.is_const(),
-        BasicValueEnum::FloatValue(v) => is_const = is_const && v.is_const(),
+        BasicValueEnum::ArrayValue(v)   => is_const = is_const && v.is_const(),
+        BasicValueEnum::IntValue(v)     => is_const = is_const && v.is_const(),
+        BasicValueEnum::FloatValue(v)   => is_const = is_const && v.is_const(),
         BasicValueEnum::PointerValue(v) => is_const = is_const && v.is_const(),
-        BasicValueEnum::StructValue(v) => is_const = is_const && { unsafe { llvm_sys::core::LLVMIsConstant(v.as_value_ref()) == 1 }},
+        BasicValueEnum::StructValue(v)  => is_const = is_const && { unsafe { llvm_sys::core::LLVMIsConstant(v.as_value_ref()) == 1 }},
         _ => is_const = false,
     }
     is_const
@@ -1067,13 +1049,11 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     global.set_linkage(inkwell::module::Linkage::Private);
                     
                     let val = global.as_pointer_value();
-                    let callval = build_memcpy!($slot, val, len, $volatile).unwrap();
-                    callval.try_as_basic_value().left();
+                    build_memcpy!($slot, val, len, $volatile).unwrap();
                 }
                 else
                 {
-                    let callval = build_memcpy!($slot, $val, len, $volatile).unwrap();
-                    callval.try_as_basic_value().left();
+                    build_memcpy!($slot, $val, len, $volatile).unwrap();
                 }
             }
             // FIXME do this if the store is volatile, maybe...?
@@ -1091,8 +1071,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             // returns can only happen at the very end of a block
             // and the end of a block can only have one flow control mechanism
             // (so we can't explicitly jump to this new anonymous block we're making; it's dead code)
-            let block = env.context.append_basic_block(env.func_val, "");
-            env.builder.position_at_end(block);
+            env.builder.position_at_end(env.context.append_basic_block(env.func_val, ""));
             env.just_returned = false;
         }
         match node.text.as_str()
@@ -1339,7 +1318,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 let right_name = &node.child(1).unwrap().child(0).unwrap().text;
                 
-                if let Some(found) = match &struct_type.data {
+                if let Some(found) = match &struct_type.data
+                {
                     TypeData::Struct(ref props) => props.iter().enumerate().find(|x| x.1.0 == *right_name),
                     _ => panic_error!("error: tried to use indirection (.) operator on non-struct {:?}", struct_type),
                 }
@@ -1433,8 +1413,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let intrinsic_name = &node.child(0).unwrap().child(0).unwrap().text;
                 if let Some((funcaddr, funcsig)) = env.intrinsic_decs.get(intrinsic_name)
                 {
-                    //let func_type = get_function_type(&mut env.function_types, &mut env.backend_types, &env.types, &funcsig);
-                    
                     let stack_len_start = env.stack.len();
                     compile(env, node.child(1).unwrap(), WantPointer::None);
                     let stack_len_end = env.stack.len();
@@ -2000,11 +1978,10 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "goto" =>
             {
                 let label = &node.child(0).unwrap().child(0).unwrap().text;
-                let next_block = env.context.append_basic_block(env.func_val, "");
                 if let Some(then_block) = env.blocks.get(label)
                 {
                     env.builder.build_unconditional_branch(*then_block).unwrap();
-                    env.builder.position_at_end(next_block);
+                    env.builder.position_at_end(env.context.append_basic_block(env.func_val, ""));
                 }
                 else
                 {
@@ -2390,7 +2367,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         {
                             "&" =>
                             {
-                                
                                 if !right_type.is_int_unsigned() || right_type.size() as u32 * 8 != env.ptr_int_type.get_bit_width()
                                 {
                                     panic_error!("ptr mask (&) operation is only supported with a right-hand operand of the target's pointer-sized int type (usually u64 or u32) {:?}", right_basic_type);
@@ -2517,22 +2493,16 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                                             "+" => env.builder.build_int_add(left_val, right_val, ""),
                                             "-" => env.builder.build_int_sub(left_val, right_val, ""),
                                             "*" => env.builder.build_int_mul(left_val, right_val, ""),
-                                            "div_unsafe" => if is_u
+                                            "div_unsafe" => match is_u
                                             {
-                                                env.builder.build_int_unsigned_div(left_val, right_val, "")
+                                                true => env.builder.build_int_unsigned_div(left_val, right_val, ""),
+                                                false => env.builder.build_int_signed_div(left_val, right_val, ""),
                                             }
-                                            else
+                                            "rem_unsafe" => match is_u
                                             {
-                                                env.builder.build_int_signed_div(left_val, right_val, "")
-                                            },
-                                            "rem_unsafe" => if is_u
-                                            {
-                                                env.builder.build_int_unsigned_rem(left_val, right_val, "")
+                                                true => env.builder.build_int_unsigned_rem(left_val, right_val, ""),
+                                                false => env.builder.build_int_signed_rem(left_val, right_val, ""),
                                             }
-                                            else
-                                            {
-                                                env.builder.build_int_signed_rem(left_val, right_val, "")
-                                            },
                                             _ => panic_error!("internal error: operator mismatch")
                                         }.unwrap();
                                         env.stack.push((left_type.clone(), res.into()));
@@ -3196,18 +3166,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         }
                         else
                         {
-                            /*
-                            let slot = if let TypeData::Array(inner_type, size) = &var_type.data
-                            {
-                                let size = get_backend_type_sized(&mut backend_types, &types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
-                                let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, &inner_type);
-                                builder.build_array_alloca(inner_basic_type, size, &var_name)
-                            }
-                            else
-                            {
-                                builder.build_alloca(basic_type, &var_name)
-                            }.unwrap();
-                            */
                             let slot = builder.build_alloca(basic_type, &var_name).unwrap();
                             
                             let val = func_val.get_nth_param(j as u32).unwrap();
@@ -3270,8 +3228,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         let name = &node.child(0).unwrap().child(0).unwrap().text;
                         if !blocks.contains_key(name)
                         {
-                            let block = context.append_basic_block(func_val, name);
-                            blocks.insert(name.clone(), block);
+                            blocks.insert(name.clone(), context.append_basic_block(func_val, name));
                         }
                         else
                         {
@@ -3284,13 +3241,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 let mut hoisted_return = None;
                 if function.return_type.is_composite()
                 {
-                    //let return_backend_type = get_backend_type_sized(&mut backend_types, &types, &function.return_type);
-                    //let len = return_backend_type.size_of().unwrap().into();
-                    
-                    //let return_slot = builder.build_alloca(return_backend_type, "").unwrap();
                     let val = func_val.get_last_param().unwrap();
-                    //build_memcpy!(return_slot, val, len, false).unwrap();
-                    
                     hoisted_return = Some((function.return_type.clone(), val.into_pointer_value()));
                 }
                 
