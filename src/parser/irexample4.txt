@@ -54,5 +54,10 @@ void main()
     Vec2 kgeg = Vec2 { 124.016f32, 815.1538f32 };
     kgeg = print_vec2(kgeg);
     kgeg = print_vec2(kgeg);
+    
+    constexpr Vec2 kd113 = constexpr Vec2 { 2.2f32, 5.5f32 };
+    //print_vec2(kd113);
+    print_vec2(Vec2 { 2.2f32, 5.5f32 });
+    
     return;
 }

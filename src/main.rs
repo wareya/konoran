@@ -867,6 +867,8 @@ struct Environment<'a, 'b, 'c, 'e, 'f>
     ptr_int_type   : inkwell::types::IntType<'c>,
     target_data    : &'f inkwell::targets::TargetData,
     
+    anon_globals   : HashMap<inkwell::values::PointerValue<'c>, inkwell::values::BasicValueEnum<'c>>,
+    
     return_type    : Option<Type>,
     hoisted_return : Option<(Type, inkwell::values::PointerValue<'c>)>,
     just_returned  : bool,
@@ -1042,20 +1044,28 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 if val_is_const(true, $val)
                 {
-                    let global = env.module.add_global(backend_type, Some(inkwell::AddressSpace::default()), "");
-                    global.set_initializer(&$val);
-                    global.set_constant(true);
-                    global.set_linkage(inkwell::module::Linkage::Private);
-                    
-                    let val = global.as_pointer_value();
-                    build_memcpy!($slot, val, len, $volatile).unwrap();
+                    if $val.is_pointer_value() // already assigned to global const, load straight form its pointer
+                    {
+                        build_memcpy!($slot, $val, len, $volatile).unwrap();
+                    }
+                    else
+                    {
+                        let global = env.module.add_global(backend_type, Some(inkwell::AddressSpace::default()), "");
+                        global.set_constant(true);
+                        global.set_initializer(&$val);
+                        
+                        global.set_linkage(inkwell::module::Linkage::Private);
+                        
+                        let val = global.as_pointer_value();
+                        build_memcpy!($slot, val, len, $volatile).unwrap();
+                    }
                 }
                 else
                 {
                     build_memcpy!($slot, $val, len, $volatile).unwrap();
                 }
             }
-            // FIXME do this if the store is volatile, maybe...?
+            // FIXME maybe always do this if the store is volatile...?
             else
             {
                 let store = env.builder.build_store($slot, $val).unwrap();
@@ -1063,6 +1073,25 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             }
         }}
     }
+    
+    macro_rules! make_anonymous_const_global
+    {
+        ($initializer:expr) =>
+        {{
+            let global = env.module.add_global($initializer.get_type(), Some(inkwell::AddressSpace::default()), "");
+            global.set_constant(true);
+            global.set_initializer(&$initializer);
+            global.set_linkage(inkwell::module::Linkage::Private);
+            env.anon_globals.insert(global.as_pointer_value(), $initializer.into());
+            
+            global
+            // make a global
+            // set its static initializer
+            // set it as private
+            // set it as constant
+        }}
+    }
+    
     if node.is_parent()
     {
         if env.just_returned
@@ -1364,6 +1393,16 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                             {
                                 panic_error!("mismatched types for parameter {} in call to function {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
                             }
+                            /*
+                            if arg_type.is_composite() && val_is_const(true, val)
+                            {
+                                let backend_type = get_backend_type_sized(env.backend_types, env.types, &arg_type);
+                                let slot = env.builder.build_alloca(backend_type, "").unwrap();
+                                let len = backend_type.size_of().unwrap().into();
+                                build_memcpy!(slot, val, len, false).unwrap();
+                                val = 
+                            }
+                            */
                             args.push(val.into());
                             arg_types.push(arg_type.clone());
                         }
@@ -1479,7 +1518,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let mut is_const = true;
                 for _ in 0..array_length
                 {
-                    let (type_, val) = env.stack.pop().unwrap();
+                    let (type_, mut val) = env.stack.pop().unwrap();
                     if element_type.is_none()
                     {
                         element_type = Some(type_.clone());
@@ -1489,6 +1528,11 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         panic_error!("error: array literals must entirely be of a single type");
                     }
                     is_const = val_is_const(is_const, val);
+                    if val_is_const(is_const, val) && type_.is_composite() && val.is_pointer_value()
+                    {
+                        //val = unsafe { inkwell::values::GlobalValue::new(val.as_value_ref()) }.get_initializer().unwrap();
+                        val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
+                    }
                     vals.push(val);
                 }
                 vals.reverse();
@@ -1517,8 +1561,10 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     }
                     else
                     {
+                        //println!("-- {:?}", vals);
                         let val = basic_const_array(element_backend_type, &vals);
-                        env.stack.push((array_type.clone(), val.into()));
+                        let global = make_anonymous_const_global!(val);
+                        env.stack.push((array_type.clone(), global.as_pointer_value().into()));
                     }
                 }
                 else
@@ -1557,8 +1603,13 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let mut vals = Vec::new();
                 for _ in 0..member_count
                 {
-                    let (type_, val) = env.stack.pop().unwrap();
+                    let (type_, mut val) = env.stack.pop().unwrap();
                     is_const = val_is_const(is_const, val);
+                    if val_is_const(is_const, val) && type_.is_composite() && val.is_pointer_value()
+                    {
+                        //val = unsafe { inkwell::values::GlobalValue::new(val.as_value_ref()) }.get_initializer().unwrap();
+                        val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
+                    }
                     vals.push((type_, val));
                 }
                 vals.reverse();
@@ -1606,7 +1657,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         }
                     }
                     let val = backend_type.into_struct_type().const_named_struct(&newvals);
-                    env.stack.push((struct_type, val.into()));
+                    let global = make_anonymous_const_global!(val);
+                    env.stack.push((struct_type, global.as_pointer_value().into()));
                 }
             }
             "float" =>
@@ -1725,11 +1777,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     if want_pointer != WantPointer::None
                     {
-                        let global = env.module.add_global(array_val.get_type(), Some(inkwell::AddressSpace::default()), "");
-                        global.set_initializer(&array_val);
-                        global.set_constant(true);
-                        global.set_linkage(inkwell::module::Linkage::Internal);
-                        
+                        let global = make_anonymous_const_global!(array_val);
                         env.stack.push((type_.clone(), global.as_pointer_value().into()));
                     }
                     else
@@ -1742,11 +1790,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     if want_pointer == WantPointer::None
                     {
-                        let global = env.module.add_global(array_val.get_type(), Some(inkwell::AddressSpace::default()), "");
-                        global.set_initializer(&array_val);
-                        global.set_constant(true);
-                        global.set_linkage(inkwell::module::Linkage::Internal);
-                        
+                        let global = make_anonymous_const_global!(array_val);
                         env.stack.push((type_.clone(), global.as_pointer_value().into()));
                     }
                     else
@@ -2983,7 +3027,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                             
                             let stack = Vec::new();
                             let blocks = HashMap::new();
-                            let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, return_type : None, hoisted_return : None, just_returned : false };
+                            let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false };
                             
                             compile(&mut env, &node, WantPointer::None);
                             let (type_val, val) = env.stack.pop().unwrap();
@@ -2992,8 +3036,24 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                             if val_is_const(true, val)
                             {
                                 let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
-                                global.set_initializer(&val);
-                                global.set_constant(true);
+                                if g_type.is_composite() && val.as_instruction_value().is_none()
+                                {
+                                    //let global2 = unsafe { inkwell::values::GlobalValue::new(val.as_value_ref()) };
+                                    //global.set_initializer(&global2.get_initializer().unwrap());
+                                    let val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
+                                    global.set_initializer(&val);
+                                }
+                                else if g_type.is_composite()
+                                {
+                                    panic!("INTERNAL ERROR THIS SHOULD BE UNREACHABLE PLEASE REPORT 28753489");
+                                    //global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
+                                    //env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
+                                }
+                                else
+                                {
+                                    global.set_initializer(&val);
+                                }
+                                //global.set_constant(true);
                                 global.set_linkage(linkage);
                                 global.set_dll_storage_class(storage_class);
                                 env.builder.build_return(None).unwrap();
@@ -3048,7 +3108,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, return_type : None, hoisted_return : None, just_returned : false };
+                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -3241,7 +3301,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 }
                 
                 let stack = Vec::new();
-                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, return_type : Some(function.return_type.clone()), hoisted_return, just_returned : false };
+                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, just_returned : false };
                 
                 //println!("\n\ncompiling function {}...", function.name);
                 //println!("{}", function.body.pretty_debug());
