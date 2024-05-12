@@ -1861,7 +1861,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                                         }
                                         let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
                                         res.as_instruction_value().unwrap().set_volatile(volatile).unwrap();
-                                        println!("load volatility: {}", volatile);
                                         env.stack.push((inner_type, res));
                                     }
                                     "@" =>
