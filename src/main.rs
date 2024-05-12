@@ -29,7 +29,8 @@ high:
 
 low:
 - standard io functions
-- decay_to_ptr $expr$ for arrays
+- decay_to_ptr $expr$ for arrays (what C does automatically, but manually) (currently done by manually casting)
+- float operation intrisics (sin/cos/tan, floor/ceil/round, exp/log/pow)
 
 maybe:
 - varargs in declarations (not definitions) (for printf mainly)
@@ -528,14 +529,6 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
         {
             params.push(backend_type.into());
         }
-        /*
-        else if let Ok(_fptr) = inkwell::types::FunctionType::try_from(backend_type)
-        {
-            let context = get_any_type_context(inkwell::types::BasicTypeEnum::try_from(*backend_types.values().nth(0).unwrap()).unwrap());
-            let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
-            params.push(ptr_type.into());
-        }
-        */
         else
         {
             panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", var_type.name, var_type.name);
@@ -552,8 +545,6 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
     }
     let return_type = get_backend_type(backend_types, types, &_return_type);
     
-    //println!("testing return type {:?} for {:?}...", return_type, sig.return_type);
-    
     let func_type = if let Ok(basic) = inkwell::types::BasicTypeEnum::try_from(return_type)
     {
         basic.fn_type(&params, false)
@@ -562,19 +553,10 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
     {
         void.fn_type(&params, false)
     }
-    /*
-    else if let Ok(_fptr) = inkwell::types::FunctionType::try_from(return_type)
-    {
-        let context = get_any_type_context(inkwell::types::BasicTypeEnum::try_from(*backend_types.values().nth(0).unwrap()).unwrap());
-        context.ptr_type(inkwell::AddressSpace::default()).fn_type(&params, false)
-    }
-    */
     else
     {
         panic!("error: can't build functions that return type {} ({:?})", sig.return_type.name, return_type)
     };
-    
-    //println!("func type is  {:?}", func_type);
     
     // FIXME // why was this fixme here?
     function_types.insert(key, func_type);
@@ -881,7 +863,6 @@ fn basic_const_array<'ctx>(type_ : inkwell::types::BasicTypeEnum<'ctx>, vals : &
     }
 }
 
-// FIXME: fix func calls with structs etc now that structs/arrays are pointer-based
 fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
 {
     // used to build constants for some lowerings, and to cast to bool
@@ -1255,35 +1236,31 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             }
             "arrayindex_head" =>
             {
-                // FIXME: pretty sure this doesn't work with constexprs
+                // FIXME: might not work with complex constexprs (e.g. might not produce a constexpr)
+                
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
                 compile(env, node.child(1).unwrap(), WantPointer::None);
-                
-                //println!("compiling arrayindex head");
                 
                 let (offset_type, offset_val) = env.stack.pop().unwrap();
                 let (base_type, base_addr) = env.stack.pop().unwrap();
                 let (base_type, volatile) = unwrap_or_panic!(base_type.deref_vptr());
                 
-                if offset_type.name == "i64"
-                {
-                    let mut inner_type = unwrap_or_panic!(base_type.array_to_inner());
-                    check_struct_incomplete(env, &mut inner_type);
-                    
-                    let inner_backend_type = get_backend_type_sized(env.backend_types, env.types, &inner_type);
-                    let inner_addr = unsafe { env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "").unwrap() };
-                    
-                    push_val_or_ptr!(inner_type, inner_addr, volatile);
-                    
-                }
-                else
+                if offset_type.name != "i64"
                 {
                     panic_error!("error: can't offset into arrays except with type i64 (used type `{}`)", offset_type.name)
                 }
+                
+                let mut inner_type = unwrap_or_panic!(base_type.array_to_inner());
+                check_struct_incomplete(env, &mut inner_type);
+                
+                let inner_backend_type = get_backend_type_sized(env.backend_types, env.types, &inner_type);
+                let inner_addr = unsafe { env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "").unwrap() };
+                
+                push_val_or_ptr!(inner_type, inner_addr, volatile);
             }
             "indirection_head" =>
             {
-                // FIXME: pretty sure this doesn't work with constexprs
+                // FIXME: might not work with complex constexprs (e.g. might not produce a constexpr)
                 
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
                 let (struct_type, struct_addr) = env.stack.pop().unwrap();
@@ -1338,16 +1315,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                             {
                                 panic_error!("mismatched types for parameter {} in call to function {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
                             }
-                            /*
-                            if arg_type.is_composite() && val_is_const(true, val)
-                            {
-                                let backend_type = get_backend_type_sized(env.backend_types, env.types, &arg_type);
-                                let slot = env.builder.build_alloca(backend_type, "").unwrap();
-                                let len = backend_type.size_of().unwrap().into();
-                                build_memcpy!(slot, val, len, false).unwrap();
-                                val = 
-                            }
-                            */
                             args.push(val.into());
                             arg_types.push(arg_type.clone());
                         }
@@ -1356,7 +1323,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         if hoisted_return
                         {
                             let return_backend_type = get_backend_type_sized(env.backend_types, env.types, &funcsig.return_type);
-                            // FIXME append to start of entry block
                             let slot = env.builder.build_alloca(return_backend_type, "").unwrap();
                             args.push(slot.into());
                             arg_types.push(funcsig.return_type.clone());
@@ -1381,7 +1347,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     }
                     _ => panic_error!("error: tried to use non-function expression as a function")
                 }
-                //println!("done compiling func call");
             }
             "funcargs" =>
                 for child in node.get_children().unwrap()
@@ -1471,7 +1436,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     is_const = val_is_const(is_const, val);
                     if val_is_const(is_const, val) && type_.is_composite() && val.is_pointer_value()
                     {
-                        //val = unsafe { inkwell::values::GlobalValue::new(val.as_value_ref()) }.get_initializer().unwrap();
                         val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
                     }
                     vals.push(val);
@@ -1548,7 +1512,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     is_const = val_is_const(is_const, val);
                     if val_is_const(is_const, val) && type_.is_composite() && val.is_pointer_value()
                     {
-                        //val = unsafe { inkwell::values::GlobalValue::new(val.as_value_ref()) }.get_initializer().unwrap();
                         val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
                     }
                     vals.push((type_, val));
@@ -1698,8 +1661,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     bytes.push(0);
                 }
                 
-                // FIXME make sure this still works
-                
                 let vals = bytes.iter().map(|x| u8_type.const_int(*x as u64, false).into()).collect::<Vec<_>>();
                 let array_val = basic_const_array(u8_type.into(), &vals);
                 let type_ = u8_type_frontend.to_ptr(false);
@@ -1718,15 +1679,12 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 else
                 {
-                    if want_pointer == WantPointer::None
-                    {
-                        let global = make_anonymous_const_global!(array_val);
-                        env.stack.push((type_.clone(), global.as_pointer_value().into()));
-                    }
-                    else
+                    if want_pointer != WantPointer::None
                     {
                         panic_error!("tried to get pointer of pointer-to-string literal");
                     }
+                    let global = make_anonymous_const_global!(array_val);
+                    env.stack.push((type_.clone(), global.as_pointer_value().into()));
                 }
             }
             "integer" =>
@@ -1965,10 +1923,9 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let type_ = parse_type(env.types, node.child(0).unwrap()).unwrap();
                 let backend_type = get_backend_type(env.backend_types, env.types, &type_);
                 let size = backend_type.size_of().unwrap_or_else(|| panic_error!("error: type `{}` is not sized", type_.name));
-                // FIXME cast up to u64 if not u64 large
+                // FIXME cast up to u64 if sizeof result is not u64 large
                 env.stack.push((env.types.get("u64").unwrap().clone(), size.into()));
             }
-            // FIXME: fix casts now that structs/arrays are pointer-based
             "bitcast" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
@@ -1976,12 +1933,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 let right_type = parse_type(env.types, node.child(1).unwrap()).unwrap();
                 let right_basic_type = get_backend_type_sized(env.backend_types, env.types, &right_type);
-                //let left_basic_type = get_backend_type_sized(env.backend_types, env.types, &left_type);
                 
                 let (left_size, right_size) = (store_size_of_type(env.target_data, env.backend_types, env.types, &left_type), store_size_of_type(env.target_data, env.backend_types, env.types, &right_type));
-                
-                //let left_size = env.target_data.get_store_size(&left_val.get_type());
-                //let right_size = env.target_data.get_store_size(&right_basic_type);
                 
                 // cast as own type (replace type, aka do nothing)
                 if left_type.name == right_type.name
@@ -2015,7 +1968,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 // both composite
                 else if left_size == right_size && right_type.is_composite() && left_type.is_composite()
                 {
-                    //let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
                     env.stack.push((right_type, left_val));
                 }
                 // composite to primitive
@@ -2030,7 +1982,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 // primitive to composite
                 else if left_size == right_size && right_type.is_composite() && !left_type.is_composite() && !left_type.is_pointer_or_fpointer()
                 {
-                    // FIXME write an alloca-in-entry-block helper macro
+                    // FIXME write an alloca-in-entry-block helper macro and use it here
                     let slot = env.builder.build_alloca(right_basic_type, "").unwrap();
                     env.builder.build_store(slot, left_val).unwrap();
                     env.stack.push((right_type, slot.into()));
@@ -2930,22 +2882,17 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                             let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
                             if g_type.is_composite() && val.as_instruction_value().is_none()
                             {
-                                //let global2 = unsafe { inkwell::values::GlobalValue::new(val.as_value_ref()) };
-                                //global.set_initializer(&global2.get_initializer().unwrap());
                                 let val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
                                 global.set_initializer(&val);
                             }
                             else if g_type.is_composite()
                             {
                                 panic!("INTERNAL ERROR THIS SHOULD BE UNREACHABLE PLEASE REPORT 28753489");
-                                //global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
-                                //env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
                             }
                             else
                             {
                                 global.set_initializer(&val);
                             }
-                            //global.set_constant(true);
                             global.set_linkage(linkage);
                             global.set_dll_storage_class(storage_class);
                             env.builder.build_return(None).unwrap();
