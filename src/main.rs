@@ -22,7 +22,9 @@ use inkwell::values::{BasicValue, BasicValueEnum, AsValueRef};
 use parser::ast::ASTNode;
 
 /*
+
 TODO list:
+
 high:
 - bit shift operators
 - ternary operator
@@ -36,6 +38,13 @@ maybe:
 - varargs in declarations (not definitions) (for printf mainly)
 - implement other control flow constructs than just "if -> goto"
 - have proper scoped variable declarations, not function-level variable declarations
+
+
+FIXMEs:
+
+- sizeof might not compile properly on non-64-bit because idk if it needs to be manually upcasted to u64 or not
+- suboptimal codegen with some temporary allocas due to lack of hoisting into entry block 
+
 */
 
 mod parser;
@@ -1236,8 +1245,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             }
             "arrayindex_head" =>
             {
-                // FIXME: might not work with complex constexprs (e.g. might not produce a constexpr)
-                
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
                 compile(env, node.child(1).unwrap(), WantPointer::None);
                 
@@ -1260,8 +1267,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             }
             "indirection_head" =>
             {
-                // FIXME: might not work with complex constexprs (e.g. might not produce a constexpr)
-                
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
                 let (struct_type, struct_addr) = env.stack.pop().unwrap();
                 let (mut struct_type, volatile) = unwrap_or_panic!(struct_type.deref_vptr());
@@ -1407,7 +1412,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 compile(env, node.child(0).unwrap(), want_pointer);
                 if !val_is_const(true, env.stack.last().unwrap().1)
                 {
-                    panic_error!("error: constexpr contains non-constant parts");
+                    panic_error!("error: constexpr contains non-constant parts; {:?}", env.stack.last());
                 }
             }
             "array_literal" =>
@@ -1450,7 +1455,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     
                     let size = u64_type.const_int(array_length as u64, false);
                     
-                    if !is_const || want_pointer != WantPointer::None
+                    if !is_const
                     {
                         let slot = env.builder.build_array_alloca(element_backend_type, size, "").unwrap();
                         
@@ -1469,7 +1474,15 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         //println!("-- {:?}", vals);
                         let val = basic_const_array(element_backend_type, &vals);
                         let global = make_anonymous_const_global!(val);
-                        env.stack.push((array_type.clone(), global.as_pointer_value().into()));
+                        
+                        if want_pointer != WantPointer::None
+                        {
+                            push_val_or_ptr!(array_type.clone(), global.as_pointer_value(), false);
+                        }
+                        else
+                        {
+                            env.stack.push((array_type.clone(), global.as_pointer_value().into()));
+                        }
                     }
                 }
                 else
@@ -1523,7 +1536,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 let backend_type = get_backend_type_sized(env.backend_types, env.types, &struct_type);
                 
-                if !is_const || want_pointer != WantPointer::None
+                if !is_const
                 {
                     let slot = env.builder.build_alloca(backend_type, "").unwrap();
                     for (index, (type_, val)) in vals.into_iter().enumerate()
@@ -1562,7 +1575,15 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     }
                     let val = backend_type.into_struct_type().const_named_struct(&newvals);
                     let global = make_anonymous_const_global!(val);
-                    env.stack.push((struct_type, global.as_pointer_value().into()));
+                    
+                    if want_pointer != WantPointer::None
+                    {
+                        push_val_or_ptr!(struct_type, global.as_pointer_value(), false);
+                    }
+                    else
+                    {
+                        env.stack.push((struct_type, global.as_pointer_value().into()));
+                    }
                 }
             }
             "float" =>
@@ -2045,7 +2066,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 let right_type = parse_type(env.types, node.child(1).unwrap()).unwrap();
                 let right_backend_type = get_backend_type(env.backend_types, env.types, &right_type);
-                let right_basic_type : BasicTypeEnum = right_backend_type.try_into().unwrap();
                 
                 // cast as own type (replace type, aka do nothing)
                 if left_type.name == right_type.name
