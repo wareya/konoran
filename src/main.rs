@@ -925,31 +925,11 @@ fn basic_const_array<'ctx>(type_ : inkwell::types::BasicTypeEnum<'ctx>, vals : &
 {
     match type_
     {
-        BasicTypeEnum::ArrayType(v) =>
-        {
-            let vals = vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>();
-            v.const_array(&vals)
-        }
-        BasicTypeEnum::IntType(v) =>
-        {
-            let vals = vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>();
-            v.const_array(&vals)
-        }
-        BasicTypeEnum::FloatType(v) =>
-        {
-            let vals = vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>();
-            v.const_array(&vals)
-        }
-        BasicTypeEnum::PointerType(v) =>
-        {
-            let vals = vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>();
-            v.const_array(&vals)
-        }
-        BasicTypeEnum::StructType(v) =>
-        {
-            let vals = vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>();
-            v.const_array(&vals)
-        }
+        BasicTypeEnum::ArrayType(v)   => v.const_array(&(vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>())),
+        BasicTypeEnum::IntType(v)     => v.const_array(&(vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>())),
+        BasicTypeEnum::FloatType(v)   => v.const_array(&(vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>())),
+        BasicTypeEnum::PointerType(v) => v.const_array(&(vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>())),
+        BasicTypeEnum::StructType(v)  => v.const_array(&(vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>())),
         _ => panic!("internal error: unsupported type for array"),
     }
 }
@@ -1119,19 +1099,15 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
             }
             "statementlist" | "statement" | "instruction" =>
-            {
                 for child in node.get_children().unwrap()
                 {
                     compile(env, child, WantPointer::None);
                 }
-            }
             "parenexpr" | "arrayindex" =>
-            {
                 for child in node.get_children().unwrap()
                 {
                     compile(env, child, want_pointer);
                 }
-            }
             "unusedcomma" => {},
             "return" =>
             {
@@ -1171,10 +1147,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 env.just_returned = true;
             }
-            "declaration" =>
-            {
-                return;
-            }
+            "declaration" => return,
             "fulldeclaration" =>
             {
                 let name = &node.child(1).unwrap().child(0).unwrap().text;
@@ -1250,12 +1223,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
             }
             "lvar" =>
-            {
                 for child in node.get_children().unwrap()
                 {
                     compile(env, child, WantPointer::Virtual);
                 }
-            }
             "lvar_name" =>
             {
                 let name = &node.child(0).unwrap().child(0).unwrap().text;
@@ -1443,12 +1414,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 //println!("done compiling func call");
             }
             "funcargs" =>
-            {
                 for child in node.get_children().unwrap()
                 {
                     compile(env, child, WantPointer::None);
                 }
-            }
             "intrinsic" =>
             {
                 let intrinsic_name = &node.child(0).unwrap().child(0).unwrap().text;
@@ -2732,13 +2701,11 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 match state
                 {
                     ' ' =>
-                    {
                         match c
                         {
                             '%' => state = '%',
                             _ => s.push(c),
                         }
-                    }
                     '%' =>
                     {
                         state = ' ';
@@ -2764,12 +2731,10 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                                     s.push_str(&orig_string);
                                 }
                                 'c' =>
-                                {
                                     if let Some(c) = char::from_u32(*((*vars) as *mut u32))
                                     {
                                         s.push(c);
                                     }
-                                }
                                 _ =>
                                 {
                                     s.push('%');
@@ -2944,30 +2909,24 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             {
                 let linkage = match *visibility
                 {
-                    Visibility::Export =>
-                        // expose as much as possible
-                        // exact semantics are implementation-defined; may be a dll export!
-                        inkwell::module::Linkage::External,
-                    Visibility::Local =>
-                        // expose to other modules and objects
-                        inkwell::module::Linkage::External,
-                    Visibility::Private =>
-                        // do not expose to other modules
-                        inkwell::module::Linkage::Internal,
+                    // expose as much as possible
+                    // exact semantics are implementation-defined; may be a dll export!
+                    Visibility::Export => inkwell::module::Linkage::External,
+                    // expose to other modules and objects
+                    Visibility::Local => inkwell::module::Linkage::External,
+                    // do not expose to other modules
+                    Visibility::Private => inkwell::module::Linkage::Internal,
                     _ =>
                         panic!("internal error, invalid visibility class for function definition"),
                 };
                 
                 let storage_class = match *visibility
                 {
-                    Visibility::Import =>
-                        panic!("internal error, invalid visibility class for function definition"),
-                    Visibility::Export =>
-                        // expose as much as possible
-                        // exact semantics are implementation-defined; may be a dll export!
-                        inkwell::DLLStorageClass::Export,
-                    _ =>
-                        inkwell::DLLStorageClass::Default,
+                    Visibility::Import => panic!("internal error, invalid visibility class for function definition"),
+                    // expose as much as possible
+                    // exact semantics are implementation-defined; may be a dll export!
+                    Visibility::Export => inkwell::DLLStorageClass::Export,
+                    _ => inkwell::DLLStorageClass::Default,
                 };
                 
                 let funcsig = function.to_sig();
@@ -2980,26 +2939,21 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             {
                 let linkage = match *visibility
                 {
-                    Visibility::Import => 
-                        // get from anywhere possible
-                        // exact semantics are implementation-defined; may be a dll import!
-                        inkwell::module::Linkage::External,
-                    Visibility::ImportLocal =>
-                        // get from external module or object
-                        inkwell::module::Linkage::External,
+                    // get from anywhere possible
+                    // exact semantics are implementation-defined; may be a dll import!
+                    Visibility::Import => inkwell::module::Linkage::External,
+                    // get from external module or object
+                    Visibility::ImportLocal => inkwell::module::Linkage::External,
                     _ => panic!("internal error, invalid visibility class for function import"),
                 };
                 
                 let storage_class = match *visibility
                 {
-                    Visibility::Import =>
-                        // get from anywhere possible
-                        // exact semantics are implementation-defined; may be a dll import!
-                        inkwell::DLLStorageClass::Import,
-                    Visibility::Export =>
-                        panic!("internal error, invalid visibility class for function import"),
-                    _ =>
-                        inkwell::DLLStorageClass::Default,
+                    // get from anywhere possible
+                    // exact semantics are implementation-defined; may be a dll import!
+                    Visibility::Import => inkwell::DLLStorageClass::Import,
+                    Visibility::Export => panic!("internal error, invalid visibility class for function import"),
+                    _ => inkwell::DLLStorageClass::Default,
                 };
                 let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
                 let func_val = module.add_function(&f_name, func_type, Some(linkage));
@@ -3016,37 +2970,29 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                     {
                         let linkage = match *visibility
                         {
-                            Visibility::Import => 
-                                // get from anywhere possible
-                                // exact semantics are implementation-defined; may be a dll import!
-                                inkwell::module::Linkage::External,
-                            Visibility::ImportLocal =>
-                                // get from external module or object
-                                inkwell::module::Linkage::External,
-                            Visibility::Export =>
-                                // expose as much as possible
-                                // exact semantics are implementation-defined; may be a dll export!
-                                inkwell::module::Linkage::External,
-                            Visibility::Local =>
-                                // expose to other modules and objects
-                                inkwell::module::Linkage::External,
-                            Visibility::Private =>
-                                // do not expose to other modules
-                                inkwell::module::Linkage::Internal,
+                            // get from anywhere possible
+                            // exact semantics are implementation-defined; may be a dll import!
+                            Visibility::Import => inkwell::module::Linkage::External,
+                            // get from external module or object
+                            Visibility::ImportLocal => inkwell::module::Linkage::External,
+                            // expose as much as possible
+                            // exact semantics are implementation-defined; may be a dll export!
+                            Visibility::Export => inkwell::module::Linkage::External,
+                            // expose to other modules and objects
+                            Visibility::Local => inkwell::module::Linkage::External,
+                            // do not expose to other modules
+                            Visibility::Private => inkwell::module::Linkage::Internal,
                         };
                         
                         let storage_class = match *visibility
                         {
-                            Visibility::Import =>
-                                // get from anywhere possible
-                                // exact semantics are implementation-defined; may be a dll import!
-                                inkwell::DLLStorageClass::Import,
-                            Visibility::Export =>
-                                // expose as much as possible
-                                // exact semantics are implementation-defined; may be a dll export!
-                                inkwell::DLLStorageClass::Export,
-                            _ =>
-                                inkwell::DLLStorageClass::Default,
+                            // get from anywhere possible
+                            // exact semantics are implementation-defined; may be a dll import!
+                            Visibility::Import => inkwell::DLLStorageClass::Import,
+                            // expose as much as possible
+                            // exact semantics are implementation-defined; may be a dll export!
+                            Visibility::Export => inkwell::DLLStorageClass::Export,
+                            _ => inkwell::DLLStorageClass::Default,
                         };
                         
                         if let Some(node) = g_init
