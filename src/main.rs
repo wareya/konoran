@@ -24,7 +24,6 @@ use parser::ast::ASTNode;
 /*
 TODO list:
 high:
-- move struct/array loads to allocas
 - bit shift operators
 - ternary operator
 
@@ -1293,10 +1292,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     check_struct_incomplete(env, &mut inner_type);
                     
                     let inner_backend_type = get_backend_type_sized(env.backend_types, env.types, &inner_type);
-                    let inner_addr = unsafe
-                    {
-                        env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "").unwrap()
-                    };
+                    let inner_addr = unsafe { env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "").unwrap() };
                     
                     push_val_or_ptr!(inner_type, inner_addr, volatile);
                     
@@ -1512,10 +1508,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         for (offset, val) in vals.into_iter().enumerate()
                         {
                             let offset_val = u64_type.const_int(offset as u64, false);
-                            let offset_addr = unsafe
-                            {
-                                env.builder.build_in_bounds_gep(element_backend_type, slot, &[offset_val], "").unwrap()
-                            };
+                            let offset_addr = unsafe { env.builder.build_in_bounds_gep(element_backend_type, slot, &[offset_val], "").unwrap() };
                             
                             env.builder.build_store(offset_addr, val).unwrap();
                         }
@@ -2045,10 +2038,14 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let (left_type, left_val) = env.stack.pop().unwrap();
                 
                 let right_type = parse_type(env.types, node.child(1).unwrap()).unwrap();
+                let right_basic_type = get_backend_type_sized(env.backend_types, env.types, &right_type);
+                //let left_basic_type = get_backend_type_sized(env.backend_types, env.types, &left_type);
                 
                 let (left_size, right_size) = (store_size_of_type(env.target_data, env.backend_types, env.types, &left_type), store_size_of_type(env.target_data, env.backend_types, env.types, &right_type));
                 
-                let right_basic_type = get_backend_type_sized(env.backend_types, env.types, &right_type);
+                //let left_size = env.target_data.get_store_size(&left_val.get_type());
+                //let right_size = env.target_data.get_store_size(&right_basic_type);
+                
                 // cast as own type (replace type, aka do nothing)
                 if left_type.name == right_type.name
                 {
@@ -2081,22 +2078,25 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 // both composite
                 else if left_size == right_size && right_type.is_composite() && left_type.is_composite()
                 {
-                    let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
-                    env.stack.push((right_type, ret));
+                    //let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
+                    env.stack.push((right_type, left_val));
                 }
                 // composite to primitive
                 else if left_size == right_size && left_type.is_composite() && !right_type.is_composite() && !right_type.is_pointer_or_fpointer()
                 {
-                    //let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
-                    let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
-                    env.stack.push((right_type, ret));
+                    let slot = env.builder.build_alloca(right_basic_type, "").unwrap();
+                    let len = right_basic_type.size_of().unwrap().into();
+                    build_memcpy!(slot, left_val, len, false).unwrap();
+                    let res = env.builder.build_load(right_basic_type, slot, "").unwrap();
+                    env.stack.push((right_type, res.into()));
                 }
                 // primitive to composite
                 else if left_size == right_size && right_type.is_composite() && !left_type.is_composite() && !left_type.is_pointer_or_fpointer()
                 {
-                    //let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
-                    let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
-                    env.stack.push((right_type, ret));
+                    // FIXME write an alloca-in-entry-block helper macro
+                    let slot = env.builder.build_alloca(right_basic_type, "").unwrap();
+                    env.builder.build_store(slot, left_val).unwrap();
+                    env.stack.push((right_type, slot.into()));
                 }
                 else
                 {
@@ -2182,6 +2182,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     }
                 }
                 // cast between types of same size, non-float. bitcast.
+                // FIXME: do I even want this for non-ints? probably not, right?
                 else if !left_type.is_float() && !right_type.is_float() && right_basic_type.is_sized() && left_basic_type.size_of() == right_basic_type.size_of() && !left_type.is_pointer_or_fpointer() && !right_type.is_pointer_or_fpointer()
                 {
                     let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
@@ -2376,10 +2377,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                                     let intptr : inkwell::values::IntValue = env.builder.build_ptr_to_int(left_val.into_pointer_value(), env.ptr_int_type, "").unwrap();
                                     let masked = env.builder.build_and(intptr, right_val.into_int_value(), "").unwrap();
                                     let diff = env.builder.build_int_sub(masked, intptr, "").unwrap();
-                                    let offset_addr = unsafe
-                                    {
-                                        env.builder.build_gep(u8_type, left_val.into_pointer_value(), &[diff], "").unwrap()
-                                    };
+                                    let offset_addr = unsafe { env.builder.build_gep(u8_type, left_val.into_pointer_value(), &[diff], "").unwrap() };
                                     env.stack.push((left_type.clone(), offset_addr.into()));
                                 }
                                 else
@@ -2399,10 +2397,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                                 {
                                     offset_val = env.builder.build_int_neg(offset_val.into_int_value(), "").unwrap().into();
                                 }
-                                let offset_addr = unsafe
-                                {
-                                    env.builder.build_gep(u8_type, left_val.into_pointer_value(), &[offset_val.try_into().unwrap()], "").unwrap()
-                                };
+                                let offset_addr = unsafe { env.builder.build_gep(u8_type, left_val.into_pointer_value(), &[offset_val.try_into().unwrap()], "").unwrap() };
                                 
                                 env.stack.push((left_type.clone(), offset_addr.into()));
                             }
