@@ -1,3 +1,13 @@
+#![allow(clippy::let_unit_value)] // seim-generic debugging code
+#![allow(clippy::len_zero)] // subjective readability
+#![allow(clippy::comparison_to_empty)] // subjective readability
+#![allow(clippy::single_char_pattern)] // subjective readability
+#![allow(clippy::unnecessary_unwrap)] // block ordering
+#![allow(clippy::if_same_then_else)] // block ordering readability
+#![allow(clippy::collapsible_else_if)] // block ordering readability
+#![allow(clippy::match_like_matches_macro)] // refactoring ease
+#![allow(clippy::suspicious_else_formatting)] // false positive around commented-out code
+
 extern crate alloc;
 
 use alloc::rc::Rc;
@@ -77,16 +87,16 @@ impl Type
             TypeData::Void => if is_ptr { "core::ffi::c_void" } else { "()" }.to_string(),
             TypeData::Primitive => self.name.clone(),
             TypeData::Pointer(inner, _) => format!("*mut {}", inner.borrow().to_string_rusttype(true)),
-            TypeData::VirtualPointer(_, _) => format!("<unrepresented>"),
-            TypeData::Array(_, _) => format!("<unrepresented>"),
-            TypeData::Struct(_) => format!("<unrepresented>"),
-            TypeData::IncompleteStruct => format!("<unrepresented>"),
+            TypeData::VirtualPointer(_, _) => "<unrepresented>".to_string(),
+            TypeData::Array(_, _) => "<unrepresented>".to_string(),
+            TypeData::Struct(_) => "<unrepresented>".to_string(),
+            TypeData::IncompleteStruct => "<unrepresented>".to_string(),
             TypeData::FuncPointer(sig) => sig.to_string_rusttype(),
         }
     }
     fn to_array(&self, count : usize) -> Type
     {
-        Type { name : "array".to_string(), data : TypeData::Array(Box::new(self.clone()), count as usize) }
+        Type { name : "array".to_string(), data : TypeData::Array(Box::new(self.clone()), count) }
     }
     fn to_ptr(&self, volatile : bool) -> Type
     {
@@ -156,9 +166,9 @@ impl Type
     {
         match &self.data
         {
-            TypeData::Pointer(_, _) => return true,
-            TypeData::FuncPointer(_) => return true,
-            _ => return false,
+            TypeData::Pointer(_, _) => true,
+            TypeData::FuncPointer(_) => true,
+            _ => false,
         }
     }
     fn is_virtual_pointer(&self) -> bool
@@ -270,7 +280,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
                 let count : u64 = count_text.parse().unwrap();
                 if count == 0 || type_.name == "void"
                 {
-                    return Err(format!("error: zero-size arrays are not allowed"));
+                    return Err("error: zero-size arrays are not allowed".to_string());
                 }
                 Ok(type_.to_array(count as usize))
             }
@@ -364,7 +374,7 @@ impl Function
 }
 
 #[allow(dead_code)]
-fn store_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
+fn store_size_of_type(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
 {
     if type_.is_void()
     {
@@ -374,7 +384,7 @@ fn store_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_t
     target_data.get_store_size(&backend_type)
 }
 #[allow(dead_code)]
-fn alloc_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'a>>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
+fn alloc_size_of_type(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
 {
     if type_.is_void()
     {
@@ -383,7 +393,7 @@ fn alloc_size_of_type<'a>(target_data : &inkwell::targets::TargetData, backend_t
     let backend_type = get_backend_type(backend_types, types, type_);
     target_data.get_abi_size(&backend_type)
 }
-fn get_any_type_context<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum<'c>) -> inkwell::context::ContextRef<'c>
+fn get_any_type_context(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum) -> inkwell::context::ContextRef
 {
     match sdkawuidsguisagugarewudsga
     {
@@ -395,7 +405,7 @@ fn get_any_type_context<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTy
         inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
     }
 }
-fn get_any_type_poison<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum<'c>) -> inkwell::values::BasicValueEnum<'c>
+fn get_any_type_poison(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum) -> inkwell::values::BasicValueEnum
 {
     match sdkawuidsguisagugarewudsga
     {
@@ -435,7 +445,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
     else
     {
         //println!("^- not found in map");
-        let context = get_any_type_context(inkwell::types::BasicTypeEnum::try_from(*backend_types.values().nth(0).unwrap()).unwrap());
+        let context = get_any_type_context(inkwell::types::BasicTypeEnum::try_from(*backend_types.values().next().unwrap()).unwrap());
         
         match &type_.data
         {
@@ -455,7 +465,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
             }
             TypeData::Array(inner, size) =>
             {
-                let backend_inner = get_backend_type_sized(backend_types, types, &inner);
+                let backend_inner = get_backend_type_sized(backend_types, types, inner);
                 let ptr_type = backend_inner.array_type(*size as u32).into();
                 backend_types.insert(key, ptr_type);
                 ptr_type
@@ -470,10 +480,10 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                         let mut prop_types = Vec::new();
                         for (_, type_) in struct_data
                         {
-                            let backend_type = get_backend_type_sized(backend_types, types, &type_);
+                            let backend_type = get_backend_type_sized(backend_types, types, type_);
                             prop_types.push(backend_type);
                         }
-                        if let Some(_) = prop_types.first()
+                        if prop_types.first().is_some()
                         {
                             let ptr_type = context.struct_type(&prop_types, true).into();
                             backend_types.insert(key, ptr_type);
@@ -499,10 +509,10 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                 let mut prop_types = Vec::new();
                 for (_, type_) in struct_data
                 {
-                    let backend_type = get_backend_type_sized(backend_types, types, &type_);
+                    let backend_type = get_backend_type_sized(backend_types, types, type_);
                     prop_types.push(backend_type);
                 }
-                if let Some(_) = prop_types.first()
+                if prop_types.first().is_some()
                 {
                     let ptr_type = context.struct_type(&prop_types, true).into();
                     backend_types.insert(key, ptr_type);
@@ -525,7 +535,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
 
 fn get_backend_type_sized<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, type_ : &Type) -> inkwell::types::BasicTypeEnum<'c>
 {
-    let backend_type = get_backend_type(backend_types, types, &type_);
+    let backend_type = get_backend_type(backend_types, types, type_);
     if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
     {
         basic_type
@@ -709,7 +719,7 @@ impl Program
                 let mut struct_data = Vec::new();
                 for prop in child.child(1)?.get_children()?
                 {
-                    let prop_type = parse_type(&types, prop.child(0)?).unwrap();
+                    let prop_type = parse_type(types, prop.child(0)?).unwrap();
                     let prop_name = prop.child(1)?.child(0)?.text.clone();
                     if prop_type.name == "void"
                     {
@@ -741,13 +751,13 @@ impl Program
                     Visibility::ImportLocal
                 };
                 
-                let return_type = parse_type(&types, child.child(1)?).unwrap();
+                let return_type = parse_type(types, child.child(1)?).unwrap();
                 let name = child.child(2)?.child(0)?.text.clone();
                 
                 let mut args = Vec::new();
                 for arg in child.child(3)?.get_children()?
                 {
-                    let arg_type = parse_type(&types, arg.child(0)?).unwrap();
+                    let arg_type = parse_type(types, arg.child(0)?).unwrap();
                     args.push(arg_type);
                 }
                 
@@ -771,13 +781,13 @@ impl Program
                     Visibility::Local
                 };
                 
-                let return_type = parse_type(&types, child.child(1)?).unwrap();
+                let return_type = parse_type(types, child.child(1)?).unwrap();
                 let name = child.child(2)?.child(0)?.text.clone();
                 
                 let mut args = Vec::new();
                 for arg in child.child(3)?.get_children()?
                 {
-                    let arg_type = parse_type(&types, arg.child(0)?).unwrap();
+                    let arg_type = parse_type(types, arg.child(0)?).unwrap();
                     let arg_name = arg.child(1)?.child(0)?.text.clone();
                     
                     args.push((arg_type, arg_name));
@@ -803,7 +813,7 @@ impl Program
                     Visibility::ImportLocal
                 };
                 
-                let type_ = parse_type(&types, child.child(1)?).unwrap();
+                let type_ = parse_type(types, child.child(1)?).unwrap();
                 let name = child.child(2)?.child(0)?.text.clone();
                 globals.insert(name.clone(), (type_, None, visibility));
                 globals_order.push(name.clone());
@@ -823,7 +833,7 @@ impl Program
                     Visibility::Local
                 };
                 
-                let type_ = parse_type(&types, child.child(1)?).unwrap();
+                let type_ = parse_type(types, child.child(1)?).unwrap();
                 let name = child.child(2)?.child(0)?.text.clone();
                 
                 if child.text == "globaldeclaration"
@@ -840,7 +850,7 @@ impl Program
             }
             else if child.is_parent() && child.text == "constexpr_globalfulldeclaration"
             {
-                let type_ = parse_type(&types, child.child(0)?).unwrap();
+                let type_ = parse_type(types, child.child(0)?).unwrap();
                 let name = child.child(1)?.child(0)?.text.clone();
                 
                 let initializer = child.child(2)?.clone();
@@ -884,7 +894,7 @@ enum WantPointer {
     Real,
     Virtual,
 }
-fn check_struct_incomplete<'a>(env : &'a mut Environment, type_ : &mut Type)
+fn check_struct_incomplete(env : &mut Environment, type_ : &mut Type)
 {
     match &mut type_.data
     {
@@ -906,7 +916,7 @@ fn check_struct_incomplete<'a>(env : &'a mut Environment, type_ : &mut Type)
     }
     
 }
-fn val_is_const<'a>(mut is_const : bool, val : inkwell::values::BasicValueEnum<'a>) -> bool
+fn val_is_const(mut is_const : bool, val : inkwell::values::BasicValueEnum) -> bool
 {
     use inkwell::values::BasicValueEnum;
     use inkwell::values::AsValueRef;
@@ -919,7 +929,7 @@ fn val_is_const<'a>(mut is_const : bool, val : inkwell::values::BasicValueEnum<'
         BasicValueEnum::StructValue(v) => is_const = is_const && { unsafe { llvm_sys::core::LLVMIsConstant(v.as_value_ref()) == 1 }},
         _ => is_const = false,
     }
-    return is_const;
+    is_const
 }
 fn basic_const_array<'ctx>(type_ : inkwell::types::BasicTypeEnum<'ctx>, vals : &[inkwell::values::BasicValueEnum<'ctx>]) -> inkwell::values::ArrayValue<'ctx>
 {
@@ -935,7 +945,7 @@ fn basic_const_array<'ctx>(type_ : inkwell::types::BasicTypeEnum<'ctx>, vals : &
 }
 
 // FIXME: fix func calls with structs etc now that structs/arrays are pointer-based
-fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer : WantPointer)
+fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
 {
     // used to build constants for some lowerings, and to cast to bool
     let u8_type_frontend = env.types.get("u8").unwrap();
@@ -996,7 +1006,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
         ($dst:expr, $src:expr, $len:expr, $volatile:expr) =>
         {{
             let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcpy.p0.i64").unwrap();
-            let function = intrinsic.get_declaration(&env.module, &[ptr_type.into(), ptr_type.into(), u64_type.into()]).unwrap();
+            let function = intrinsic.get_declaration(env.module, &[ptr_type.into(), ptr_type.into(), u64_type.into()]).unwrap();
             let vol_bool = if $volatile { one_bool } else { zero_bool }.into();
             env.builder.build_direct_call(function, &[$dst.into(), $src.into(), $len, vol_bool], "")
         }}
@@ -1006,7 +1016,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
     {
         ($type:expr, $addr:expr, $volatile:expr) =>
         {{
-            let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &$type);
+            let basic_type = get_backend_type_sized(env.backend_types, env.types, &$type);
             if want_pointer == WantPointer::Real
             {
                 env.stack.push(($type.to_ptr($volatile), $addr.into()));
@@ -1026,7 +1036,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 // jump back
                 env.builder.position_at_end(block);
                 // memcpy
-                let backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &$type);
+                let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type);
                 let len = backend_type.size_of().unwrap().into();
                 build_memcpy!(slot, $addr, len, $volatile).unwrap();
                 env.stack.push(($type, slot.into()));
@@ -1046,7 +1056,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             if $type_val.is_composite()
             {
                 assert!($type_var == $type_val);
-                let backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &$type_var);
+                let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type_var);
                 let len = backend_type.size_of().unwrap().into();
                 
                 if val_is_const(true, $val)
@@ -1118,7 +1128,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let (type_, val) = env.stack.pop().unwrap();
                     returns.push((type_, val));
                 }
-                if let Some((type_val, val)) = returns.get(0)
+                if let Some((type_val, val)) = returns.first()
                 {
                     if env.return_type != Some(type_val.clone())
                     {
@@ -1126,7 +1136,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     }
                     if let Some((return_type, return_slot)) = &env.hoisted_return
                     {
-                        let return_backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &return_type);
+                        let return_backend_type = get_backend_type_sized(env.backend_types, env.types, return_type);
                         let len = return_backend_type.size_of().unwrap().into();
                         build_memcpy!(*return_slot, *val, len, false).unwrap();
                         
@@ -1147,7 +1157,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 }
                 env.just_returned = true;
             }
-            "declaration" => return,
+            "declaration" => { }
             "fulldeclaration" =>
             {
                 let name = &node.child(1).unwrap().child(0).unwrap().text;
@@ -1173,7 +1183,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let name = &node.child(1).unwrap().child(0).unwrap().text;
                 if !env.constants.contains_key(name)
                 {
-                    let type_var = parse_type(&env.types, &node.child(0).unwrap()).unwrap();
+                    let type_var = parse_type(env.types, node.child(0).unwrap()).unwrap();
                     //let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &type_var);
                     
                     compile(env, node.child(2).unwrap(), want_pointer);
@@ -1303,7 +1313,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let mut inner_type = unwrap_or_panic!(base_type.array_to_inner());
                     check_struct_incomplete(env, &mut inner_type);
                     
-                    let inner_backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &inner_type);
+                    let inner_backend_type = get_backend_type_sized(env.backend_types, env.types, &inner_type);
                     let inner_addr = unsafe
                     {
                         env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "").unwrap()
@@ -1325,7 +1335,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let (struct_type, struct_addr) = env.stack.pop().unwrap();
                 let (mut struct_type, volatile) = unwrap_or_panic!(struct_type.deref_vptr());
                 check_struct_incomplete(env, &mut struct_type);
-                let backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &struct_type);
+                let backend_type = get_backend_type_sized(env.backend_types, env.types, &struct_type);
                 
                 let right_name = &node.child(1).unwrap().child(0).unwrap().text;
                 
@@ -1340,7 +1350,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     let struct_addr = struct_addr.into_pointer_value();
                     
-                    let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), struct_addr, inner_index as u32, "").unwrap();
+                    let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type, struct_addr, inner_index as u32, "").unwrap();
                     
                     push_val_or_ptr!(inner_type, index_addr, volatile);
                 }
@@ -1359,7 +1369,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         let hoisted_return = funcsig.return_type.is_composite();
                         
-                        let func_type = get_function_type(&mut env.function_types, &mut env.backend_types, &env.types, &funcsig);
+                        let func_type = get_function_type(env.function_types, env.backend_types, env.types, &funcsig);
                         
                         let stack_len_start = env.stack.len();
                         compile(env, node.child(1).unwrap(), WantPointer::None);
@@ -1385,7 +1395,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         
                         if hoisted_return
                         {
-                            let return_backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &funcsig.return_type);
+                            let return_backend_type = get_backend_type_sized(env.backend_types, env.types, &funcsig.return_type);
                             // FIXME append to start of entry block
                             let slot = env.builder.build_alloca(return_backend_type, "").unwrap();
                             args.push(slot.into());
@@ -1406,7 +1416,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         else
                         {
                             //println!("building access to hoisted return... {:?}", args.last().unwrap());
-                            env.stack.push((arg_types.last().unwrap().clone(), args.last().unwrap().clone().try_into().unwrap()));
+                            env.stack.push((arg_types.last().unwrap().clone(), (*args.last().unwrap()).try_into().unwrap()));
                         }
                     }
                     _ => panic_error!("error: tried to use non-function expression as a function")
@@ -1513,7 +1523,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     let element_type = element_type.unwrap();
                     let array_type = element_type.to_array(array_length);
-                    let element_backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &element_type);
+                    let element_backend_type = get_backend_type_sized(env.backend_types, env.types, &element_type);
                     
                     let size = u64_type.const_int(array_length as u64, false);
                     
@@ -1521,8 +1531,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         let slot = env.builder.build_array_alloca(element_backend_type, size, "").unwrap();
                         
-                        let mut offset = 0;
-                        for val in vals
+                        for (offset, val) in vals.into_iter().enumerate()
                         {
                             let offset_val = u64_type.const_int(offset as u64, false);
                             let offset_addr = unsafe
@@ -1531,7 +1540,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             };
                             
                             env.builder.build_store(offset_addr, val).unwrap();
-                            offset += 1;
                         }
                         
                         push_val_or_ptr!(array_type, slot, false);
@@ -1551,8 +1559,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             {
                 let stack_size = env.stack.len();
                 
-                let struct_type = parse_type(&env.types, &node.child(0).unwrap()).unwrap();
-                let all_struct_members = unwrap_or_panic!(struct_type.struct_to_info()).iter().map(|x| x.clone()).collect::<Vec<_>>();
+                let struct_type = parse_type(env.types, node.child(0).unwrap()).unwrap();
+                let all_struct_members = unwrap_or_panic!(struct_type.struct_to_info()).to_vec();
                 let mut struct_member_types = Vec::new();
                 let mut struct_members = Vec::new();
                 for (index, (name, type_)) in all_struct_members.iter().enumerate()
@@ -1587,7 +1595,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let stack_val_types = vals.iter().map(|x| x.0.clone()).collect::<Vec<_>>();
                 assert!(struct_member_types == stack_val_types);
                 
-                let backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &struct_type);
+                let backend_type = get_backend_type_sized(env.backend_types, env.types, &struct_type);
                 
                 if !is_const || want_pointer != WantPointer::None
                 {
@@ -1595,7 +1603,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     for (index, (type_, val)) in vals.into_iter().enumerate()
                     {
                         let real_index = struct_members[index].1;
-                        let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type.into(), slot, real_index as u32, "").unwrap();
+                        let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type, slot, real_index as u32, "").unwrap();
                         
                         assert!(type_ == stack_val_types[index]);
                         
@@ -1612,7 +1620,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         if name == "_"
                         {
-                            let backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &type_);
+                            let backend_type = get_backend_type_sized(env.backend_types, env.types, type_);
                             let zero_val = get_any_type_poison(backend_type);
                             newvals.push(zero_val);
                         }
@@ -1621,7 +1629,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             let (inner_type_, val) = &vals[i];
                             assert!(*type_ == stack_val_types[i]);
                             assert!(*type_ == *inner_type_);
-                            newvals.push(val.clone());
+                            newvals.push(*val);
                             
                             i += 1;
                         }
@@ -1638,7 +1646,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let text = parts.0;
                 if let Some(type_) = env.types.get(parts.1)
                 {
-                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
+                    let backend_type = get_backend_type(env.backend_types, env.types, type_);
                     if let Ok(float_type) = inkwell::types::FloatType::try_from(backend_type)
                     {
                         match parts.1
@@ -1688,7 +1696,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 if text.ends_with("u32")
                 {
                     let type_ = env.types.get("u32").unwrap();
-                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
+                    let backend_type = get_backend_type(env.backend_types, env.types, type_);
                     let int_type = backend_type.into_int_type();
                     let res = int_type.const_int(val as u64, false);
                     env.stack.push((type_.clone(), res.into()));
@@ -1700,7 +1708,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         panic_error!("u8 char literal has a value greater than 255");
                     }
                     let type_ = env.types.get("u8").unwrap();
-                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
+                    let backend_type = get_backend_type(env.backend_types, env.types, type_);
                     let int_type = backend_type.into_int_type();
                     let res = int_type.const_int(val as u64, false);
                     env.stack.push((type_.clone(), res.into()));
@@ -1815,7 +1823,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 
                 if let Some(type_) = env.types.get(parts.1)
                 {
-                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
+                    let backend_type = get_backend_type(env.backend_types, env.types, type_);
                     if let Ok(int_type) = inkwell::types::IntType::try_from(backend_type)
                     {
                         let res = int_type.const_int(match (is_hex, parts.1)
@@ -1823,7 +1831,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             (false, "u8")  => text.parse::< u8>().unwrap() as u64,
                             (false, "u16") => text.parse::<u16>().unwrap() as u64,
                             (false, "u32") => text.parse::<u32>().unwrap() as u64,
-                            (false, "u64") => text.parse::<u64>().unwrap() as u64,
+                            (false, "u64") => text.parse::<u64>().unwrap(),
                             (false, "i8")  => text.parse::< i8>().unwrap() as u64,
                             (false, "i16") => text.parse::<i16>().unwrap() as u64,
                             (false, "i32") => text.parse::<i32>().unwrap() as u64,
@@ -1831,7 +1839,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             (true , "u8")  =>  u8::from_str_radix(&text, 16).unwrap() as u64,
                             (true , "u16") => u16::from_str_radix(&text, 16).unwrap() as u64,
                             (true , "u32") => u32::from_str_radix(&text, 16).unwrap() as u64,
-                            (true , "u64") => u64::from_str_radix(&text, 16).unwrap() as u64,
+                            (true , "u64") => u64::from_str_radix(&text, 16).unwrap(),
                             (true , "i8")  =>  i8::from_str_radix(&text, 16).unwrap() as u64,
                             (true , "i16") => i16::from_str_radix(&text, 16).unwrap() as u64,
                             (true , "i32") => i32::from_str_radix(&text, 16).unwrap() as u64,
@@ -1903,7 +1911,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             else
                             {
                                 let (inner_type, volatile) = unwrap_or_panic!(type_.deref_ptr());
-                                let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &inner_type);
+                                let basic_type = get_backend_type_sized(env.backend_types, env.types, &inner_type);
                                 match op.as_str()
                                 {
                                     "!" =>
@@ -1956,8 +1964,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 "~" => env.builder.build_not(val.into_int_value(), "").unwrap().into(),
                                 "!" =>
                                 {
-                                    
-                                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
+                                    let backend_type = get_backend_type(env.backend_types, env.types, &type_);
                                     if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
                                     {
                                         let zero = int_type.const_int(0, true);
@@ -2014,7 +2021,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let else_block = env.context.append_basic_block(env.func_val, "");
                 if let Some(then_block) = env.blocks.get(label)
                 {
-                    let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
+                    let backend_type = get_backend_type(env.backend_types, env.types, &type_);
                     if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
                     {
                         let zero = int_type.const_int(0, true);
@@ -2042,8 +2049,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             }
             "sizeof" =>
             {
-                let type_ = parse_type(&env.types, &node.child(0).unwrap()).unwrap();
-                let backend_type = get_backend_type(&mut env.backend_types, &env.types, &type_);
+                let type_ = parse_type(env.types, node.child(0).unwrap()).unwrap();
+                let backend_type = get_backend_type(env.backend_types, env.types, &type_);
                 if let Some(size) = backend_type.size_of()
                 {
                     // FIXME cast up to u64 if not u64 large
@@ -2060,11 +2067,11 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 let (left_type, left_val) = env.stack.pop().unwrap();
                 
-                let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
+                let right_type = parse_type(env.types, node.child(1).unwrap()).unwrap();
                 
-                let (left_size, right_size) = (store_size_of_type(&env.target_data, env.backend_types, env.types, &left_type), store_size_of_type(&env.target_data, env.backend_types, env.types, &right_type));
+                let (left_size, right_size) = (store_size_of_type(env.target_data, env.backend_types, env.types, &left_type), store_size_of_type(env.target_data, env.backend_types, env.types, &right_type));
                 
-                let right_basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &right_type);
+                let right_basic_type = get_backend_type_sized(env.backend_types, env.types, &right_type);
                 // cast as own type (replace type, aka do nothing)
                 if left_type.name == right_type.name
                 {
@@ -2123,10 +2130,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 let (left_type, left_val) = env.stack.pop().unwrap();
-                let _left_basic_type : BasicTypeEnum = get_backend_type(&mut env.backend_types, &env.types, &left_type).try_into().unwrap();
+                let _left_basic_type : BasicTypeEnum = get_backend_type(env.backend_types, env.types, &left_type).try_into().unwrap();
                 
-                let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
-                let right_backend_type = get_backend_type(&mut env.backend_types, &env.types, &right_type);
+                let right_type = parse_type(env.types, node.child(1).unwrap()).unwrap();
+                let right_backend_type = get_backend_type(env.backend_types, env.types, &right_type);
                 let _right_basic_type : BasicTypeEnum = right_backend_type.try_into().unwrap();
                 
                 
@@ -2139,7 +2146,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
                     {
-                        let ret = env.builder.build_float_to_unsigned_int(left_val, target_type.into(), "").unwrap();
+                        let ret = env.builder.build_float_to_unsigned_int(left_val, target_type, "").unwrap();
                         env.stack.push((right_type, ret.into()));
                     }
                     else
@@ -2151,7 +2158,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
                     {
-                        let ret = env.builder.build_float_to_signed_int(left_val, target_type.into(), "").unwrap();
+                        let ret = env.builder.build_float_to_signed_int(left_val, target_type, "").unwrap();
                         env.stack.push((right_type, ret.into()));
                     }
                     else
@@ -2168,10 +2175,10 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 let (left_type, left_val) = env.stack.pop().unwrap();
-                let left_basic_type : BasicTypeEnum = get_backend_type(&mut env.backend_types, &env.types, &left_type).try_into().unwrap();
+                let left_basic_type : BasicTypeEnum = get_backend_type(env.backend_types, env.types, &left_type).try_into().unwrap();
                 
-                let right_type = parse_type(&env.types, &node.child(1).unwrap()).unwrap();
-                let right_backend_type = get_backend_type(&mut env.backend_types, &env.types, &right_type);
+                let right_type = parse_type(env.types, node.child(1).unwrap()).unwrap();
+                let right_backend_type = get_backend_type(env.backend_types, env.types, &right_type);
                 let right_basic_type : BasicTypeEnum = right_backend_type.try_into().unwrap();
                 
                 // cast as own type (replace type, aka do nothing)
@@ -2208,7 +2215,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::FloatType::try_from(right_backend_type))
                     {
-                        let ret = env.builder.build_unsigned_int_to_float(left_val, target_type.into(), "").unwrap();
+                        let ret = env.builder.build_unsigned_int_to_float(left_val, target_type, "").unwrap();
                         env.stack.push((right_type, ret.into()));
                     }
                     else
@@ -2220,7 +2227,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::IntValue::try_from(left_val), inkwell::types::FloatType::try_from(right_backend_type))
                     {
-                        let ret = env.builder.build_signed_int_to_float(left_val, target_type.into(), "").unwrap();
+                        let ret = env.builder.build_signed_int_to_float(left_val, target_type, "").unwrap();
                         env.stack.push((right_type, ret.into()));
                     }
                     else
@@ -2251,14 +2258,14 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             }
                             else
                             {
-                                let ret = env.builder.build_float_to_signed_int(left_val, target_type.into(), "").unwrap();
+                                let ret = env.builder.build_float_to_signed_int(left_val, target_type, "").unwrap();
                                 env.stack.push((right_type, ret.into()));
                             }
                         }
                         else
                         {
                             let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.fptoui.sat").unwrap();
-                            let function = intrinsic.get_declaration(&env.module, &[target_type.into(), left_basic_type]).unwrap();
+                            let function = intrinsic.get_declaration(env.module, &[target_type.into(), left_basic_type]).unwrap();
                             
                             let callval = env.builder.build_direct_call(function, &[left_val.into()], "").unwrap();
                             let result = callval.try_as_basic_value().left().unwrap();
@@ -2298,14 +2305,14 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                             }
                             else
                             {
-                                let ret = env.builder.build_float_to_signed_int(left_val, target_type.into(), "").unwrap();
+                                let ret = env.builder.build_float_to_signed_int(left_val, target_type, "").unwrap();
                                 env.stack.push((right_type, ret.into()));
                             }
                         }
                         else
                         {
                             let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.fptosi.sat").unwrap();
-                            let function = intrinsic.get_declaration(&env.module, &[target_type.into(), left_basic_type]).unwrap();
+                            let function = intrinsic.get_declaration(env.module, &[target_type.into(), left_basic_type]).unwrap();
                             
                             let callval = env.builder.build_direct_call(function, &[left_val.into()], "").unwrap();
                             let result = callval.try_as_basic_value().left().unwrap();
@@ -2376,7 +2383,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     
                     if left_type.is_pointer() && right_type.is_int()
                     {
-                        let right_backend_type = get_backend_type(&mut env.backend_types, &env.types, &right_type);
+                        let right_backend_type = get_backend_type(env.backend_types, env.types, &right_type);
                         let right_basic_type : BasicTypeEnum = right_backend_type.try_into().unwrap();
                         
                         match op.as_str()
@@ -2390,19 +2397,19 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 }
                                 if val_is_const(true, left_val) && val_is_const(true, right_val)
                                 {
-                                    let intptr : inkwell::values::IntValue = env.builder.build_ptr_to_int(left_val.into_pointer_value(), env.ptr_int_type, "").unwrap().into();
+                                    let intptr : inkwell::values::IntValue = env.builder.build_ptr_to_int(left_val.into_pointer_value(), env.ptr_int_type, "").unwrap();
                                     let masked = env.builder.build_and(intptr, right_val.into_int_value(), "").unwrap();
                                     let diff = env.builder.build_int_sub(masked, intptr, "").unwrap();
                                     let offset_addr = unsafe
                                     {
-                                        env.builder.build_gep(u8_type, left_val.into_pointer_value(), &[diff.try_into().unwrap()], "").unwrap()
+                                        env.builder.build_gep(u8_type, left_val.into_pointer_value(), &[diff], "").unwrap()
                                     };
                                     env.stack.push((left_type.clone(), offset_addr.into()));
                                 }
                                 else
                                 {
                                     let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.ptrmask").unwrap();
-                                    let function = intrinsic.get_declaration(&env.module, &[ptr_type.into(), env.ptr_int_type.into()]).unwrap();
+                                    let function = intrinsic.get_declaration(env.module, &[ptr_type.into(), env.ptr_int_type.into()]).unwrap();
                                     
                                     let callval = env.builder.build_direct_call(function, &[left_val.into(), right_val.into()], "").unwrap();
                                     let result = callval.try_as_basic_value().left().unwrap();
@@ -2545,7 +2552,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                         }.unwrap();
                                         
                                         let res = env.builder.build_select(comp_val, zero, op_res, "").unwrap();
-                                        env.stack.push((left_type.clone(), res.into()));
+                                        env.stack.push((left_type.clone(), res));
                                     }
                                     ">" | "<" | ">=" | "<=" | "==" | "!=" =>
                                     {
@@ -2636,7 +2643,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     let mut function_types = BTreeMap::new();
     
     let ir_grammar = include_str!("parser/irgrammar.txt");
-    let mut parser = parser::Parser::new_from_grammar(&ir_grammar).unwrap();
+    let mut parser = parser::Parser::new_from_grammar(ir_grammar).unwrap();
     
     //let opt_level = inkwell::OptimizationLevel::None;
     let opt_level = inkwell::OptimizationLevel::Aggressive;
@@ -2647,7 +2654,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         let type_lines = vec!(type_string.to_string());
         let type_tokens = parser.tokenize(&type_lines, true).unwrap();
         let type_ast = parser.parse_with_root_node_type(&type_tokens, &type_lines, true, "type").unwrap().unwrap();
-        let type_ = parse_type(&types, &type_ast).unwrap();
+        let type_ = parse_type(types, &type_ast).unwrap();
         if let TypeData::FuncPointer(funcsig) = type_.data
         {
             let want_type_string = std::any::type_name::<T>(); // FIXME: not guaranteed to be stable across rust versions
@@ -2682,16 +2689,16 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     // vars is allowed to be null if no format specifiers are used
     // vars is a pointer to a list of pointers. these pointers are reinterpreted as pointers to the correct type
     // optionally, the last pointer in the list of pointers can be null, to signal that there are no more vars
-    unsafe extern "C" fn print_fmt(cstring_bytes : *mut u8, mut vars : *mut *mut u8) -> ()
+    unsafe extern "C" fn print_fmt(cstring_bytes : *mut u8, mut vars : *mut *mut u8)
     {
         unsafe
         {
             let mut strlen = 0;
-            while *cstring_bytes.offset(strlen as isize) != 0
+            while *cstring_bytes.add(strlen) != 0
             {
                 strlen += 1;
             }
-            let orig_string = String::from_utf8_lossy(&std::slice::from_raw_parts(cstring_bytes, strlen));
+            let orig_string = String::from_utf8_lossy(std::slice::from_raw_parts(cstring_bytes, strlen));
             
             let mut s = "".to_string();
             
@@ -2723,11 +2730,11 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                                 {
                                     let mut strlen = 0;
                                     let cstring_bytes = *vars;
-                                    while *cstring_bytes.offset(strlen as isize) != 0
+                                    while *cstring_bytes.add(strlen) != 0
                                     {
                                         strlen += 1;
                                     }
-                                    let orig_string = String::from_utf8_lossy(&std::slice::from_raw_parts(cstring_bytes, strlen));
+                                    let orig_string = String::from_utf8_lossy(std::slice::from_raw_parts(cstring_bytes, strlen));
                                     s.push_str(&orig_string);
                                 }
                                 'c' =>
@@ -2750,41 +2757,41 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
             print!("{}", s);
         }
     }
-    import_function::<unsafe extern "C" fn(*mut u8, *mut *mut u8) -> ()>(&types, &mut parser, &mut imports, "print_fmt", print_fmt, print_fmt as usize, "funcptr(void, (ptr(u8), ptr(ptr(u8))))");
+    import_function::<unsafe extern "C" fn(*mut u8, *mut *mut u8)>(&types, &mut parser, &mut imports, "print_fmt", print_fmt, print_fmt as usize, "funcptr(void, (ptr(u8), ptr(ptr(u8))))");
     
-    unsafe extern "C" fn print_str(cstring_bytes : *mut u8) -> ()
+    unsafe extern "C" fn print_str(cstring_bytes : *mut u8)
     {
         unsafe
         {
             let mut strlen = 0;
-            while *cstring_bytes.offset(strlen as isize) != 0
+            while *cstring_bytes.add(strlen) != 0
             {
                 strlen += 1;
             }
-            let orig_string = String::from_utf8_lossy(&std::slice::from_raw_parts(cstring_bytes, strlen));
+            let orig_string = String::from_utf8_lossy(std::slice::from_raw_parts(cstring_bytes, strlen));
             print!("{}", orig_string);
         }
     }
-    import_function::<unsafe extern "C" fn(*mut u8) -> ()>(&types, &mut parser, &mut imports, "print_str", print_str, print_str as usize, "funcptr(void, (ptr(u8)))");
+    import_function::<unsafe extern "C" fn(*mut u8)>(&types, &mut parser, &mut imports, "print_str", print_str, print_str as usize, "funcptr(void, (ptr(u8)))");
     
-    unsafe extern "C" fn print_bytes(bytes : *mut u8, count : u64) -> ()
+    unsafe extern "C" fn print_bytes(bytes : *mut u8, count : u64)
     {
         unsafe
         {
             for i in 0..count
             {
-                print!("{:02X} ", *bytes.offset(i as isize));
+                print!("{:02X} ", *bytes.add(i as usize));
             }
-            print!("\n");
+            println!();
         }
     }
-    import_function::<unsafe extern "C" fn(*mut u8, u64) -> ()>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
+    import_function::<unsafe extern "C" fn(*mut u8, u64)>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
     
-    unsafe extern "C" fn print_float(a : f64) -> ()
+    unsafe extern "C" fn print_float(a : f64)
     {
         println!("{}", a);
     }
-    import_function::<unsafe extern "C" fn(f64) -> ()>(&types, &mut parser, &mut imports, "print_float", print_float, print_float as usize, "funcptr(void, (f64))");
+    import_function::<unsafe extern "C" fn(f64)>(&types, &mut parser, &mut imports, "print_float", print_float, print_float as usize, "funcptr(void, (f64))");
     
     if VERBOSE
     {
@@ -3235,7 +3242,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         let slot = if let TypeData::Array(inner_type, size) = &var_type.data
                         {
                             let size = get_backend_type_sized(&mut backend_types, &types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
-                            let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, &inner_type);
+                            let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, inner_type);
                             builder.build_array_alloca(inner_basic_type, size, &var_name)
                         }
                         else
@@ -3360,7 +3367,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     }
     for module in &loaded_modules
     {
-        pass_manager.run_on(&module);
+        pass_manager.run_on(module);
     }
     
     if VERBOSE
@@ -3417,7 +3424,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     unsafe
     {
         let name = "main";
-        let f = get_func!(name, unsafe extern "C" fn() -> ());
+        let f = get_func!(name, unsafe extern "C" fn());
         
         let start = std::time::Instant::now();
         if VERBOSE

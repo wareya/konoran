@@ -1,4 +1,6 @@
 #![allow(clippy::len_zero)]
+#![allow(clippy::only_used_in_recursion)] // false positive (&self)
+#![allow(clippy::comparison_chain)] // refactorability
 
 use std::collections::{HashMap, HashSet, BTreeSet};
 use std::time::Instant;
@@ -215,7 +217,7 @@ impl Parser {
         
         for regex in &self.regex_set
         {
-            self.internal_regexes.prepare_exact(&regex);
+            self.internal_regexes.prepare_exact(regex);
         }
         
         for tuple in &self.nodetypemap
@@ -301,7 +303,7 @@ impl Parser {
                     continue;
                 }
                 // check for whitespace before doing any tokens
-                if let Some(text) = self.internal_regexes.match_at("[ \r\n\t]+", &line, offset)
+                if let Some(text) = self.internal_regexes.match_at("[ \r\n\t]+", line, offset)
                 {
                     offset += text.len();
                     continue;
@@ -325,7 +327,7 @@ impl Parser {
                 let mut continue_the_while = false;
                 for rule in &self.regex_list
                 {
-                    if let Some(text) = self.internal_regexes.match_at(&rule, &line, offset)
+                    if let Some(text) = self.internal_regexes.match_at(rule, line, offset)
                     {
                         // TODO: fix position everywhere to be codepoints instead of bytes
                         ret.push(LexToken{text : text.clone(), line : linecount, span : text.len(), position : offset+1});
@@ -358,7 +360,7 @@ impl Parser {
                         if segment == text.as_str()
                         {
                             // don't tokenize the beginnings of names as actual names
-                            if offset + text.len() + 1 > line.len() && self.internal_regexes.is_exact(r"[a-zA-Z0-9_]", &slice(&line, (offset+text.len()) as i64, (offset+text.len()+1) as i64))
+                            if offset + text.len() + 1 > line.len() && self.internal_regexes.is_exact(r"[a-zA-Z0-9_]", &slice(line, (offset+text.len()) as i64, (offset+text.len()+1) as i64))
                             {
                                 continue;
                             }
@@ -411,7 +413,7 @@ impl Parser {
                 {
                     let kind = self.nodetypemap.get(text).ok_or_else(|| minierr(&format!("internal error: failed to find node type {} used by some grammar form", text)))?;
                     
-                    let (bit, consumed, error, newlatest) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    let (bit, consumed, error, newlatest) = self.parse(tokens, index+totalconsumed, kind)?;
                     build_latest_node(&mut latestnode, newlatest);
                     build_best_error(&mut latesterror, error);
                     if let Some(node) = bit
@@ -428,7 +430,7 @@ impl Parser {
                 {
                     let kind = self.nodetypemap.get(text).ok_or_else(|| minierr(&format!("internal error: failed to find node type {} used by some grammar form", text)))?;
                     
-                    let (bit, consumed, error, newlatest) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    let (bit, consumed, error, newlatest) = self.parse(tokens, index+totalconsumed, kind)?;
                     build_latest_node(&mut latestnode, newlatest);
                     build_best_error(&mut latesterror, error);
                     if let Some(node) = bit
@@ -441,7 +443,7 @@ impl Parser {
                 {
                     let kind = self.nodetypemap.get(text).ok_or_else(|| minierr(&format!("internal error: failed to find node type {} used by some grammar form", text)))?;
                     
-                    let (mut bit, mut consumed, mut error, mut newlatest) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    let (mut bit, mut consumed, mut error, mut newlatest) = self.parse(tokens, index+totalconsumed, kind)?;
                     build_latest_node(&mut latestnode, newlatest);
                     build_best_error(&mut latesterror, error);
                     
@@ -450,7 +452,7 @@ impl Parser {
                         nodes.push(node);
                         totalconsumed += consumed;
                         
-                        let tuple = self.parse(&tokens, index+totalconsumed, kind)?;
+                        let tuple = self.parse(tokens, index+totalconsumed, kind)?;
                         bit = tuple.0;
                         consumed = tuple.1;
                         error = tuple.2;
@@ -464,7 +466,7 @@ impl Parser {
                 {
                     let kind = self.nodetypemap.get(text).ok_or_else(|| minierr(&format!("internal error: failed to find node type {} used by some grammar form", text)))?;
                     
-                    let (mut bit, mut consumed, mut error, mut newlatest) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    let (mut bit, mut consumed, mut error, mut newlatest) = self.parse(tokens, index+totalconsumed, kind)?;
                     build_latest_node(&mut latestnode, newlatest);
                     build_best_error(&mut latesterror, error);
                     
@@ -473,7 +475,7 @@ impl Parser {
                         nodes.push(node);
                         totalconsumed += consumed;
                         
-                        let tuple = self.parse(&tokens, index+totalconsumed, kind)?;
+                        let tuple = self.parse(tokens, index+totalconsumed, kind)?;
                         bit = tuple.0;
                         consumed = tuple.1;
                         error = tuple.2;
@@ -493,7 +495,7 @@ impl Parser {
                 {
                     let kind = self.nodetypemap.get(text).ok_or_else(|| minierr(&format!("internal error: failed to find node type {} used by some grammar form", text)))?;
                     
-                    let (mut bit, mut consumed, mut error, mut newlatest) = self.parse(&tokens, index+totalconsumed, kind)?;
+                    let (mut bit, mut consumed, mut error, mut newlatest) = self.parse(tokens, index+totalconsumed, kind)?;
                     build_latest_node(&mut latestnode, newlatest);
                     build_best_error(&mut latesterror, error);
                     if bit.is_none()
@@ -511,7 +513,7 @@ impl Parser {
                             {
                                 totalconsumed += 1;
                                 
-                                let tuple = self.parse(&tokens, index+totalconsumed, kind)?;
+                                let tuple = self.parse(tokens, index+totalconsumed, kind)?;
                                 bit = tuple.0;
                                 consumed = tuple.1;
                                 error = tuple.2;
@@ -542,7 +544,7 @@ impl Parser {
                             continue;
                         }
                     }
-                    build_new_error(&mut latesterror, index+totalconsumed, &text);
+                    build_new_error(&mut latesterror, index+totalconsumed, text);
                     //build_latest_node(&mut latestnode, newlatest);
                     return Ok((defaultreturn.0, defaultreturn.1, latesterror, latestnode));
                 }
@@ -557,7 +559,7 @@ impl Parser {
                             continue;
                         }
                     }
-                    build_new_error(&mut latesterror, index+totalconsumed, formname.unwrap_or(&text));
+                    build_new_error(&mut latesterror, index+totalconsumed, formname.unwrap_or(text));
                     return Ok((defaultreturn.0, defaultreturn.1, latesterror, latestnode));
                 }
                 GrammarToken::RestIsOptional =>
@@ -586,7 +588,7 @@ impl Parser {
         for form in &nodetype.forms
         {
             let sentname = if nodetype.istoken { Some(nodetype.name.as_str()) } else { None };
-            let (nodes, consumed, error, newlatest) = self.parse_form(&tokens, index, form, sentname)?;
+            let (nodes, consumed, error, newlatest) = self.parse_form(tokens, index, form, sentname)?;
             build_latest_node(&mut latestnode, newlatest);
             if let Some(nodes) = &nodes
             {
@@ -660,9 +662,9 @@ impl Parser {
             }
             else if let Some(children) = &mut ast.children
             {
-                for mut child in children
+                for child in children
                 {
-                    self.parse_fix_associativity(&mut child)?;
+                    self.parse_fix_associativity(child)?;
                 }
             }
         }
@@ -693,9 +695,9 @@ impl Parser {
                     children.retain(|child| child.is_parent());
                 }
             
-                for mut child in children
+                for child in children
                 {
-                    self.parse_tweak_ast(&mut child)?;
+                    self.parse_tweak_ast(child)?;
                 }
             }
             
@@ -773,9 +775,9 @@ impl Parser {
             
             if let Some(children) = &mut ast.children
             {
-                for mut child in children
+                for child in children
                 {
-                    self.parse_tweak_ast_pass_2(&mut child)?;
+                    self.parse_tweak_ast_pass_2(child)?;
                 }
             }
         }
@@ -792,7 +794,7 @@ impl Parser {
         }
         if let Some(program_type) = self.nodetypemap.get(root)
         {
-            let (raw_ast, consumed, latesterror, latestnode) = self.parse(&tokens, 0, program_type)?;
+            let (raw_ast, consumed, latesterror, latestnode) = self.parse(tokens, 0, program_type)?;
             if !silent
             {
                 println!("successfully parsed {} out of {} tokens", consumed, tokens.len());
@@ -812,7 +814,7 @@ impl Parser {
                     }
                     if expected.len() == 1
                     {
-                        if let Some(expect) = expected.get(0)
+                        if let Some(expect) = expected.first()
                         {
                             println!("error: expected `{}`", expect);
                         }

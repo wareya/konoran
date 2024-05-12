@@ -54,7 +54,7 @@ impl ASTNode {
         }
         else
         {
-            Err(format!("internal error: tried access child of non-parent AST node"))
+            Err("internal error: tried access child of non-parent AST node".to_string())
         }
     }
     pub (crate) fn child_mut(&'_ mut self, n : usize) -> Result<&'_ mut ASTNode, String>
@@ -66,7 +66,7 @@ impl ASTNode {
         }
         else
         {
-            Err(format!("internal error: tried access mutable child of non-parent AST node"))
+            Err("internal error: tried access mutable child of non-parent AST node".to_string())
         }
     }
     pub (crate) fn child_slice(&'_ self, start : isize, end : isize) -> Result<&'_[ASTNode], String>
@@ -81,7 +81,7 @@ impl ASTNode {
         }
         else
         {
-            Err(format!("internal error: tried slice children of non-parent AST node"))
+            Err("internal error: tried slice children of non-parent AST node".to_string())
         }
     }
     pub (crate) fn get_children(&'_ self) -> Result<&'_[ASTNode], String>
@@ -94,7 +94,7 @@ impl ASTNode {
         {
             return Ok(children.len())
         }
-        Err(format!("internal error: tried count children of non-parent AST node"))
+        Err("internal error: tried count children of non-parent AST node".to_string())
     }
     pub (crate) fn is_parent(&'_ self) -> bool
     {
