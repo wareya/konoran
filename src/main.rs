@@ -2057,6 +2057,11 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     env.stack.push((right_type, left_val));
                 }
+                // cast between ints of same size; replace type
+                else if left_type.is_int() && right_type.is_int() && left_type.size() == right_type.size()
+                {
+                    env.stack.push((right_type, left_val));
+                }
                 // cast between different float types
                 else if (left_type.name == "f32" && right_type.name == "f64") || (left_type.name == "f64" && right_type.name == "f32")
                 {
@@ -2069,13 +2074,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     {
                         panic_error!("internal error: float cast internal and backend type mismatch");
                     }
-                }
-                // cast between types of same size, non-float. bitcast.
-                // FIXME: do I even want this for non-ints? probably not, right?
-                else if !left_type.is_float() && !right_type.is_float() && right_basic_type.is_sized() && left_basic_type.size_of() == right_basic_type.size_of() && !left_type.is_pointer_or_fpointer() && !right_type.is_pointer_or_fpointer()
-                {
-                    let ret = env.builder.build_bit_cast(left_val, right_basic_type, "").unwrap();
-                    env.stack.push((right_type, ret));
                 }
                 // cast from int to float (must be int, not pointer)
                 else if left_type.is_int_unsigned() && right_type.is_float()

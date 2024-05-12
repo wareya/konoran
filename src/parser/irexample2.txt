@@ -68,6 +68,9 @@ f32 add(f32 a, f32 b)
     list[0i64] = a;
     *(&(list[1i64])) = b;
     
+    u64 kge = 5931u64;
+    i64 kge2 = (kge) as i64;
+    
     //f32 asdf = r_add_one()(list[0i64] + list[1i64]);
     return wahahah(r_add_one(), (a + b)) - 1.0f32;
 }
