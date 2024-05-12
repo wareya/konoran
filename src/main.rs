@@ -16,9 +16,12 @@ use parser::ast::ASTNode;
 TODO list:
 high:
 - move struct/array loads to allocas
+- bit shift operators
+- ternary operator
 
 low:
 - standard io functions
+- decay_to_ptr $expr$ for arrays
 
 maybe:
 - varargs in declarations (not definitions) (for printf mainly)
@@ -404,6 +407,7 @@ fn get_any_type_poison<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTyp
         inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
     }
 }
+/*
 fn get_any_type_align<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum<'c>) -> inkwell::values::IntValue<'c>
 {
     match sdkawuidsguisagugarewudsga
@@ -416,6 +420,7 @@ fn get_any_type_align<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicType
         inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_alignment(),
     }
 }
+*/
 fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, type_ : &Type) -> inkwell::types::AnyTypeEnum<'c>
 {
     let key = type_.to_string();
@@ -544,9 +549,14 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
     
     for var_type in &sig.args
     {
+        let mut var_type = var_type.clone();
         if var_type.is_void()
         {
             panic!("error: void function arguments are not allowed");
+        }
+        if var_type.is_composite()
+        {
+            var_type = var_type.to_ptr(false);
         }
         let backend_type = get_backend_type(backend_types, types, &var_type);
         if let Ok(backend_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
@@ -567,7 +577,15 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
         }
     }
     
-    let return_type = get_backend_type(backend_types, types, &sig.return_type);
+    
+    let mut _return_type = sig.return_type.clone();
+    if _return_type.is_composite()
+    {
+        let backend_type = get_backend_type_sized(backend_types, types, &_return_type.to_ptr(false));
+        params.push(backend_type.into());
+        _return_type = Type { name : "void".to_string(), data : TypeData::Void };
+    }
+    let return_type = get_backend_type(backend_types, types, &_return_type);
     
     //println!("testing return type {:?} for {:?}...", return_type, sig.return_type);
     
@@ -856,6 +874,7 @@ struct Environment<'a, 'b, 'c, 'e, 'f>
     target_data    : &'f inkwell::targets::TargetData,
     
     return_type    : Option<Type>,
+    hoisted_return : Option<(Type, inkwell::values::PointerValue<'c>)>,
     just_returned  : bool,
 }
 
@@ -1031,10 +1050,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 let len = backend_type.size_of().unwrap().into();
                 build_memcpy!(slot, $addr, len, $volatile).unwrap();
                 env.stack.push(($type, slot.into()));
-                
-                // FIXME memcpy into fresh alloca and use THAT pointer
-                // fixed!
-                //env.stack.push(($type, $addr.into()));
             }
             else
             {
@@ -1048,10 +1063,6 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
     {
         ($type_var:expr, $slot:expr, $type_val:expr, $val:expr, $volatile:expr) =>
         {{
-            /*
-            */
-            
-            // FIXME: run composite version even if val is const. store to synthetic global variable.
             if $type_val.is_composite()
             {
                 assert!($type_var == $type_val);
@@ -1074,9 +1085,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     let callval = build_memcpy!($slot, $val, len, $volatile).unwrap();
                     callval.try_as_basic_value().left();
                 }
-                
-                //env.stack.push(($type, $addr.into()));
             }
+            // FIXME do this if the store is volatile, maybe...?
             else
             {
                 let store = env.builder.build_store($slot, $val).unwrap();
@@ -1138,7 +1148,18 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                     {
                         panic_error!("error: tried to return wrong type from function");
                     }
-                    env.builder.build_return(Some(val)).unwrap();
+                    if let Some((return_type, return_slot)) = &env.hoisted_return
+                    {
+                        let return_backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &return_type);
+                        let len = return_backend_type.size_of().unwrap().into();
+                        build_memcpy!(*return_slot, *val, len, false).unwrap();
+                        
+                        env.builder.build_return(None).unwrap();
+                    }
+                    else
+                    {
+                        env.builder.build_return(Some(val)).unwrap();
+                    }
                 }
                 else
                 {
@@ -1365,6 +1386,8 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                 {
                     TypeData::FuncPointer(funcsig) =>
                     {
+                        let hoisted_return = funcsig.return_type.is_composite();
+                        
                         let func_type = get_function_type(&mut env.function_types, &mut env.backend_types, &env.types, &funcsig);
                         
                         let stack_len_start = env.stack.len();
@@ -1376,6 +1399,7 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                         assert!(num_args == funcsig.args.len(), "incorrect number of arguments to function on line {}", node.line);
                         
                         let mut args = Vec::new();
+                        let mut arg_types = Vec::new();
                         for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                         {
                             let (type_, val) = env.stack.pop().unwrap();
@@ -1384,17 +1408,34 @@ fn compile<'a, 'b>(env : &'a mut Environment, node : &'b ASTNode, want_pointer :
                                 panic_error!("mismatched types for parameter {} in call to function {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
                             }
                             args.push(val.into());
+                            arg_types.push(arg_type.clone());
                         }
-                        
                         args.reverse();
+                        
+                        if hoisted_return
+                        {
+                            let return_backend_type = get_backend_type_sized(&mut env.backend_types, &env.types, &funcsig.return_type);
+                            // FIXME append to start of entry block
+                            let slot = env.builder.build_alloca(return_backend_type, "").unwrap();
+                            args.push(slot.into());
+                            arg_types.push(funcsig.return_type.clone());
+                        }
                         
                         //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
                         let callval = env.builder.build_indirect_call(func_type, funcaddr.into_pointer_value(), &args, "").unwrap();
                         let result = callval.try_as_basic_value().left();
                         //println!("number of results {}", results.len());
-                        for (result, type_) in result.iter().zip([funcsig.return_type])
+                        if !hoisted_return
                         {
-                            env.stack.push((type_.clone(), *result));
+                            for (result, type_) in result.iter().zip([funcsig.return_type])
+                            {
+                                env.stack.push((type_.clone(), *result));
+                            }
+                        }
+                        else
+                        {
+                            //println!("building access to hoisted return... {:?}", args.last().unwrap());
+                            env.stack.push((arg_types.last().unwrap().clone(), args.last().unwrap().clone().try_into().unwrap()));
                         }
                     }
                     _ => panic_error!("error: tried to use non-function expression as a function")
@@ -2887,21 +2928,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                     {
                         arg_types.push(backend_types.get(arg_type.clone()).unwrap().clone().try_into().unwrap());
                     }
-                    //for arg_type in &funcsig.args
-                    //{
-                    //    arg_types.push(get_backend_type_sized(&mut backend_types, &types, &arg_type));
-                    //}
-                    /*
-                    match name
-                    {
-                        "memcpy" | "memcpy_vol" | "memmove" | "memmove_vol" | "memset" | "memset_vol" =>
-                        {
-                            let i1 = backend_types.get("i1").unwrap().into_int_type();
-                            arg_types.push(i1.into());
-                        }
-                        _ => {}
-                    }
-                    */
                     let function = intrinsic.get_declaration(&module, &arg_types).unwrap();
                     
                     intrinsic_decs.insert(name.to_string(), (function, *funcsig.clone()));
@@ -3039,7 +3065,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                             
                             let stack = Vec::new();
                             let blocks = HashMap::new();
-                            let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, return_type : None, just_returned : false };
+                            let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, return_type : None, hoisted_return : None, just_returned : false };
                             
                             compile(&mut env, &node, WantPointer::None);
                             let (type_val, val) = env.stack.pop().unwrap();
@@ -3104,7 +3130,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, return_type : None, just_returned : false };
+                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, return_type : None, hoisted_return : None, just_returned : false };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -3175,7 +3201,23 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 
                 let mut variables = BTreeMap::new();
                 
-                // declare arguments
+                macro_rules! build_memcpy
+                {
+                    ($dst:expr, $src:expr, $len:expr, $volatile:expr) =>
+                    {{
+                        let u64_type = backend_types.get("u64").unwrap().into_int_type();
+                        let i1_type = backend_types.get("i1").unwrap().into_int_type();
+                        let one_bool = i1_type.const_int(1, true);
+                        let zero_bool = i1_type.const_int(0, true);
+                        
+                        let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcpy.p0.i64").unwrap();
+                        let function = intrinsic.get_declaration(&module, &[ptr_type.into(), ptr_type.into(), u64_type.into()]).unwrap();
+                        let vol_bool = if $volatile { one_bool } else { zero_bool }.into();
+                        builder.build_direct_call(function, &[$dst.into(), $src.into(), $len, vol_bool], "")
+                    }}
+                }
+                
+                // declare and define arguments
                 let mut i = 0;
                 for (j, param) in function.args.iter().enumerate()
                 {
@@ -3185,25 +3227,45 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                     let backend_type = get_backend_type(&mut backend_types, &types, &var_type);
                     if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
                     {
-                        let slot = if let TypeData::Array(inner_type, size) = &var_type.data
+                        if var_type.is_composite()
                         {
-                            let size = get_backend_type_sized(&mut backend_types, &types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
-                            let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, &inner_type);
-                            builder.build_array_alloca(inner_basic_type, size, &var_name)
+                            let slot = builder.build_alloca(basic_type, &var_name).unwrap();
+                            let len = basic_type.size_of().unwrap().into();
+                            
+                            let val = func_val.get_nth_param(j as u32).unwrap();
+                            build_memcpy!(slot, val, len, false).unwrap();
+                            
+                            if variables.contains_key(&var_name)
+                            {
+                                panic!("error: parameter {} redeclared", var_name);
+                            }
+                            variables.insert(var_name, (var_type, slot));
                         }
                         else
                         {
-                            builder.build_alloca(basic_type, &var_name)
-                        }.unwrap();
-                        
-                        let val = func_val.get_nth_param(j as u32).unwrap();
-                        builder.build_store(slot, val).unwrap();
-                        
-                        if variables.contains_key(&var_name)
-                        {
-                            panic!("error: parameter {} redeclared", var_name);
+                            /*
+                            let slot = if let TypeData::Array(inner_type, size) = &var_type.data
+                            {
+                                let size = get_backend_type_sized(&mut backend_types, &types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
+                                let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, &inner_type);
+                                builder.build_array_alloca(inner_basic_type, size, &var_name)
+                            }
+                            else
+                            {
+                                builder.build_alloca(basic_type, &var_name)
+                            }.unwrap();
+                            */
+                            let slot = builder.build_alloca(basic_type, &var_name).unwrap();
+                            
+                            let val = func_val.get_nth_param(j as u32).unwrap();
+                            builder.build_store(slot, val).unwrap();
+                            
+                            if variables.contains_key(&var_name)
+                            {
+                                panic!("error: parameter {} redeclared", var_name);
+                            }
+                            variables.insert(var_name, (var_type, slot));
                         }
-                        variables.insert(var_name, (var_type, slot));
                     }
                     else
                     {
@@ -3246,9 +3308,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                     false
                 });
                 
-                let body_block = context.append_basic_block(func_val, "body");
-                builder.position_at_end(body_block);
-                
                 // collect labels (blocks)
                 let mut blocks = HashMap::new();
                 function.body.visit(&mut |node : &ASTNode|
@@ -3269,11 +3328,27 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                     false
                 });
                 
+                let mut hoisted_return = None;
+                if function.return_type.is_composite()
+                {
+                    //let return_backend_type = get_backend_type_sized(&mut backend_types, &types, &function.return_type);
+                    //let len = return_backend_type.size_of().unwrap().into();
+                    
+                    //let return_slot = builder.build_alloca(return_backend_type, "").unwrap();
+                    let val = func_val.get_last_param().unwrap();
+                    //build_memcpy!(return_slot, val, len, false).unwrap();
+                    
+                    hoisted_return = Some((function.return_type.clone(), val.into_pointer_value()));
+                }
+                
                 let stack = Vec::new();
-                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, return_type : Some(function.return_type.clone()), just_returned : false };
+                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, return_type : Some(function.return_type.clone()), hoisted_return, just_returned : false };
                 
                 //println!("\n\ncompiling function {}...", function.name);
                 //println!("{}", function.body.pretty_debug());
+                
+                let body_block = context.append_basic_block(func_val, "body");
+                builder.position_at_end(body_block);
                 
                 compile(&mut env, &function.body, WantPointer::None);
                 

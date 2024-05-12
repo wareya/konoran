@@ -31,6 +31,16 @@ using void myfun2(Vec2);
 using void myfun2d(Vec2d);
 using void myfun3d(Vec3d);
 
+Vec2 print_vec2(Vec2 vec)
+{
+    print_float((vec.x) as f64);
+    print_float((vec.y) as f64);
+    
+    vec.x = vec.x + 2943.0529f32;
+    
+    return vec;
+}
+
 void main()
 {
     TestStruct asdf = TestStruct {8u8, 15u16};
@@ -40,5 +50,9 @@ void main()
     asdf = asdf;
     print_float((asdf.a) as f64);
     print_float((asdf.b) as f64);
+    
+    Vec2 kgeg = Vec2 { 124.016f32, 815.1538f32 };
+    kgeg = print_vec2(kgeg);
+    kgeg = print_vec2(kgeg);
     return;
 }
