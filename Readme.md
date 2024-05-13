@@ -84,7 +84,7 @@ Konoran's reference implementation uses a declarative grammar (i.e. specified in
 
 Building requires an LLVM 16.x installation. A prebuilt version can be downloaded from this link here: https://github.com/wareya/llvm-custom-builds/releases/tag/16.x
 
-On windows, I build konoran by running e.g. `RUST_BACKTRACE=1 LLVM_SYS_160_PREFIX=/c/users/wareya/llvm-16-2/ cargo run --release src/parser/nbody.txt` in a msys/msys2 shell (with rust installed in it).
+On windows, I build konoran by running e.g. `RUST_BACKTRACE=1 LLVM_SYS_160_PREFIX=/c/users/wareya/llvm-16-2/ cargo run --release src/parser/nbody.txt` in an msys/msys2 shell (with rust installed in it).
 
 The official LLVM binaries do not work, because they don't include library-only stuff.
 
