@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 use inkwell::types::{BasicTypeEnum, BasicType};
 use inkwell::values::{BasicValue, BasicValueEnum, AsValueRef};
+use inkwell::targets::{Target, TargetMachine, TargetTriple, TargetData, CodeModel, RelocMode};
 
 use parser::ast::ASTNode;
 
@@ -370,7 +371,7 @@ impl Function
 }
 
 #[allow(dead_code)]
-fn store_size_of_type(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
+fn store_size_of_type(target_data : &TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
 {
     if type_.is_void()
     {
@@ -380,7 +381,7 @@ fn store_size_of_type(target_data : &inkwell::targets::TargetData, backend_types
     target_data.get_store_size(&backend_type)
 }
 #[allow(dead_code)]
-fn alloc_size_of_type(target_data : &inkwell::targets::TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
+fn alloc_size_of_type(target_data : &TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
 {
     if type_.is_void()
     {
@@ -797,7 +798,7 @@ impl Program
     }
 }
 
-struct Environment<'a, 'b, 'c, 'e, 'f>
+struct Environment<'a, 'b, 'c, 'e>
 {
     source_text    : &'e Vec<String>,
     context        : &'c inkwell::context::Context,
@@ -816,7 +817,7 @@ struct Environment<'a, 'b, 'c, 'e, 'f>
     blocks         : HashMap<String, inkwell::basic_block::BasicBlock<'c>>,
     entry_block    : inkwell::basic_block::BasicBlock<'c>,
     ptr_int_type   : inkwell::types::IntType<'c>,
-    target_data    : &'f inkwell::targets::TargetData,
+    target_data    : &'a TargetData,
     
     anon_globals   : HashMap<inkwell::values::PointerValue<'c>, inkwell::values::BasicValueEnum<'c>>,
     
@@ -2465,14 +2466,15 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
 const VERBOSE : bool = false;
 const PRINT_COMP_TIME : bool = true;
 const DEBUG_FIRST_MODULE : bool = true;
-const DEBUG_FIRST_MODULE_ASM : bool = false;
 
-fn run_program(modules : Vec<String>, _args : Vec<String>)
+fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'static str, String>)
 {
     if VERBOSE
     {
         println!("startup...");
     }
+    let skip_jit = settings.get("asm_triple").is_some();
+    
     let true_start = std::time::Instant::now();
     
     let start = std::time::Instant::now();
@@ -2678,9 +2680,29 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
     let mut parse_time = 0.0f64;
     
     let config = inkwell::targets::InitializationConfig::default();
-    inkwell::targets::Target::initialize_native(&config).unwrap();
     
-    let default_triple = inkwell::targets::TargetMachine::get_default_triple();
+    let mut _target_data : Option<TargetData> = None;
+    
+    let (triple, mut target_data, machine) = if let Some(triple_string) = settings.get("asm_triple")
+    {
+        inkwell::targets::Target::initialize_all(&config);
+        let triple = TargetTriple::create(&triple_string);
+        let target = Target::from_triple(&triple).unwrap();
+        let machine = target.create_target_machine(&triple, "", "", opt_level, RelocMode::Default, CodeModel::Default).unwrap();
+        _target_data = Some(machine.get_target_data());
+        (triple, _target_data.as_ref().unwrap(), machine)
+    }
+    else
+    {
+        inkwell::targets::Target::initialize_native(&config).unwrap();
+        let triple = TargetMachine::get_default_triple();
+        let target = Target::from_triple(&triple).unwrap();
+        let machine = target.create_target_machine(&triple, "", "", opt_level, RelocMode::Default, CodeModel::Default).unwrap();
+        _target_data = Some(machine.get_target_data());
+        (triple, _target_data.as_ref().unwrap(), machine)
+    };
+    
+    let mut first_module = true;
     
     macro_rules! load_module
     {
@@ -2707,18 +2729,13 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                 println!("compiling {}...", $fname);
             }
             
-            //let mut builder = JITBuilder::with_flags(&settings, cranelift_module::default_libcall_names()).unwrap();
-            //for (f_name, (pointer, funcsig)) in &imports
-            //{
-            //    builder.symbol(f_name, *pointer);
-            //}
-            
             let module = context.create_module("main");
-            module.set_triple(&default_triple);
+            module.set_triple(&triple);
             let program = Program::new(&mut types, &ast).unwrap();
             
-            if executor.is_none()
+            if first_module
             {
+                first_module = false;
                 for (f_name, (_, funcsig)) in &imports
                 {
                     let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
@@ -2726,19 +2743,25 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
                     func_val.as_global_value().set_dll_storage_class(inkwell::DLLStorageClass::Import);
                     func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
                 }
-                
-                let _executor = module.create_jit_execution_engine(opt_level).unwrap();
-                for (f_name, (pointer, _)) in &imports
-                {
-                    _executor.add_global_mapping(&func_decs.get(f_name).unwrap().0, *pointer as usize);
-                }
-                executor = Some(_executor);
             }
-            else
+            
+            if !skip_jit
             {
-                executor.as_ref().unwrap().add_module(&module).unwrap();
+                if executor.is_none()
+                {
+                    let _executor = module.create_jit_execution_engine(opt_level).unwrap();
+                    for (f_name, (pointer, _)) in &imports
+                    {
+                        _executor.add_global_mapping(&func_decs.get(f_name).unwrap().0, *pointer as usize);
+                    }
+                    executor = Some(_executor);
+                    target_data = executor.as_ref().unwrap().get_target_data();
+                }
+                else
+                {
+                    executor.as_ref().unwrap().add_module(&module).unwrap();
+                }
             }
-            let target_data = executor.as_ref().unwrap().get_target_data();
             let ptr_int_type = context.ptr_sized_int_type(&target_data, None);
             
             module.set_data_layout(&target_data.get_data_layout());
@@ -3180,13 +3203,10 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         loaded_modules[0].print_to_file("out_unopt.ll").unwrap();
     }
     
-    let executor = executor.unwrap();
-    
     if VERBOSE
     {
         let comptime = start.elapsed().as_secs_f64();
         println!("compilation time: {}", comptime);
-        //println!("features: {}", inkwell::targets::TargetMachine::get_host_cpu_features());
     }
     
     
@@ -3230,37 +3250,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         loaded_modules[0].print_to_file("out.ll").unwrap();
     }
     
-    if VERBOSE
-    {
-        println!("running static constructors...");
-    }
-    executor.run_static_constructors();
-    
-    if VERBOSE
-    {
-        println!("ran static constructors.");
-    }
-    
-    macro_rules! get_func
-    {
-        ($name:expr, $T:ty) =>
-        {{
-            let dec = func_decs.get(&$name.to_string());
-            if dec.is_none()
-            {
-                panic!("error: no `{}` function", $name);
-            }
-            let dec = dec.unwrap();
-            let type_string = dec.1.to_string_rusttype();
-            
-            let want_type_string = std::any::type_name::<$T>(); // FIXME: not guaranteed to be stable across rust versions
-            assert!(want_type_string == type_string, "types do not match:\n{}\n{}\n", want_type_string, type_string);
-            assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
-            
-            executor.get_function::<$T>(&$name).unwrap()
-        }}
-    }
-    
     if VERBOSE || PRINT_COMP_TIME
     {
         let comptime = true_start.elapsed().as_secs_f64();
@@ -3269,41 +3258,65 @@ fn run_program(modules : Vec<String>, _args : Vec<String>)
         println!("compilation time without parsing: {}ms", (comptime - parse_time) * 1000.0);
     }
     
-    unsafe
+    if !skip_jit
     {
-        let name = "main";
-        let f = get_func!(name, unsafe extern "C" fn());
+        let executor = executor.unwrap();
         
-        let start = std::time::Instant::now();
-        if VERBOSE
+        macro_rules! get_func
         {
-            println!("running {}...", name);
+            ($name:expr, $T:ty) =>
+            {{
+                let dec = func_decs.get(&$name.to_string());
+                if dec.is_none()
+                {
+                    panic!("error: no `{}` function", $name);
+                }
+                let dec = dec.unwrap();
+                let type_string = dec.1.to_string_rusttype();
+                
+                let want_type_string = std::any::type_name::<$T>(); // FIXME: not guaranteed to be stable across rust versions
+                assert!(want_type_string == type_string, "types do not match:\n{}\n{}\n", want_type_string, type_string);
+                assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
+                
+                executor.get_function::<$T>(&$name).unwrap()
+            }}
         }
-        let out = f.call();
-        let elapsed_time = start.elapsed();
         
-        if VERBOSE
+        executor.run_static_constructors();
+        
+        unsafe
         {
-            println!("{}() = {:?}", name, out);
-            println!("time: {}", elapsed_time.as_secs_f64());
+            let name = "main";
+            let f = get_func!(name, unsafe extern "C" fn());
+            
+            let start = std::time::Instant::now();
+            if VERBOSE
+            {
+                println!("running {}...", name);
+            }
+            let out = f.call();
+            let elapsed_time = start.elapsed();
+            
+            if VERBOSE
+            {
+                println!("{}() = {:?}", name, out);
+                println!("time: {}", elapsed_time.as_secs_f64());
+            }
         }
+        
+        executor.run_static_destructors();
     }
 
-    if DEBUG_FIRST_MODULE_ASM
+    if skip_jit
     {
         use inkwell::targets::*;
-
-        let triple = TargetMachine::get_default_triple();
-        let cpu = TargetMachine::get_host_cpu_name().to_string();
-        let features = TargetMachine::get_host_cpu_features().to_string();
-
-        let target = Target::from_triple(&triple).unwrap();
-        let machine = target.create_target_machine(&triple, &cpu, &features, opt_level, RelocMode::Default, CodeModel::Default).unwrap();
-
         machine.write_to_file(&loaded_modules[0], FileType::Assembly, "out.asm".as_ref()).unwrap();
     }
+    if VERBOSE
+    {
+        println!("Finished gracefully.");
+    }
     
-    executor.run_static_destructors();
 }
 
 use std::env;
@@ -3311,6 +3324,7 @@ fn main()
 {
     let mut modules = Vec::new();
     let mut args = Vec::new();
+    let mut settings = HashMap::new();
     let mut mode = "";
     for arg in env::args().skip(1)
     {
@@ -3323,12 +3337,19 @@ fn main()
         {
             args.push(arg);
         }
+        else if mode == "-oat"
+        {
+            settings.insert("asm_triple", arg);
+            mode = "";
+        }
         else
         {
             match arg.as_str()
             {
                 "-i" => mode = "-i",
                 "--" => mode = "--",
+                "-oat" => mode = "-oat",
+                "--output-assembly-triple" => mode = "-oat",
                 _ => panic!("unknown argument `{}`", arg),
             }
         }
@@ -3340,6 +3361,6 @@ fn main()
     }
     else
     {
-        run_program(modules, args);
+        run_program(modules, args, settings);
     }
 }
