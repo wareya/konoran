@@ -513,7 +513,7 @@ fn get_backend_type_sized<'c>(backend_types : &mut BTreeMap<String, inkwell::typ
     }
 }
 
-fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::FunctionType<'c>>, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, sig : &FunctionSig) -> inkwell::types::FunctionType<'c>
+fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::FunctionType<'c>>, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, sig : &FunctionSig, options : &HashMap<&'static str, bool>) -> inkwell::types::FunctionType<'c>
 {
     let sig_type = Type::from_functionsig(sig);
     let key = sig_type.to_string();
@@ -531,7 +531,7 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
         {
             panic!("error: void function arguments are not allowed");
         }
-        if var_type.is_composite()
+        if var_type.is_composite() && !options.contains_key("bypass_agg_memcpy")
         {
             var_type = var_type.to_ptr(false);
         }
@@ -548,7 +548,7 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
     
     
     let mut _return_type = sig.return_type.clone();
-    if _return_type.is_composite()
+    if _return_type.is_composite() && !options.contains_key("bypass_agg_memcpy")
     {
         let backend_type = get_backend_type_sized(backend_types, types, &_return_type.to_ptr(false));
         params.push(backend_type.into());
@@ -825,6 +825,8 @@ struct Environment<'a, 'b, 'c, 'e>
     return_type    : Option<Type>,
     hoisted_return : Option<(Type, inkwell::values::PointerValue<'c>)>,
     just_returned  : bool,
+    
+    options        : &'e HashMap<&'static str, bool>,
 }
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -946,16 +948,32 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
         {{
             let x = ($($t)*);
             let mut unwrappable = false;
-            x.as_ref().inspect(|_| unwrappable = true).unwrap();
+            let _ = x.as_ref().inspect(|_| unwrappable = true);
             if unwrappable
             {
                 x.unwrap()
             }
             else
             {
-                let asdf : Result<_, _> = x.into();
-                panic_error!("{}", asdf.as_ref().unwrap_err());
+                panic_error!("{:?}", x);
             }
+        }}
+    }
+    
+    macro_rules! emit_alloca
+    {
+        ($type:expr, $name:expr) =>
+        {{
+            // get_insert_block store current block
+            let block = env.builder.get_insert_block().unwrap();
+            // position_at_end to entry block
+            env.builder.position_at_end(env.entry_block);
+            // insert alloca
+            let slot = env.builder.build_alloca($type, $name).unwrap();
+            // jump back
+            env.builder.position_at_end(block);
+            
+            slot
         }}
     }
     
@@ -972,17 +990,9 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             {
                 env.stack.push(($type.to_vptr($volatile), $addr.into()));
             }
-            else if $type.is_composite()
+            else if $type.is_composite() && !env.options.contains_key("bypass_agg_memcpy")
             {
-                // get_insert_block store current block
-                let block = env.builder.get_insert_block().unwrap();
-                // position_at_end to entry block
-                env.builder.position_at_end(env.entry_block);
-                // insert alloca
-                let slot = env.builder.build_alloca(basic_type, "__temp_synthetic_").unwrap();
-                // jump back
-                env.builder.position_at_end(block);
-                // memcpy
+                let slot = emit_alloca!(basic_type, "__temp_synthetic_");
                 let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type);
                 let len = backend_type.size_of().unwrap().into();
                 build_memcpy!(env.builder, env.module, slot, $addr, len, $volatile).unwrap();
@@ -1000,7 +1010,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     {
         ($type_var:expr, $slot:expr, $type_val:expr, $val:expr, $volatile:expr) =>
         {{
-            if $type_val.is_composite()
+            if $type_val.is_composite() && !env.options.contains_key("bypass_agg_memcpy")
             {
                 assert!($type_var == $type_val);
                 let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type_var);
@@ -1134,7 +1144,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     check_struct_incomplete(env, &mut type_var);
                     
                     compile(env, node.child(2).unwrap(), WantPointer::None);
-                    let (type_val, val) = env.stack.pop().unwrap();
+                    let (type_val, val) = unwrap_or_panic!(env.stack.pop());
                     
                     assert!(type_val == type_var, "fulldec type failure, {:?} vs {:?}, line {}", type_val, type_var, node.line);
                     
@@ -1154,7 +1164,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     //let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &type_var);
                     
                     compile(env, node.child(2).unwrap(), want_pointer);
-                    let (type_val, val) = env.stack.pop().unwrap();
+                    let (type_val, val) = unwrap_or_panic!(env.stack.pop());
                     
                     assert!(type_val == type_var, "fulldec type failure, {:?} vs {:?}, line {}", type_val, type_var, node.line);
                     
@@ -1319,9 +1329,9 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     TypeData::FuncPointer(funcsig) =>
                     {
-                        let hoisted_return = funcsig.return_type.is_composite();
+                        let hoisted_return = funcsig.return_type.is_composite() && !env.options.contains_key("bypass_agg_memcpy");
                         
-                        let func_type = get_function_type(env.function_types, env.backend_types, env.types, &funcsig);
+                        let func_type = get_function_type(env.function_types, env.backend_types, env.types, &funcsig, env.options);
                         
                         let stack_len_start = env.stack.len();
                         compile(env, node.child(1).unwrap(), WantPointer::None);
@@ -1352,7 +1362,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         if hoisted_return
                         {
                             let return_backend_type = get_backend_type_sized(env.backend_types, env.types, &funcsig.return_type);
-                            let mut slot = env.builder.build_alloca(return_backend_type, "").unwrap();
+                            let mut slot = emit_alloca!(return_backend_type, "");
                             if slot.get_type().get_address_space() != inkwell::AddressSpace::default()
                             {
                                 slot = env.builder.build_address_space_cast(slot.try_into().unwrap(), ptr_type, "").unwrap().into();
@@ -1484,12 +1494,12 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let element_type = element_type.unwrap_or_else(|| panic_error!("error: zero-length array literals are not allowed"));
                 let element_backend_type = element_backend_type.unwrap();
                 let array_type = element_type.to_array(array_length);
-                
-                let size = u64_type.const_int(array_length as u64, false);
+                let array_backend_type = get_backend_type_sized(env.backend_types, env.types, &array_type);
                 
                 if !is_const
                 {
-                    let slot = env.builder.build_array_alloca(element_backend_type, size, "").unwrap();
+                    //let slot = env.builder.build_array_alloca(element_backend_type, size, "").unwrap();
+                    let slot = emit_alloca!(array_backend_type, "");
                     
                     for (offset, val) in vals.into_iter().enumerate()
                     {
@@ -1570,7 +1580,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 if !is_const
                 {
-                    let slot = env.builder.build_alloca(backend_type, "").unwrap();
+                    let slot = emit_alloca!(backend_type, "");
                     for (index, (type_, val)) in vals.into_iter().enumerate()
                     {
                         let real_index = struct_members[index].1;
@@ -2026,7 +2036,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 // composite to primitive
                 else if left_size == right_size && left_type.is_composite() && !right_type.is_composite() && !right_type.is_pointer_or_fpointer()
                 {
-                    let slot = env.builder.build_alloca(right_basic_type, "").unwrap();
+                    let slot = emit_alloca!(right_basic_type, "");
                     let len = right_basic_type.size_of().unwrap().into();
                     build_memcpy!(env.builder, env.module, slot, left_val, len, false).unwrap();
                     let res = env.builder.build_load(right_basic_type, slot, "").unwrap();
@@ -2035,8 +2045,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 // primitive to composite
                 else if left_size == right_size && right_type.is_composite() && !left_type.is_composite() && !left_type.is_pointer_or_fpointer()
                 {
-                    // FIXME write an alloca-in-entry-block helper macro and use it here
-                    let slot = env.builder.build_alloca(right_basic_type, "").unwrap();
+                    let slot = emit_alloca!(right_basic_type, "");
                     env.builder.build_store(slot, left_val).unwrap();
                     env.stack.push((right_type, slot.into()));
                 }
@@ -2494,7 +2503,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     }
 }
 
-const VERBOSE : bool = true;
+const VERBOSE : bool = false;
 const PRINT_COMP_TIME : bool = true;
 const DEBUG_FIRST_MODULE : bool = true;
 
@@ -2578,6 +2587,15 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
             panic!("type string must be function type");
         }
     }
+    
+    let mut env_options = HashMap::new();
+    
+    if settings.contains_key("simple_aggregates")
+    {
+        env_options.insert("bypass_agg_memcpy", true);
+    }
+    
+    let env_options = &env_options;
     
     // format specifiers:
     // %X - u64    uppercase hex
@@ -2749,15 +2767,29 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
         {
             cpu = TargetMachine::get_host_cpu_name().to_string();
             features = TargetMachine::get_host_cpu_features().to_string();
+            inkwell::targets::Target::initialize_native(&config).unwrap();
         }
-        inkwell::targets::Target::initialize_native(&config).unwrap();
-        let triple = TargetMachine::get_default_triple();
+        else
+        {
+            inkwell::targets::Target::initialize_all(&config);
+        }
+        let triple = if let Some(triple_string) = settings.get("triple")
+        {
+            TargetTriple::create(&triple_string)
+        }
+        else
+        {
+            TargetMachine::get_default_triple()
+        };
         let target = Target::from_triple(&triple).unwrap();
         let machine = target.create_target_machine(&triple, &cpu, &features, opt_level, RelocMode::Default, CodeModel::Default).unwrap();
         _target_data = Some(machine.get_target_data());
         (triple, _target_data.as_ref().unwrap(), machine)
     };
-    println!("using: '{}' '{}' {:?}", cpu, features, triple);
+    if VERBOSE
+    {
+        println!("using: '{}' '{}' {:?}", cpu, features, triple);
+    }
     
     let mut first_module = true;
     
@@ -2795,7 +2827,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 first_module = false;
                 for (f_name, (_, funcsig)) in &imports
                 {
-                    let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                    let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                     let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::External));
                     func_val.as_global_value().set_dll_storage_class(inkwell::DLLStorageClass::Import);
                     func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
@@ -2888,7 +2920,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 };
                 
                 let funcsig = function.to_sig();
-                let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                 let func_val = module.add_function(&f_name, func_type, Some(linkage));
                 func_val.as_global_value().set_dll_storage_class(storage_class);
                 func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
@@ -2913,7 +2945,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     Visibility::Export => panic!("internal error, invalid visibility class for function import"),
                     _ => inkwell::DLLStorageClass::Default,
                 };
-                let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                 let func_val = module.add_function(&f_name, func_type, Some(linkage));
                 func_val.as_global_value().set_dll_storage_class(storage_class);
                 func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
@@ -2957,7 +2989,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     {
                         let f_name = format!("__init_global_{}_asdf1g0q", g_name);
                         let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
-                        let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                        let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
                         
                         let entry_block = context.append_basic_block(func_val, "entry");
@@ -2969,7 +3001,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false };
+                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -3028,7 +3060,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     
                     let f_name = format!("__init_const_{}_asdf1g0q", g_name);
                     let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
-                    let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                    let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                     let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
                     
                     let entry_block = context.append_basic_block(func_val, "entry");
@@ -3040,7 +3072,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     
                     let stack = Vec::new();
                     let blocks = HashMap::new();
-                    let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false };
+                    let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
                     
                     compile(&mut env, &node, WantPointer::None);
                     let (type_val, val) = env.stack.pop().unwrap();
@@ -3062,7 +3094,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
             {
                 let f_name = format!("__init_allglobal_asdf3f6g");
                 let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
-                let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig);
+                let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                 let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
                 
                 let block = context.append_basic_block(func_val, "entry");
@@ -3113,7 +3145,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     let backend_type = get_backend_type(&mut backend_types, &types, &var_type);
                     if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
                     {
-                        if var_type.is_composite()
+                        if var_type.is_composite() && !env_options.contains_key("bypass_agg_memcpy")
                         {
                             let slot = builder.build_alloca(basic_type, &var_name).unwrap();
                             let len = basic_type.size_of().unwrap().into();
@@ -3202,14 +3234,14 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 });
                 
                 let mut hoisted_return = None;
-                if function.return_type.is_composite()
+                if function.return_type.is_composite() && !env_options.contains_key("bypass_agg_memcpy")
                 {
                     let val = func_val.get_last_param().unwrap();
                     hoisted_return = Some((function.return_type.clone(), val.into_pointer_value()));
                 }
                 
                 let stack = Vec::new();
-                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, just_returned : false };
+                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, just_returned : false, options : env_options };
                 
                 //println!("\n\ncompiling function {}...", function.name);
                 //println!("{}", function.body.pretty_debug());
@@ -3258,6 +3290,16 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
     for module in &loaded_modules
     {
         let pass_options = PassBuilderOptions::create();
+        pass_options.set_verify_each(true);
+        pass_options.set_loop_interleaving(true);
+        pass_options.set_loop_vectorization(true);
+        pass_options.set_loop_slp_vectorization(true);
+        pass_options.set_loop_unrolling(true);
+        pass_options.set_forget_all_scev_in_loop_unroll(true);
+        pass_options.set_licm_mssa_opt_cap(1);
+        pass_options.set_licm_mssa_no_acc_for_promotion_cap(10);
+        pass_options.set_call_graph_profile(true);
+        pass_options.set_merge_functions(true);
         
         module.run_passes("default<O3>", &machine, pass_options).unwrap();
     }
@@ -3369,6 +3411,16 @@ fn main()
             settings.insert("cpu", arg);
             mode = "";
         }
+        else if mode == "-ft"
+        {
+            settings.insert("triple", arg);
+            mode = ""
+        }
+        else if mode == "-sag"
+        {
+            settings.insert("simple_aggregates", arg);
+            mode = "";
+        }
         else
         {
             match arg.as_str()
@@ -3378,6 +3430,10 @@ fn main()
                 "-oat" => mode = "-oat",
                 "-cpu" => mode = "-cpu",
                 "--output-assembly-triple" => mode = "-oat",
+                "-ft" => mode = "-ft",
+                "--force-triple" => mode = "-ft",
+                "-sag" => mode = "-sag",
+                "--simple-aggregates" => mode = "-sag",
                 _ => panic!("unknown argument `{}`", arg),
             }
         }
