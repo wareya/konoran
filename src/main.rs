@@ -445,13 +445,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
         {
             TypeData::Void => panic!("internal error: tried to recreate void type"),
             TypeData::Primitive => panic!("internal error: tried to recreate primitive type"),
-            TypeData::Pointer(_, _) =>
-            {
-                let ptr_type = context.ptr_type(inkwell::AddressSpace::default()).into();
-                backend_types.insert(key, ptr_type);
-                ptr_type
-            }
-            TypeData::VirtualPointer(_, _) =>
+            TypeData::Pointer(_, _) | TypeData::VirtualPointer(_, _) | TypeData::FuncPointer(_) =>
             {
                 let ptr_type = context.ptr_type(inkwell::AddressSpace::default()).into();
                 backend_types.insert(key, ptr_type);
@@ -484,12 +478,6 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
                     panic!("internal error: structs cannot be empty");
                 }
                 let ptr_type = context.struct_type(&prop_types, true).into();
-                backend_types.insert(key, ptr_type);
-                ptr_type
-            }
-            TypeData::FuncPointer(_sig) =>
-            {
-                let ptr_type = context.ptr_type(inkwell::AddressSpace::default()).into();
                 backend_types.insert(key, ptr_type);
                 ptr_type
             }
@@ -531,7 +519,7 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
         params.push(backend_type.into());
     }
     
-    
+    // struct returns may be hoisted into arguments
     let mut _return_type = sig.return_type.clone();
     if _return_type.is_composite() && !options.contains_key("bypass_agg_memcpy")
     {
