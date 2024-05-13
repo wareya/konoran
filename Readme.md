@@ -74,10 +74,6 @@ Konoran's reference implementation uses a declarative grammar (i.e. specified in
 
 - Write documentation
 - Write a spec
-- Implement string literals
-- - they will compile down to u8 arrays
-- - `r""` for non-null-terminated, no escape sequences
-- - `c""` for null terminated with escape sequences
 - Maybe implement blocks, block scope, and remove hoisting
 
 # Building info
