@@ -16,6 +16,7 @@ use core::cell::RefCell;
 use alloc::collections::BTreeMap;
 use std::collections::HashMap;
 
+use inkwell::passes::PassBuilderOptions;
 use inkwell::types::{BasicTypeEnum, BasicType};
 use inkwell::values::{BasicValue, BasicValueEnum, AsValueRef};
 use inkwell::targets::{Target, TargetMachine, TargetTriple, TargetData, CodeModel, RelocMode};
@@ -1427,6 +1428,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 //println!("array length: {}", array_length);
                 let mut vals = Vec::new();
                 let mut element_type = None;
+                let mut element_backend_type = None;
                 let mut is_const = true;
                 for _ in 0..array_length
                 {
@@ -1434,6 +1436,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     if element_type.is_none()
                     {
                         element_type = Some(type_.clone());
+                        element_backend_type = Some(get_backend_type_sized(env.backend_types, env.types, &type_));
                     }
                     if Some(type_.clone()) != element_type
                     {
@@ -1444,51 +1447,48 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     {
                         val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
                     }
+                    else if type_.is_composite() && val.is_pointer_value()
+                    {
+                        val = env.builder.build_load(element_backend_type.unwrap(), val.into_pointer_value(), "").unwrap();
+                    }
                     vals.push(val);
                 }
                 vals.reverse();
                 
-                if element_type.is_some()
+                let element_type = element_type.unwrap_or_else(|| panic_error!("error: zero-length array literals are not allowed"));
+                let element_backend_type = element_backend_type.unwrap();
+                let array_type = element_type.to_array(array_length);
+                
+                let size = u64_type.const_int(array_length as u64, false);
+                
+                if !is_const
                 {
-                    let element_type = element_type.unwrap();
-                    let array_type = element_type.to_array(array_length);
-                    let element_backend_type = get_backend_type_sized(env.backend_types, env.types, &element_type);
+                    let slot = env.builder.build_array_alloca(element_backend_type, size, "").unwrap();
                     
-                    let size = u64_type.const_int(array_length as u64, false);
+                    for (offset, val) in vals.into_iter().enumerate()
+                    {
+                        let offset_val = u64_type.const_int(offset as u64, false);
+                        let offset_addr = unsafe { env.builder.build_in_bounds_gep(element_backend_type, slot, &[offset_val], "").unwrap() };
+                        
+                        env.builder.build_store(offset_addr, val).unwrap();
+                    }
                     
-                    if !is_const
-                    {
-                        let slot = env.builder.build_array_alloca(element_backend_type, size, "").unwrap();
-                        
-                        for (offset, val) in vals.into_iter().enumerate()
-                        {
-                            let offset_val = u64_type.const_int(offset as u64, false);
-                            let offset_addr = unsafe { env.builder.build_in_bounds_gep(element_backend_type, slot, &[offset_val], "").unwrap() };
-                            
-                            env.builder.build_store(offset_addr, val).unwrap();
-                        }
-                        
-                        push_val_or_ptr!(array_type, slot, false);
-                    }
-                    else
-                    {
-                        //println!("-- {:?}", vals);
-                        let val = basic_const_array(element_backend_type, &vals);
-                        let global = make_anonymous_const_global!(val);
-                        
-                        if want_pointer != WantPointer::None
-                        {
-                            push_val_or_ptr!(array_type.clone(), global.as_pointer_value(), false);
-                        }
-                        else
-                        {
-                            env.stack.push((array_type.clone(), global.as_pointer_value().into()));
-                        }
-                    }
+                    push_val_or_ptr!(array_type, slot, false);
                 }
                 else
                 {
-                    panic_error!("error: zero-length array literals are not allowed");
+                    //println!("-- {:?}", vals);
+                    let val = basic_const_array(element_backend_type, &vals);
+                    let global = make_anonymous_const_global!(val);
+                    
+                    if want_pointer != WantPointer::None
+                    {
+                        push_val_or_ptr!(array_type.clone(), global.as_pointer_value(), false);
+                    }
+                    else
+                    {
+                        env.stack.push((array_type.clone(), global.as_pointer_value().into()));
+                    }
                 }
             }
             "struct_literal" =>
@@ -1527,6 +1527,11 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     if val_is_const(is_const, val) && type_.is_composite() && val.is_pointer_value()
                     {
                         val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
+                    }
+                    else if type_.is_composite() && val.is_pointer_value()
+                    {
+                        let val_backend_type = get_backend_type_sized(env.backend_types, env.types, &type_);
+                        val = env.builder.build_load(val_backend_type, val.into_pointer_value(), "").unwrap();
                     }
                     vals.push((type_, val));
                 }
@@ -2682,22 +2687,40 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
     let config = inkwell::targets::InitializationConfig::default();
     
     let mut _target_data : Option<TargetData> = None;
+    let mut cpu = settings.get("cpu").cloned().unwrap_or("".to_string());
+    let mut features = "".to_string();
+    if cpu == "native"
+    {
+        cpu = TargetMachine::get_host_cpu_name().to_string();
+        features = TargetMachine::get_host_cpu_features().to_string();
+    }
     
     let (triple, mut target_data, machine) = if let Some(triple_string) = settings.get("asm_triple")
     {
         inkwell::targets::Target::initialize_all(&config);
-        let triple = TargetTriple::create(&triple_string);
+        let mut triple = TargetTriple::create(&triple_string);
+        if triple_string == "native"
+        {
+            cpu = TargetMachine::get_host_cpu_name().to_string();
+            features = TargetMachine::get_host_cpu_features().to_string();
+            triple = TargetMachine::get_default_triple();
+        }
         let target = Target::from_triple(&triple).unwrap();
-        let machine = target.create_target_machine(&triple, "", "", opt_level, RelocMode::Default, CodeModel::Default).unwrap();
+        let machine = target.create_target_machine(&triple, &cpu, &features, opt_level, RelocMode::Default, CodeModel::Default).unwrap();
         _target_data = Some(machine.get_target_data());
         (triple, _target_data.as_ref().unwrap(), machine)
     }
     else
     {
+        if settings.get("cpu").is_none()
+        {
+            cpu = TargetMachine::get_host_cpu_name().to_string();
+            features = TargetMachine::get_host_cpu_features().to_string();
+        }
         inkwell::targets::Target::initialize_native(&config).unwrap();
         let triple = TargetMachine::get_default_triple();
         let target = Target::from_triple(&triple).unwrap();
-        let machine = target.create_target_machine(&triple, "", "", opt_level, RelocMode::Default, CodeModel::Default).unwrap();
+        let machine = target.create_target_machine(&triple, &cpu, &features, opt_level, RelocMode::Default, CodeModel::Default).unwrap();
         _target_data = Some(machine.get_target_data());
         (triple, _target_data.as_ref().unwrap(), machine)
     };
@@ -3209,27 +3232,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
         println!("compilation time: {}", comptime);
     }
     
-    
-    let start = std::time::Instant::now();
-    
-    // set up IR-level optimization pass manager
-    let pass_manager = {
-        let builder = inkwell::passes::PassManagerBuilder::create();
-        builder.set_optimization_level(opt_level);
-        builder.set_inliner_with_threshold(1);
-        builder.set_size_level(2);
-        
-        let pass_manager = inkwell::passes::PassManager::create(());
-        builder.populate_module_pass_manager(&pass_manager);
-        
-        pass_manager
-    };
-    if VERBOSE
-    {
-        println!("pass manager build time: {}", start.elapsed().as_secs_f64());
-    }
-    
-    
     let start = std::time::Instant::now();
     if VERBOSE
     {
@@ -3237,7 +3239,9 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
     }
     for module in &loaded_modules
     {
-        pass_manager.run_on(module);
+        let pass_options = PassBuilderOptions::create();
+        
+        module.run_passes("default<O3>", &machine, pass_options).unwrap();
     }
     
     if VERBOSE
@@ -3342,6 +3346,11 @@ fn main()
             settings.insert("asm_triple", arg);
             mode = "";
         }
+        else if mode == "-cpu"
+        {
+            settings.insert("cpu", arg);
+            mode = "";
+        }
         else
         {
             match arg.as_str()
@@ -3349,6 +3358,7 @@ fn main()
                 "-i" => mode = "-i",
                 "--" => mode = "--",
                 "-oat" => mode = "-oat",
+                "-cpu" => mode = "-cpu",
                 "--output-assembly-triple" => mode = "-oat",
                 _ => panic!("unknown argument `{}`", arg),
             }

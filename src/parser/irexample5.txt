@@ -1,0 +1,21 @@
+
+struct Vector3
+{
+    f64 x;
+    f64 y;
+    f64 z;
+}
+struct Vector3Holder
+{
+    Vector3 vec;
+}
+
+void main()
+{
+    f64 myfloat = 12953.94193f64;
+    //Vector3Holder holder = Vector3Holder { Vector3 { 1.52938f64 * myfloat, 0.0f64, 0.0f64 } };
+    array(Vector3, 1) holder = [ Vector3 { 1.52938f64 * myfloat, 0.0f64, 0.0f64 } ];
+    print_float(holder[0i64].x);
+    
+    return;
+}
