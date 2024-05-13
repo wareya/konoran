@@ -679,13 +679,11 @@ impl Program
             if child.is_parent() && child.text == "importfunc"
             {
                 //println!("import func");
-                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "import_extern"
+                let prefix = if child.child(0)?.child_count().unwrap() != 0 { child.child(0)?.child(0)?.text.clone() } else { Default::default() };
+                let visibility = match prefix.as_str()
                 {
-                    Visibility::Import
-                }
-                else // "using"
-                {
-                    Visibility::ImportLocal
+                    "import_extern" => Visibility::Import,
+                    _ => Visibility::ImportLocal,
                 };
                 
                 let return_type = parse_type(types, child.child(1)?).unwrap();
@@ -704,18 +702,12 @@ impl Program
             }
             if child.is_parent() && child.text == "funcdef"
             {
-                //println!("func def");
-                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "export_extern"
+                let prefix = if child.child(0)?.child_count().unwrap() != 0 { child.child(0)?.child(0)?.text.clone() } else { Default::default() };
+                let visibility = match prefix.as_str()
                 {
-                    Visibility::Export
-                }
-                else if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "private"
-                {
-                    Visibility::Private
-                }
-                else // default
-                {
-                    Visibility::Local
+                    "export_extern" => Visibility::Export,
+                    "private" => Visibility::Private,
+                    _ => Visibility::Local,
                 };
                 
                 let return_type = parse_type(types, child.child(1)?).unwrap();
@@ -741,13 +733,11 @@ impl Program
         {
             if child.is_parent() && child.text == "importglobal"
             {
-                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.text.clone() == "import_extern"
+                let prefix = if child.child(0)?.child_count().unwrap() != 0 { child.child(0)?.child(0)?.text.clone() } else { Default::default() };
+                let visibility = match prefix.as_str()
                 {
-                    Visibility::Import
-                }
-                else // "using"
-                {
-                    Visibility::ImportLocal
+                    "import_extern" => Visibility::Import,
+                    _ => Visibility::ImportLocal,
                 };
                 
                 let type_ = parse_type(types, child.child(1)?).unwrap();
@@ -757,17 +747,12 @@ impl Program
             }
             else if child.is_parent() && (child.text == "globaldeclaration" || child.text == "globalfulldeclaration")
             {
-                let visibility = if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.child(0)?.text.clone() == "export_extern"
+                let prefix = if child.child(0)?.child_count().unwrap() != 0 { child.child(0)?.child(0)?.child(0)?.text.clone() } else { Default::default() };
+                let visibility = match prefix.as_str()
                 {
-                    Visibility::Export
-                }
-                else if child.child(0)?.child_count().unwrap() != 0 && child.child(0)?.child(0)?.child(0)?.text.clone() == "private"
-                {
-                    Visibility::Private
-                }
-                else // default
-                {
-                    Visibility::Local
+                    "export_extern" => Visibility::Export,
+                    "private" => Visibility::Private,
+                    _ => Visibility::Local,
                 };
                 
                 let type_ = parse_type(types, child.child(1)?).unwrap();
@@ -3297,11 +3282,6 @@ fn main()
             settings.insert("triple", arg);
             mode = ""
         }
-        else if mode == "-sag"
-        {
-            settings.insert("simple_aggregates", arg);
-            mode = "";
-        }
         else
         {
             match arg.as_str()
@@ -3313,8 +3293,7 @@ fn main()
                 "--output-assembly-triple" => mode = "-oat",
                 "-ft" => mode = "-ft",
                 "--force-triple" => mode = "-ft",
-                "-sag" => mode = "-sag",
-                "--simple-aggregates" => mode = "-sag",
+                "-sag"  | "--simple-aggregates" => { settings.insert("simple_aggregates", arg); }
                 _ => panic!("unknown argument `{}`", arg),
             }
         }
