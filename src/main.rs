@@ -17,7 +17,7 @@ use alloc::collections::BTreeMap;
 use std::collections::HashMap;
 
 use inkwell::passes::PassBuilderOptions;
-use inkwell::types::{BasicTypeEnum, BasicType};
+use inkwell::types::*;
 use inkwell::values::{BasicValue, BasicValueEnum, AsValueRef};
 use inkwell::targets::{Target, TargetMachine, TargetTriple, TargetData, CodeModel, RelocMode};
 
@@ -874,6 +874,35 @@ fn basic_const_array<'ctx>(type_ : inkwell::types::BasicTypeEnum<'ctx>, vals : &
     }
 }
 
+macro_rules! build_memcpy
+{
+    ($builder:expr, $module:expr, $dst:expr, $src:expr, $len:expr, $volatile:expr) =>
+    {{
+        let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcpy.p0.i64").unwrap();
+        let u64_type = $module.get_context().i64_type();
+        let i1_type = $module.get_context().bool_type();
+        let zero_bool = i1_type.const_int(0, true);
+        let one_bool = i1_type.const_int(1, true);
+        
+        let vol_bool = if $volatile { one_bool } else { zero_bool }.into();
+        let dst_type : PointerType = $dst.get_type().try_into().unwrap();
+        let src_type : PointerType = $src.get_type().try_into().unwrap();
+        if dst_type.get_address_space() != src_type.get_address_space()
+        {
+            let function = intrinsic.get_declaration(&$module, &[dst_type.into(), dst_type.into(), u64_type.into()]).unwrap();
+            let src = $builder.build_address_space_cast($src.try_into().unwrap(), dst_type, "").unwrap();
+            $builder.build_direct_call(function, &[$dst.into(), src.into(), $len, vol_bool], "")
+            //let function = intrinsic.get_declaration($module, &[src_type.into(), src_type.into(), u64_type.into()]).unwrap();
+            //let dst = $builder.build_address_space_cast($dst.try_into().unwrap(), src_type, "").unwrap();
+            //$builder.build_direct_call(function, &[dst.into(), $src.into(), $len, vol_bool], "")
+        }
+        else
+        {
+            let function = intrinsic.get_declaration(&$module, &[dst_type.into(), src_type.into(), u64_type.into()]).unwrap();
+            $builder.build_direct_call(function, &[$dst.into(), $src.into(), $len, vol_bool], "")
+        }
+    }}
+}
 fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
 {
     // used to build constants for some lowerings, and to cast to bool
@@ -930,17 +959,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
         }}
     }
     
-    macro_rules! build_memcpy
-    {
-        ($dst:expr, $src:expr, $len:expr, $volatile:expr) =>
-        {{
-            let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcpy.p0.i64").unwrap();
-            let function = intrinsic.get_declaration(env.module, &[ptr_type.into(), ptr_type.into(), u64_type.into()]).unwrap();
-            let vol_bool = if $volatile { one_bool } else { zero_bool }.into();
-            env.builder.build_direct_call(function, &[$dst.into(), $src.into(), $len, vol_bool], "")
-        }}
-    }
-    
     macro_rules! push_val_or_ptr
     {
         ($type:expr, $addr:expr, $volatile:expr) =>
@@ -967,7 +985,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 // memcpy
                 let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type);
                 let len = backend_type.size_of().unwrap().into();
-                build_memcpy!(slot, $addr, len, $volatile).unwrap();
+                build_memcpy!(env.builder, env.module, slot, $addr, len, $volatile).unwrap();
                 env.stack.push(($type, slot.into()));
             }
             else
@@ -992,7 +1010,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     if $val.is_pointer_value() // already assigned to global const, load straight form its pointer
                     {
-                        build_memcpy!($slot, $val, len, $volatile).unwrap();
+                        build_memcpy!(env.builder, env.module, $slot, $val, len, $volatile).unwrap();
                     }
                     else
                     {
@@ -1003,12 +1021,12 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         global.set_linkage(inkwell::module::Linkage::Private);
                         
                         let val = global.as_pointer_value();
-                        build_memcpy!($slot, val, len, $volatile).unwrap();
+                        build_memcpy!(env.builder, env.module, $slot, val, len, $volatile).unwrap();
                     }
                 }
                 else
                 {
-                    build_memcpy!($slot, $val, len, $volatile).unwrap();
+                    build_memcpy!(env.builder, env.module, $slot, $val, len, $volatile).unwrap();
                 }
             }
             // FIXME maybe always do this if the store is volatile...?
@@ -1087,7 +1105,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     {
                         let return_backend_type = get_backend_type_sized(env.backend_types, env.types, return_type);
                         let len = return_backend_type.size_of().unwrap().into();
-                        build_memcpy!(*return_slot, *val, len, false).unwrap();
+                        build_memcpy!(env.builder, env.module, *return_slot, *val, len, false).unwrap();
                         
                         env.builder.build_return(None).unwrap();
                     }
@@ -1317,10 +1335,14 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         let mut arg_types = Vec::new();
                         for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                         {
-                            let (type_, val) = env.stack.pop().unwrap();
+                            let (type_, mut val) = env.stack.pop().unwrap();
                             if type_ != *arg_type
                             {
                                 panic_error!("mismatched types for parameter {} in call to function {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
+                            }
+                            if val.is_pointer_value() && val.into_pointer_value().get_type().get_address_space() != inkwell::AddressSpace::default()
+                            {
+                                val = env.builder.build_address_space_cast(val.try_into().unwrap(), ptr_type, "").unwrap().into();
                             }
                             args.push(val.into());
                             arg_types.push(arg_type.clone());
@@ -1330,7 +1352,11 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         if hoisted_return
                         {
                             let return_backend_type = get_backend_type_sized(env.backend_types, env.types, &funcsig.return_type);
-                            let slot = env.builder.build_alloca(return_backend_type, "").unwrap();
+                            let mut slot = env.builder.build_alloca(return_backend_type, "").unwrap();
+                            if slot.get_type().get_address_space() != inkwell::AddressSpace::default()
+                            {
+                                slot = env.builder.build_address_space_cast(slot.try_into().unwrap(), ptr_type, "").unwrap().into();
+                            }
                             args.push(slot.into());
                             arg_types.push(funcsig.return_type.clone());
                         }
@@ -2002,7 +2028,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     let slot = env.builder.build_alloca(right_basic_type, "").unwrap();
                     let len = right_basic_type.size_of().unwrap().into();
-                    build_memcpy!(slot, left_val, len, false).unwrap();
+                    build_memcpy!(env.builder, env.module, slot, left_val, len, false).unwrap();
                     let res = env.builder.build_load(right_basic_type, slot, "").unwrap();
                     env.stack.push((right_type, res.into()));
                 }
@@ -2468,7 +2494,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     }
 }
 
-const VERBOSE : bool = false;
+const VERBOSE : bool = true;
 const PRINT_COMP_TIME : bool = true;
 const DEBUG_FIRST_MODULE : bool = true;
 
@@ -2486,6 +2512,10 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
     let context = inkwell::context::Context::create();
     
     let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+    if VERBOSE
+    {
+        println!("pointer type... {:?}", inkwell::AddressSpace::default());
+    }
     
     let type_table = [
         ("void".to_string(), Type { name : "void".to_string(), data : TypeData::Void }, context.void_type().into()),
@@ -2701,8 +2731,11 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
         let mut triple = TargetTriple::create(&triple_string);
         if triple_string == "native"
         {
-            cpu = TargetMachine::get_host_cpu_name().to_string();
-            features = TargetMachine::get_host_cpu_features().to_string();
+            if settings.get("cpu").is_none()
+            {
+                cpu = TargetMachine::get_host_cpu_name().to_string();
+                features = TargetMachine::get_host_cpu_features().to_string();
+            }
             triple = TargetMachine::get_default_triple();
         }
         let target = Target::from_triple(&triple).unwrap();
@@ -2724,6 +2757,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
         _target_data = Some(machine.get_target_data());
         (triple, _target_data.as_ref().unwrap(), machine)
     };
+    println!("using: '{}' '{}' {:?}", cpu, features, triple);
     
     let mut first_module = true;
     
@@ -2943,7 +2977,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                         
                         if val_is_const(true, val)
                         {
-                            let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                            let global = module.add_global(basic_type, None, g_name);
                             if g_type.is_composite() && val.as_instruction_value().is_none()
                             {
                                 let val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
@@ -2965,7 +2999,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                         }
                         else
                         {
-                            let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                            let global = module.add_global(basic_type, None, g_name);
                             global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
                             global.set_linkage(linkage);
                             global.set_dll_storage_class(storage_class);
@@ -2980,7 +3014,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     }
                     else
                     {
-                        let global = module.add_global(basic_type, Some(inkwell::AddressSpace::default()), g_name);
+                        let global = module.add_global(basic_type, None, g_name);
                         global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
                         global.set_linkage(linkage);
                         global.set_dll_storage_class(storage_class);
@@ -3069,22 +3103,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 
                 let mut variables = BTreeMap::new();
                 
-                macro_rules! build_memcpy
-                {
-                    ($dst:expr, $src:expr, $len:expr, $volatile:expr) =>
-                    {{
-                        let u64_type = backend_types.get("u64").unwrap().into_int_type();
-                        let i1_type = backend_types.get("i1").unwrap().into_int_type();
-                        let one_bool = i1_type.const_int(1, true);
-                        let zero_bool = i1_type.const_int(0, true);
-                        
-                        let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcpy.p0.i64").unwrap();
-                        let function = intrinsic.get_declaration(&module, &[ptr_type.into(), ptr_type.into(), u64_type.into()]).unwrap();
-                        let vol_bool = if $volatile { one_bool } else { zero_bool }.into();
-                        builder.build_direct_call(function, &[$dst.into(), $src.into(), $len, vol_bool], "")
-                    }}
-                }
-                
                 // declare and define arguments
                 let mut i = 0;
                 for (j, param) in function.args.iter().enumerate()
@@ -3101,7 +3119,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                             let len = basic_type.size_of().unwrap().into();
                             
                             let val = func_val.get_nth_param(j as u32).unwrap();
-                            build_memcpy!(slot, val, len, false).unwrap();
+                            build_memcpy!(builder, module, slot, val, len, false).unwrap();
                             
                             if variables.contains_key(&var_name)
                             {
