@@ -466,14 +466,11 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
             TypeData::IncompleteStruct =>
             {
                 let complete_type = types.get(&type_.name).unwrap_or_else(|| panic!("internal error: tried to use incomplete struct type"));
-                if let TypeData::Struct(_) = &complete_type.data
-                {
-                    get_backend_type(backend_types, types, complete_type)
-                }
-                else
+                if !matches!(complete_type.data, TypeData::Struct(_))
                 {
                     panic!("internal error: struct type broken");
                 }
+                get_backend_type(backend_types, types, complete_type)
             }
             TypeData::Struct(struct_data) =>
             {
@@ -503,14 +500,7 @@ fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::An
 fn get_backend_type_sized<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, type_ : &Type) -> inkwell::types::BasicTypeEnum<'c>
 {
     let backend_type = get_backend_type(backend_types, types, type_);
-    if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
-    {
-        basic_type
-    }
-    else
-    {
-        panic!("error: tried to use a non-sized type in a context where only sized types are allowed");
-    }
+    inkwell::types::BasicTypeEnum::try_from(backend_type).unwrap_or_else(|()| panic!("error: tried to use a non-sized type in a context where only sized types are allowed"))
 }
 
 fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::FunctionType<'c>>, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, sig : &FunctionSig, options : &HashMap<&'static str, bool>) -> inkwell::types::FunctionType<'c>
@@ -535,15 +525,10 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
         {
             var_type = var_type.to_ptr(false);
         }
-        let backend_type = get_backend_type(backend_types, types, &var_type);
-        if let Ok(backend_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
-        {
-            params.push(backend_type.into());
-        }
-        else
-        {
-            panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", var_type.name, var_type.name);
-        }
+        let backend_type = get_backend_type_sized(backend_types, types, &var_type);
+        let backend_type = inkwell::types::BasicTypeEnum::try_from(backend_type)
+            .unwrap_or_else(|_| panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", var_type.name, var_type.name));
+        params.push(backend_type.into());
     }
     
     
@@ -615,14 +600,11 @@ fn struct_check_recursive(types : &BTreeMap<String, Type>, root_type : &Type, ty
             {
                 panic!("struct {} is directly recursive; directly recursive structs are forbidden", root_type.name);
             }
-            if let TypeData::Struct(_) = &complete_type.data
-            {
-                struct_check_recursive(types, root_type, &complete_type);
-            }
-            else
+            if !matches!(complete_type.data, TypeData::Struct(_))
             {
                 panic!("internal error: struct type broken");
             }
+            struct_check_recursive(types, root_type, &complete_type);
         }
         _ => {}
     }
@@ -874,6 +856,7 @@ macro_rules! build_memcpy
         let vol_bool = if $volatile { one_bool } else { zero_bool }.into();
         let dst_type : PointerType = $dst.get_type().try_into().unwrap();
         let src_type : PointerType = $src.get_type().try_into().unwrap();
+        // TODO: maybe this cast should be done where the pointers are received instead?
         if dst_type.get_address_space() != src_type.get_address_space()
         {
             let function = intrinsic.get_declaration(&$module, &[dst_type.into(), dst_type.into(), u64_type.into()]).unwrap();
@@ -1185,8 +1168,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 if let Ok(addr) = inkwell::values::PointerValue::try_from(left_addr)
                 {
-                    //let store = env.builder.build_store(addr, val).unwrap();
-                    //store.set_volatile(volatile).unwrap();
                     store_or_memcpy!(type_left, addr, type_val, val, volatile);
                 }
                 else
@@ -1483,7 +1464,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 if !is_const
                 {
-                    //let slot = env.builder.build_array_alloca(element_backend_type, size, "").unwrap();
                     let slot = emit_alloca!(array_backend_type, "");
                     
                     for (offset, val) in vals.into_iter().enumerate()
@@ -1498,7 +1478,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 else
                 {
-                    //println!("-- {:?}", vals);
                     let val = basic_const_array(element_backend_type, &vals);
                     let global = make_anonymous_const_global!(val);
                     
@@ -1529,7 +1508,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     struct_member_types.push(type_.clone());
                     struct_members.push((type_.clone(), index));
                 }
-                //println!("struct type: {:?}", struct_type);
                 
                 for child in &node.get_children().unwrap()[1..]
                 {
@@ -1537,7 +1515,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 let member_count = env.stack.len() - stack_size;
                 assert!(member_count == struct_member_types.len());
-                //println!("struct member count: {}", member_count);
                 
                 let mut is_const = true;
                 let mut vals = Vec::new();
@@ -1623,22 +1600,14 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let backend_type = get_backend_type(env.backend_types, env.types, type_);
                 let float_type = inkwell::types::FloatType::try_from(backend_type).unwrap_or_else(|()| panic_error!("unknown float suffix pattern {}", parts.1));
                 
-                match parts.1
+                let val = match parts.1
                 {
-                    "f32" =>
-                    {
-                        let val : f32 = text.parse().unwrap();
-                        let res = float_type.const_float(val as f64);
-                        env.stack.push((type_.clone(), res.into()));
-                    }
-                    "f64" =>
-                    {
-                        let val : f64 = text.parse().unwrap();
-                        let res = float_type.const_float(val);
-                        env.stack.push((type_.clone(), res.into()));
-                    }
+                    "f32" => text.parse::<f32>().unwrap() as f64,
+                    "f64" => text.parse::<f64>().unwrap() as f64,
                     _ => panic_error!("unknown float suffix pattern {}", parts.1)
-                }
+                };
+                let res = float_type.const_float(val);
+                env.stack.push((type_.clone(), res.into()));
             }
             "char" =>
             {
@@ -1819,67 +1788,39 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     {
                         "ptr" =>
                         {
-                            if want_pointer == WantPointer::Virtual
+                            match (op.as_str(), want_pointer)
                             {
-                                if op.as_str() == "!"
+                                ("!", _) =>
                                 {
                                     let res = env.builder.build_is_null(inkwell::values::PointerValue::try_from(val).unwrap(), "").unwrap();
                                     let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
                                     env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
                                 }
-                                else if op.as_str() == "*"
+                                ("*", WantPointer::Virtual) => env.stack.push((unwrap_or_panic!(type_.ptr_to_vptr()), val)),
+                                ("*", _) =>
                                 {
-                                    env.stack.push((unwrap_or_panic!(type_.ptr_to_vptr()), val));
+                                    let (inner_type, volatile) = unwrap_or_panic!(type_.deref_ptr());
+                                    if inner_type.is_void()
+                                    {
+                                        panic_error!("can't dereference void pointers");
+                                    }
+                                    let basic_type = get_backend_type_sized(env.backend_types, env.types, &inner_type);
+                                    
+                                    let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
+                                    res.as_instruction_value().unwrap().set_volatile(volatile).unwrap();
+                                    env.stack.push((inner_type, res));
                                 }
-                                else if op.as_str() == "@"
+                                ("@", _) =>
                                 {
                                     match &mut type_.data
                                     {
                                         TypeData::Pointer(_, ref mut is_volatile) => *is_volatile = true,
                                         _ => panic_error!("internal error: broken pointer volatility test"),
                                     }
-                                    println!("marked pointer as volatile");
                                     env.stack.push((type_, val));
                                     
                                 }
-                                else
-                                {
-                                    panic_error!("error: can't use operator `{}` on type `{}`", op, type_.name);
-                                }
-                            }
-                            else
-                            {
-                                let (inner_type, volatile) = unwrap_or_panic!(type_.deref_ptr());
-                                let basic_type = get_backend_type_sized(env.backend_types, env.types, &inner_type);
-                                match op.as_str()
-                                {
-                                    "!" =>
-                                    {
-                                        let res = env.builder.build_is_null(inkwell::values::PointerValue::try_from(val).unwrap(), "").unwrap();
-                                        let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
-                                        env.stack.push((env.types.get("u8").unwrap().clone(), res.into()));
-                                    }
-                                    "*" =>
-                                    {
-                                        if inner_type.is_void()
-                                        {
-                                            panic_error!("can't dereference void pointers");
-                                        }
-                                        let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
-                                        res.as_instruction_value().unwrap().set_volatile(volatile).unwrap();
-                                        env.stack.push((inner_type, res));
-                                    }
-                                    "@" =>
-                                    {
-                                        match &mut type_.data
-                                        {
-                                            TypeData::Pointer(_, ref mut is_volatile) => *is_volatile = true,
-                                            _ => panic_error!("internal error: broken pointer volatility test"),
-                                        }
-                                        env.stack.push((type_, val));
-                                    }
-                                    _ => panic_error!("error: can't use operator `{}` on type `{}`", op, type_.name)
-                                };
+                                _ => panic_error!("error: can't use operator `{}` on type `{}`", op, type_.name),
                             }
                         }
                         "f32" | "f64" =>
@@ -2891,7 +2832,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                             }
                             else if g_type.is_composite()
                             {
-                                panic!("INTERNAL ERROR THIS SHOULD BE UNREACHABLE PLEASE REPORT 28753489");
+                                panic!("INTERNAL ERROR THIS SHOULD BE UNREACHABLE PLEASE REPORT. ERROR CODE 28753489");
                             }
                             else
                             {
@@ -3090,14 +3031,11 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     if node.is_parent() && node.text == "label"
                     {
                         let name = &node.child(0).unwrap().child(0).unwrap().text;
-                        if !blocks.contains_key(name)
-                        {
-                            blocks.insert(name.clone(), context.append_basic_block(func_val, name));
-                        }
-                        else
+                        if blocks.contains_key(name)
                         {
                             panic!("error: redeclared block {}", name);
                         }
+                        blocks.insert(name.clone(), context.append_basic_block(func_val, name));
                     }
                     false
                 });
