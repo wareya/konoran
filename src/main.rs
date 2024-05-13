@@ -2503,6 +2503,9 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     }
 }
 
+mod funcs;
+use funcs::*;
+
 const VERBOSE : bool = false;
 const PRINT_COMP_TIME : bool = true;
 const DEBUG_FIRST_MODULE : bool = true;
@@ -2597,126 +2600,12 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
     
     let env_options = &env_options;
     
-    // format specifiers:
-    // %X - u64    uppercase hex
-    // %x - u64    lowercase hex
-    // %u - i64    unsigned integer
-    // %i - i64    signed integer
-    // %F - f64    64-bit float
-    // %f - f32    32-bit float
-    // %s - u8...  null-terminated utf-8 string (forbidden codepoints are dropped)
-    // %c - u32    unicode codepoint (forbidden codepoints are dropped)
-    //
-    // escape codes:
-    // \\ - backslash
-    // \% - % character
-    // \n, \r, \t - LF, CR, and horizontal tab characters
-    //
-    // vars is allowed to be null if no format specifiers are used
-    // vars is a pointer to a list of pointers. these pointers are reinterpreted as pointers to the correct type
-    // optionally, the last pointer in the list of pointers can be null, to signal that there are no more vars
-    unsafe extern "C" fn print_fmt(cstring_bytes : *mut u8, mut vars : *mut *mut u8)
-    {
-        unsafe
-        {
-            let mut strlen = 0;
-            while *cstring_bytes.add(strlen) != 0
-            {
-                strlen += 1;
-            }
-            let orig_string = String::from_utf8_lossy(std::slice::from_raw_parts(cstring_bytes, strlen));
-            
-            let mut s = "".to_string();
-            
-            let mut state = ' '; // ' ' - normal, '%' - in format specifier
-            for c in orig_string.chars()
-            {
-                match state
-                {
-                    ' ' =>
-                        match c
-                        {
-                            '%' => state = '%',
-                            _ => s.push(c),
-                        }
-                    '%' =>
-                    {
-                        state = ' ';
-                        if !(*vars).is_null()
-                        {
-                            match c
-                            {
-                                'X' => s.push_str(&format!("{:X}", *((*vars) as *mut u64))),
-                                'x' => s.push_str(&format!("{:x}", *((*vars) as *mut u64))),
-                                'u' => s.push_str(&format!("{}", *((*vars) as *mut u64))),
-                                'i' => s.push_str(&format!("{}", *((*vars) as *mut i64))),
-                                'F' => s.push_str(&format!("{}", *((*vars) as *mut f64))),
-                                'f' => s.push_str(&format!("{}", *((*vars) as *mut f32))),
-                                's' =>
-                                {
-                                    let mut strlen = 0;
-                                    let cstring_bytes = *vars;
-                                    while *cstring_bytes.add(strlen) != 0
-                                    {
-                                        strlen += 1;
-                                    }
-                                    let orig_string = String::from_utf8_lossy(std::slice::from_raw_parts(cstring_bytes, strlen));
-                                    s.push_str(&orig_string);
-                                }
-                                'c' =>
-                                    if let Some(c) = char::from_u32(*((*vars) as *mut u32))
-                                    {
-                                        s.push(c);
-                                    }
-                                _ =>
-                                {
-                                    s.push('%');
-                                    s.push(c);
-                                }
-                            }
-                            vars = vars.offset(1);
-                        }
-                    }
-                    _ => panic!(),
-                }
-            }
-            print!("{}", s);
-        }
-    }
     import_function::<unsafe extern "C" fn(*mut u8, *mut *mut u8)>(&types, &mut parser, &mut imports, "print_fmt", print_fmt, print_fmt as usize, "funcptr(void, (ptr(u8), ptr(ptr(u8))))");
     
-    unsafe extern "C" fn print_str(cstring_bytes : *mut u8)
-    {
-        unsafe
-        {
-            let mut strlen = 0;
-            while *cstring_bytes.add(strlen) != 0
-            {
-                strlen += 1;
-            }
-            let orig_string = String::from_utf8_lossy(std::slice::from_raw_parts(cstring_bytes, strlen));
-            print!("{}", orig_string);
-        }
-    }
     import_function::<unsafe extern "C" fn(*mut u8)>(&types, &mut parser, &mut imports, "print_str", print_str, print_str as usize, "funcptr(void, (ptr(u8)))");
     
-    unsafe extern "C" fn print_bytes(bytes : *mut u8, count : u64)
-    {
-        unsafe
-        {
-            for i in 0..count
-            {
-                print!("{:02X} ", *bytes.add(i as usize));
-            }
-            println!();
-        }
-    }
     import_function::<unsafe extern "C" fn(*mut u8, u64)>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
     
-    unsafe extern "C" fn print_float(a : f64)
-    {
-        println!("{}", a);
-    }
     import_function::<unsafe extern "C" fn(f64)>(&types, &mut parser, &mut imports, "print_float", print_float, print_float as usize, "funcptr(void, (f64))");
     
     if VERBOSE
@@ -3143,39 +3032,34 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     let var_name = param.1.clone();
                     
                     let backend_type = get_backend_type(&mut backend_types, &types, &var_type);
-                    if let Ok(basic_type) = inkwell::types::BasicTypeEnum::try_from(backend_type)
+                    let basic_type = inkwell::types::BasicTypeEnum::try_from(backend_type)
+                        .unwrap_or_else(|()| panic!("error: variables of type {} are not allowed", var_type.name));
+                    if var_type.is_composite() && !env_options.contains_key("bypass_agg_memcpy")
                     {
-                        if var_type.is_composite() && !env_options.contains_key("bypass_agg_memcpy")
+                        let slot = builder.build_alloca(basic_type, &var_name).unwrap();
+                        let len = basic_type.size_of().unwrap().into();
+                        
+                        let val = func_val.get_nth_param(j as u32).unwrap();
+                        build_memcpy!(builder, module, slot, val, len, false).unwrap();
+                        
+                        if variables.contains_key(&var_name)
                         {
-                            let slot = builder.build_alloca(basic_type, &var_name).unwrap();
-                            let len = basic_type.size_of().unwrap().into();
-                            
-                            let val = func_val.get_nth_param(j as u32).unwrap();
-                            build_memcpy!(builder, module, slot, val, len, false).unwrap();
-                            
-                            if variables.contains_key(&var_name)
-                            {
-                                panic!("error: parameter {} redeclared", var_name);
-                            }
-                            variables.insert(var_name, (var_type, slot));
+                            panic!("error: parameter {} redeclared", var_name);
                         }
-                        else
-                        {
-                            let slot = builder.build_alloca(basic_type, &var_name).unwrap();
-                            
-                            let val = func_val.get_nth_param(j as u32).unwrap();
-                            builder.build_store(slot, val).unwrap();
-                            
-                            if variables.contains_key(&var_name)
-                            {
-                                panic!("error: parameter {} redeclared", var_name);
-                            }
-                            variables.insert(var_name, (var_type, slot));
-                        }
+                        variables.insert(var_name, (var_type, slot));
                     }
                     else
                     {
-                        panic!("error: variables of type {} are not allowed", var_type.name);
+                        let slot = builder.build_alloca(basic_type, &var_name).unwrap();
+                        
+                        let val = func_val.get_nth_param(j as u32).unwrap();
+                        builder.build_store(slot, val).unwrap();
+                        
+                        if variables.contains_key(&var_name)
+                        {
+                            panic!("error: parameter {} redeclared", var_name);
+                        }
+                        variables.insert(var_name, (var_type, slot));
                     }
                     
                     i += 1;
@@ -3242,9 +3126,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 
                 let stack = Vec::new();
                 let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, just_returned : false, options : env_options };
-                
-                //println!("\n\ncompiling function {}...", function.name);
-                //println!("{}", function.body.pretty_debug());
                 
                 let body_block = context.append_basic_block(func_val, "body");
                 builder.position_at_end(body_block);
