@@ -173,6 +173,7 @@ $simplexpr$
 
 
 unop:
+decay_to_ptr
 not
 !
 -

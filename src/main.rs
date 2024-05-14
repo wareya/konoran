@@ -115,6 +115,14 @@ impl Type
     {
         Type { name : "ptr".to_string(), data : TypeData::Pointer(Rc::new(RefCell::new(self.clone())), volatile) }
     }
+    fn array_as_ptr(&self) -> Result<Type, String>
+    {
+        match &self.data
+        {
+            TypeData::Array(inner_type, _) => Ok(Type { name : "ptr".to_string(), data : TypeData::Pointer(Rc::new(RefCell::new(*inner_type.clone())), false) }),
+            _ => Err("internal error: tried to pun non-array as pointer".to_string())
+        }
+    }
     fn ptr_to_vptr(&self) -> Result<Type, String>
     {
         match &self.data
@@ -1797,7 +1805,27 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                             };
                             env.stack.push((type_.clone(), res));
                         }
-                        _ => panic_error!("error: type `{}` is not supported by unary operators", type_.name)
+                        _ =>
+                        {
+                            if type_.is_array() && op.as_str() == "decay_to_ptr"
+                            {
+                                if !env.options.contains_key("bypass_agg_memcpy")
+                                {
+                                    env.stack.push((type_.array_as_ptr().unwrap(), val));
+                                }
+                                else
+                                {
+                                    let backend_type = get_backend_type_sized(env.backend_types, env.types, &type_);
+                                    let slot = emit_alloca!(backend_type, "__temp_decay_");
+                                    env.builder.build_store(slot, val).unwrap();
+                                    env.stack.push((type_.array_as_ptr().unwrap(), slot.into()));
+                                }
+                            }
+                            else
+                            {
+                                panic_error!("error: type `{}` is not supported by unary operators", type_.name)
+                            }
+                        }
                     }
                 }
             }

@@ -29,7 +29,11 @@ void main()
     print_float((-1i64 shr_unsafe 64u64) as f64);
     print_float((-1i64 shr_unsafe 65u64) as f64);
     
-    print_float(((0u8 ? 539u64 : 31u64)) as f64);
+    print_float(((~0u8 ? 539u64 : 31u64)) as f64);
+    print_float((~0u8) as f64);
+    
+    f64 mydouble = 3.14159265358979f64;
+    print_fmt("a cute f64 float: %F\n", decay_to_ptr [(&mydouble) bit_as ptr(u8)]);
     
     return;
 }
