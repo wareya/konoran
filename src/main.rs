@@ -18,10 +18,16 @@ use std::collections::HashMap;
 
 use inkwell::passes::PassBuilderOptions;
 use inkwell::types::*;
-use inkwell::values::{BasicValue, BasicValueEnum, AsValueRef};
+use inkwell::values::BasicValue;
 use inkwell::targets::{Target, TargetMachine, TargetTriple, TargetData, CodeModel, RelocMode};
 
 use parser::ast::ASTNode;
+
+mod stdlib;
+use stdlib::*;
+
+mod inkwell_helpers;
+use inkwell_helpers::*;
 
 /*
 
@@ -371,64 +377,6 @@ impl Function
     }
 }
 
-#[allow(dead_code)]
-fn store_size_of_type(target_data : &TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
-{
-    if type_.is_void()
-    {
-        return 0;
-    }
-    let backend_type = get_backend_type(backend_types, types, type_);
-    target_data.get_store_size(&backend_type)
-}
-#[allow(dead_code)]
-fn alloc_size_of_type(target_data : &TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
-{
-    if type_.is_void()
-    {
-        return 0;
-    }
-    let backend_type = get_backend_type(backend_types, types, type_);
-    target_data.get_abi_size(&backend_type)
-}
-fn get_any_type_context(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum) -> inkwell::context::ContextRef
-{
-    match sdkawuidsguisagugarewudsga
-    {
-        inkwell::types::BasicTypeEnum::ArrayType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        inkwell::types::BasicTypeEnum::FloatType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        inkwell::types::BasicTypeEnum::IntType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        inkwell::types::BasicTypeEnum::PointerType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        inkwell::types::BasicTypeEnum::StructType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-    }
-}
-fn get_any_type_poison(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum) -> inkwell::values::BasicValueEnum
-{
-    match sdkawuidsguisagugarewudsga
-    {
-        inkwell::types::BasicTypeEnum::ArrayType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        inkwell::types::BasicTypeEnum::FloatType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        inkwell::types::BasicTypeEnum::IntType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        inkwell::types::BasicTypeEnum::PointerType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        inkwell::types::BasicTypeEnum::StructType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-    }
-}
-/*
-fn get_any_type_align<'c>(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum<'c>) -> inkwell::values::IntValue<'c>
-{
-    match sdkawuidsguisagugarewudsga
-    {
-        inkwell::types::BasicTypeEnum::ArrayType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_alignment(),
-        inkwell::types::BasicTypeEnum::FloatType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_alignment(),
-        inkwell::types::BasicTypeEnum::IntType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_alignment(),
-        inkwell::types::BasicTypeEnum::PointerType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_alignment(),
-        inkwell::types::BasicTypeEnum::StructType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_alignment(),
-        inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_alignment(),
-    }
-}
-*/
 fn get_backend_type<'c>(backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum<'c>>, types : &BTreeMap<String, Type>, type_ : &Type) -> inkwell::types::AnyTypeEnum<'c>
 {
     let key = type_.to_string();
@@ -546,6 +494,27 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
     function_types.insert(key, func_type);
     
     func_type
+}
+
+#[allow(dead_code)]
+pub (crate) fn store_size_of_type(target_data : &TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
+{
+    if type_.is_void()
+    {
+        return 0;
+    }
+    let backend_type = get_backend_type(backend_types, types, type_);
+    target_data.get_store_size(&backend_type)
+}
+#[allow(dead_code)]
+pub (crate) fn alloc_size_of_type(target_data : &TargetData, backend_types : &mut BTreeMap<String, inkwell::types::AnyTypeEnum>, types : &BTreeMap<String, Type>, type_ : &Type) -> u64
+{
+    if type_.is_void()
+    {
+        return 0;
+    }
+    let backend_type = get_backend_type(backend_types, types, type_);
+    target_data.get_abi_size(&backend_type)
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -801,32 +770,6 @@ fn check_struct_incomplete(env : &mut Environment, type_ : &mut Type)
     }
     
 }
-fn val_is_const(mut is_const : bool, val : inkwell::values::BasicValueEnum) -> bool
-{
-    match val
-    {
-        BasicValueEnum::ArrayValue(v)   => is_const = is_const && v.is_const(),
-        BasicValueEnum::IntValue(v)     => is_const = is_const && v.is_const(),
-        BasicValueEnum::FloatValue(v)   => is_const = is_const && v.is_const(),
-        BasicValueEnum::PointerValue(v) => is_const = is_const && v.is_const(),
-        BasicValueEnum::StructValue(v)  => is_const = is_const && { unsafe { llvm_sys::core::LLVMIsConstant(v.as_value_ref()) == 1 }},
-        _ => is_const = false,
-    }
-    is_const
-}
-fn basic_const_array<'ctx>(type_ : inkwell::types::BasicTypeEnum<'ctx>, vals : &[inkwell::values::BasicValueEnum<'ctx>]) -> inkwell::values::ArrayValue<'ctx>
-{
-    match type_
-    {
-        BasicTypeEnum::ArrayType(v)   => v.const_array(&(vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>())),
-        BasicTypeEnum::IntType(v)     => v.const_array(&(vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>())),
-        BasicTypeEnum::FloatType(v)   => v.const_array(&(vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>())),
-        BasicTypeEnum::PointerType(v) => v.const_array(&(vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>())),
-        BasicTypeEnum::StructType(v)  => v.const_array(&(vals.iter().map(|x| (*x).try_into().unwrap()).collect::<Vec<_>>())),
-        _ => panic!("internal error: unsupported type for array"),
-    }
-}
-
 macro_rules! build_memcpy
 {
     ($builder:expr, $module:expr, $dst:expr, $src:expr, $len:expr, $volatile:expr) =>
@@ -1601,8 +1544,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     c = match text.chars().nth(2).unwrap()
                     {
-                        '\\' => '\\',
-                        '\'' => '\'',
+                        '\\' | '\'' => c,
                         'n' => '\n',
                         'r' => '\r',
                         't' => '\t',
@@ -2412,9 +2354,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
         panic_error!("unhandled variable access");
     }
 }
-
-mod funcs;
-use funcs::*;
 
 const VERBOSE : bool = false;
 const PRINT_COMP_TIME : bool = true;
