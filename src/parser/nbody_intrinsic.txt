@@ -1,0 +1,222 @@
+// core types: u8, i8, u16, i16, u32, i32, u64, i64, f32, f64
+// pointer types: ptr(type), funcptr(returntype, (arg1type, arg2type, ...))
+// composite types: structs, array(type, len)
+
+
+// an implementation of the infamous nbody benchmark!
+// ported from https://benchmarksgame-team.pages.debian.net/benchmarksgame/performance/nbody.html
+
+struct Vector3 {
+    f64 x;
+    f64 y;
+    f64 z;
+}
+
+Vector3 vec3_mul_f64(Vector3 a, f64 b)
+{
+    a.x = a.x * b;
+    a.y = a.y * b;
+    a.z = a.z * b;
+    return a;
+}
+Vector3 vec3_mul_vec3(Vector3 a, Vector3 b)
+{
+    a.x = a.x * b.x;
+    a.y = a.y * b.y;
+    a.z = a.z * b.z;
+    return a;
+}
+Vector3 vec3_add_vec3(Vector3 a, Vector3 b)
+{
+    a.x = a.x + b.x;
+    a.y = a.y + b.y;
+    a.z = a.z + b.z;
+    return a;
+}
+Vector3 vec3_sub_vec3(Vector3 a, Vector3 b)
+{
+    a.x = a.x - b.x;
+    a.y = a.y - b.y;
+    a.z = a.z - b.z;
+    return a;
+}
+f64 vec3_sq_length(Vector3 a)
+{
+    return intrinsic fmuladd(a.z, a.z, a.x*a.x + a.y*a.y);
+    //return a.x*a.x + a.y*a.y + a.z*a.z;
+}
+Vector3 vec3_mul_f64_add_vec3(Vector3 a, f64 s, Vector3 b)
+{
+    a.x = intrinsic fmuladd(a.x, s, b.x);
+    a.y = intrinsic fmuladd(a.y, s, b.y);
+    a.z = intrinsic fmuladd(a.z, s, b.z);
+    return a;
+}
+f64 vec3_length(Vector3 a)
+{
+    return intrinsic sqrt(vec3_sq_length(a));
+}
+
+struct Body {
+    Vector3 pos;
+    Vector3 vel;
+    f64 mass;
+}
+
+void advance(ptr(array(Body, 5)) bodies, f64 delta)
+{
+    i64 i = 0i64;
+    loop_outer:
+        f64 mass = (*bodies)[i].mass;
+        Vector3 pos = (*bodies)[i].pos;
+        Vector3 vel = (*bodies)[i].vel;
+        
+        i64 j = i;
+        goto loop_inner_bottom;
+        
+        loop_inner:
+            f64 mass2 = (*bodies)[j].mass;
+            Vector3 pos2 = (*bodies)[j].pos;
+            Vector3 vel2 = (*bodies)[j].vel;
+            
+            Vector3 pos_diff = vec3_sub_vec3(pos, pos2);
+            f64 distance = vec3_length(pos_diff);
+            f64 mag = delta / (distance * distance * distance);
+            
+            //vel = vec3_sub_vec3(vel, vec3_mul_f64(pos_diff, mass2 * mag));
+            vel = vec3_mul_f64_add_vec3(pos_diff, -mass2 * mag, vel);
+            //vel2 = vec3_add_vec3(vel2, vec3_mul_f64(pos_diff, mass * mag));
+            vel2 = vec3_mul_f64_add_vec3(pos_diff, mass * mag, vel2);
+            
+            (*bodies)[j].vel = vel2;
+            
+        loop_inner_bottom:
+            j = j + 1i64;
+            if (j < 5i64)
+                goto loop_inner;
+        
+        (*bodies)[i].vel = vel;
+        //(*bodies)[i].pos = vec3_add_vec3(pos, vec3_mul_f64(vel, delta));
+        (*bodies)[i].pos = vec3_mul_f64_add_vec3(vel, delta, pos);
+        
+        i = i + 1i64;
+        if (i < 5i64)
+            goto loop_outer;
+    
+    return;
+}
+
+f64 energy(ptr(array(Body, 5)) bodies)
+{
+    f64 energy = 0.0f64;
+    i64 i = 0i64;
+    loop_head:
+        Body body = (*bodies)[i];
+        f64 mass = body.mass; 
+        Vector3 vel = body.vel;
+        Vector3 pos = body.pos;
+        
+        energy = energy + mass * vec3_sq_length(vel) * 0.5f64;
+        
+        i64 j = i + 1i64;
+        if (j >= 5i64)
+            goto loop_inner_bottom;
+        loop_inner:
+            Body body2 = (*bodies)[j];
+            f64 mass2 = body2.mass; 
+            Vector3 vel2 = body2.vel;
+            Vector3 pos2 = body2.pos;
+            
+            Vector3 pos_diff = vec3_sub_vec3(pos, pos2);
+            f64 dist = vec3_length(pos_diff);
+            energy = energy - mass * mass2 * (1.0f64/dist);
+        
+            j = j + 1i64;
+            if (j < 5i64)
+                goto loop_inner;
+        loop_inner_bottom:
+        
+        i = i + 1i64;
+        if (i < 5i64)
+            goto loop_head;
+    
+    return energy;
+}
+void offset_momentum(ptr(array(Body, 5)) bodies)
+{
+    constexpr f64 PI = 3.141592653589793f64;
+    constexpr f64 SOLAR_MASS = 4.0f64 * PI * PI;
+    constexpr f64 DAYS_PER_YEAR = 365.24f64;
+
+    i64 i = 1i64;
+    loop_head:
+        f64 ratio = (*bodies)[i].mass / SOLAR_MASS;
+        (*bodies)[0i64].vel = vec3_sub_vec3((*bodies)[0i64].vel, vec3_mul_f64((*bodies)[i].vel, ratio));
+        
+        i = i + 1i64;
+        if (i < 5i64)
+            goto loop_head;
+    
+    return;
+}
+
+void nbody_bench(u64 count)
+{
+    constexpr f64 PI = 3.141592653589793f64;
+    constexpr f64 SOLAR_MASS = 4.0f64 * PI * PI;
+    constexpr f64 DAYS_PER_YEAR = 365.24f64;
+
+    array(Body, 5) bodies = [
+        Body {
+            Vector3 { 0.0f64, 0.0f64, 0.0f64 },
+            Vector3 { 0.0f64, 0.0f64, 0.0f64 },
+            SOLAR_MASS
+        },
+        Body {
+            Vector3 { 4.84143144246472090e+00f64, -1.16032004402742839e+00f64, -1.03622044471123109e-01f64 },
+            Vector3 { 1.66007664274403694e-03f64 * DAYS_PER_YEAR, 7.69901118419740425e-03f64 * DAYS_PER_YEAR, -6.90460016972063023e-05f64 * DAYS_PER_YEAR },
+            9.54791938424326609e-04f64 * SOLAR_MASS
+        },
+        Body {
+            Vector3 { 8.34336671824457987e+00f64, 4.12479856412430479e+00f64, -4.03523417114321381e-01f64 },
+            Vector3 { -2.76742510726862411e-03f64 * DAYS_PER_YEAR, 4.99852801234917238e-03f64 * DAYS_PER_YEAR, 2.30417297573763929e-05f64 * DAYS_PER_YEAR },
+            2.85885980666130812e-04f64 * SOLAR_MASS
+        },
+        Body {
+            Vector3 { 1.28943695621391310e+01f64, -1.51111514016986312e+01f64, -2.23307578892655734e-01f64 },
+            Vector3 { 2.96460137564761618e-03f64 * DAYS_PER_YEAR, 2.37847173959480950e-03f64 * DAYS_PER_YEAR, -2.96589568540237556e-05f64 * DAYS_PER_YEAR },
+            4.36624404335156298e-05f64 * SOLAR_MASS
+        },
+        Body {
+            Vector3 { 1.53796971148509165e+01f64, -2.59193146099879641e+01f64, 1.79258772950371181e-01f64 },
+            Vector3 { 2.68067772490389322e-03f64 * DAYS_PER_YEAR, 1.62824170038242295e-03f64 * DAYS_PER_YEAR, -9.51592254519715870e-05f64 * DAYS_PER_YEAR },
+            5.15138902046611451e-05f64 * SOLAR_MASS
+        }
+    ];
+    
+    offset_momentum(&bodies);
+    
+    f64 start_energy = energy(&bodies);
+    print_float(start_energy);
+    
+    loop_head:
+        advance(&bodies, 0.01f64);
+        
+        count = count - 1u64;
+        if (count > 0u64)
+            goto loop_head;
+    
+    f64 end_energy = energy(&bodies);
+    print_float(end_energy);
+    
+    return;
+}
+
+export_extern void main()
+{
+    u64 n = 50000000u64;
+    // do volatile pointer read to ensure the loop isn't unrolled at all
+    u64 count = *@&n;
+    nbody_bench(count);
+    return;
+}

@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use inkwell::passes::PassBuilderOptions;
 use inkwell::types::*;
-use inkwell::values::BasicValue;
+use inkwell::values::{BasicValue, BasicMetadataValueEnum};
 use inkwell::targets::{Target, TargetMachine, TargetTriple, TargetData, CodeModel, RelocMode};
 
 use parser::ast::ASTNode;
@@ -35,8 +35,6 @@ TODO list:
 
 low:
 - standard text input function
-- float operation intrisics (sin/cos/tan, exp/log/pow, floor/ceil/round, abs/sign
-- bit rotate intrinsics
 
 maybe:
 - varargs in declarations (not definitions) (for printf mainly)
@@ -1321,7 +1319,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 assert!(num_args == stack_len_end - stack_len_start);
                 assert!(num_args == funcsig.args.len(), "incorrect number of arguments to function on line {}", node.line);
                 
-                let mut args = Vec::new();
+                let mut args : Vec<BasicMetadataValueEnum> = Vec::new();
                 for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                 {
                     let (type_, val) = env.stack.pop().unwrap();
@@ -1335,8 +1333,15 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 args.reverse();
                 
                 // intrinsics whose function signatures lie because they have hidden arguments
+                if intrinsic_name.starts_with("rotl") || intrinsic_name.starts_with("rotr")
+                {
+                    args.insert(0, args[0]);
+                }
                 match intrinsic_name.as_str()
                 {
+                    "sign"        => args.insert(0, args[0].into_float_value().get_type().const_float(1.0).into()),
+                    "sign_f32"    => args.insert(0, args[0].into_float_value().get_type().const_float(1.0).into()),
+                    
                     "abs"         => args.push(zero_bool.into()),
                     "abs_i32"     => args.push(zero_bool.into()),
                     "abs_i16"     => args.push(zero_bool.into()),
@@ -1359,7 +1364,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     env.stack.push((type_.clone(), *result));
                 }
-                //println!("done compiling func call");
             }
             "constexpr" =>
             {
@@ -1384,7 +1388,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     compile(env, child, WantPointer::None);
                 }
                 let array_length = env.stack.len() - stack_size;
-                //println!("array length: {}", array_length);
                 let mut vals = Vec::new();
                 let mut element_type = None;
                 let mut element_backend_type = None;
@@ -2750,13 +2753,30 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
             module.set_data_layout(&target_data.get_data_layout());
             
             let mut intrinsic_imports = [
-                ("sqrt",     "llvm.sqrt", "funcptr(f64, (f64))", vec!["f64"]),
-                ("sqrt_f32", "llvm.sqrt", "funcptr(f32, (f32))", vec!["f32"]),
+                ("pow"         , "llvm.pow",     "funcptr(f64, (f64, f64))", vec!["f64"]),
+                ("pow_f32"     , "llvm.pow",     "funcptr(f32, (f32, f32))", vec!["f32"]),
+                ("fmuladd"     , "llvm.fmuladd", "funcptr(f64, (f64, f64, f64))", vec!["f64"]),
+                ("fmuladd_f32" , "llvm.fmuladd", "funcptr(f32, (f32, f32, f32))", vec!["f32"]),
+                ("powi"        , "llvm.powi",    "funcptr(f64, (f64, i32))", vec!["f64", "i32"]),
+                ("powi_f32"    , "llvm.powi",    "funcptr(f32, (f32, i32))", vec!["f32", "i32"]),
                 
-                ("memset"    , "llvm.memset", "funcptr(void, (ptr(u8), u8, u64))", vec!["ptr", "i64"]),
-                ("memset_vol", "llvm.memset", "funcptr(void, (ptr(u8), u8, u64))", vec!["ptr", "i64"]),
-                ("memcpy"    , "llvm.memcpy", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
-                ("memcpy_vol", "llvm.memcpy", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
+                ("rotl"        , "llvm.fshl",    "funcptr(u64, (u64, u64))", vec!["u64"]),
+                ("rotl_u32"    , "llvm.fshl",    "funcptr(u32, (u32, u32))", vec!["u32"]),
+                ("rotl_u16"    , "llvm.fshl",    "funcptr(u16, (u16, u16))", vec!["u16"]),
+                ("rotl_u8"     , "llvm.fshl",    "funcptr(u8, (u8, u8))", vec!["u8"]),
+                
+                ("rotr"        , "llvm.fshr",    "funcptr(u64, (u64, u64))", vec!["u64"]),
+                ("rotr_u32"    , "llvm.fshr",    "funcptr(u32, (u32, u32))", vec!["u32"]),
+                ("rotr_u16"    , "llvm.fshr",    "funcptr(u16, (u16, u16))", vec!["u16"]),
+                ("rotr_u8"     , "llvm.fshr",    "funcptr(u8, (u8, u8))", vec!["u8"]),
+                
+                ("sign"       , "llvm.copysign", "funcptr(f64, (f64))", vec!["f64"]),
+                ("sign_f32"   , "llvm.copysign", "funcptr(f32, (f32))", vec!["f32"]),
+                
+                ("memset"     , "llvm.memset", "funcptr(void, (ptr(u8), u8, u64))", vec!["ptr", "i64"]),
+                ("memset_vol" , "llvm.memset", "funcptr(void, (ptr(u8), u8, u64))", vec!["ptr", "i64"]),
+                ("memcpy"     , "llvm.memcpy", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
+                ("memcpy_vol" , "llvm.memcpy", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
                 ("memmove"    , "llvm.memmove", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
                 ("memmove_vol", "llvm.memmove", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
             ].into_iter().map(|(a, b, c, d)| (a.to_string(), b.to_string(), c.to_string(), d)).collect::<Vec<_>>();
@@ -2773,6 +2793,32 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 }
             }
             
+            // int-in same-int-out multi-width intrinsics
+            for op in &["bitreverse", "bswap", "ctpop", "ctlz", "cttz", "ctlz"]
+            {
+                for (i, type_) in ["u64", "i64", "u32", "i32", "u16", "i16", "u8", "i8"].iter().enumerate()
+                {
+                    let a = if i == 0 { op.to_string() } else { format!("{}_{}", op, type_) };
+                    let b = format!("llvm.{}", op);
+                    let c = format!("funcptr({}, ({}))", type_, type_);
+                    intrinsic_imports.push((a, b, c, vec!(type_)));
+                }
+            }
+            
+            // float-in float-out multi-width intrinsics
+            for op in &["sqrt", "sin", "cos", /*"tan",*/
+                        "exp", "exp2", /*"exp10",*/ "log", "log2", "log10",
+                        "fabs", "floor", "ceil", "trunc", "round"]
+            {
+                for (i, type_) in ["f64", "f32"].iter().enumerate()
+                {
+                    let a = if i == 0 { op.to_string() } else { format!("{}_{}", op, type_) };
+                    let b = format!("llvm.{}", op);
+                    let c = format!("funcptr({}, ({}))", type_, type_);
+                    intrinsic_imports.push((a, b, c, vec!(type_)));
+                }
+            }
+            
             let mut intrinsic_decs = BTreeMap::new();
             
             for (name, llvm_name, type_name, overloaded_args) in intrinsic_imports
@@ -2783,7 +2829,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 let type_ = parse_type(&types, &type_ast).unwrap();
                 if let TypeData::FuncPointer(funcsig) = type_.data
                 {
-                    let intrinsic = inkwell::intrinsics::Intrinsic::find(&llvm_name).unwrap();
+                    let intrinsic = inkwell::intrinsics::Intrinsic::find(&llvm_name).unwrap_or_else(|| panic!("failed to find intrinsic {}", llvm_name));
                     
                     let mut arg_types = Vec::new();
                     for arg_type in &overloaded_args

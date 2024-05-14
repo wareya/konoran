@@ -49,5 +49,22 @@ void main()
     print_fmt("%u\n", decay_to_ptr [(&sbuus3) as ptr(u8)]);
     print_fmt("%u\n", decay_to_ptr [(&sbuus4) as ptr(u8)]);
     
+    print_float(intrinsic sin(0.5f64));
+    print_float(intrinsic cos(0.5f64));
+    print_float(intrinsic sign(0.0f64));
+    print_float(intrinsic sign(-0.0f64));
+    
+    print_float(intrinsic powi(1.4f64, 41i32));
+    print_float(intrinsic pow(2.4f64, 0.5f64));
+    print_float(intrinsic pow(-1.0f64, 0.5f64)); // NaN
+    print_float(intrinsic sqrt(-1.0f64)); // NaN
+    
+    print_float(intrinsic fmuladd(14.1f64, 0.5f64, 1000.0f64)); // 1007.05
+    
+    print_fmt("0x%X\n", decay_to_ptr [(&[0xBEEFu64]) as ptr(u8)]);
+    u64 aske = intrinsic rotr(0xBEEFu64, 8u64);
+    print_fmt("0x%X\n", decay_to_ptr [(&[(intrinsic rotr_u16(0xBEEFu16, 4u16)) as u64]) as ptr(u8)]);
+    print_fmt("0x%X\n", decay_to_ptr [(&[(intrinsic rotl_u16(0xBEEFu16, 4u16)) as u64]) as ptr(u8)]);
+    
     return;
 }
