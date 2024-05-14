@@ -40,5 +40,14 @@ void main()
     f64 frozen = freeze undef;
     print_float(frozen);
     
+    u8 sbuus = intrinsic abs_i8(-128i8);
+    print_float((sbuus) as f64);
+    u64 sbuus2 = intrinsic abs((0x8000000000000000u64) as i64);
+    u64 sbuus3 = intrinsic abs((0x9000000000000000u64) as i64);
+    u64 sbuus4 = intrinsic abs((0x7000000000000000u64) as i64);
+    print_fmt("%u\n", decay_to_ptr [(&sbuus2) as ptr(u8)]);
+    print_fmt("%u\n", decay_to_ptr [(&sbuus3) as ptr(u8)]);
+    print_fmt("%u\n", decay_to_ptr [(&sbuus4) as ptr(u8)]);
+    
     return;
 }

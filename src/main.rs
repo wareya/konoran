@@ -1337,6 +1337,11 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 // intrinsics whose function signatures lie because they have hidden arguments
                 match intrinsic_name.as_str()
                 {
+                    "abs"         => args.push(zero_bool.into()),
+                    "abs_i32"     => args.push(zero_bool.into()),
+                    "abs_i16"     => args.push(zero_bool.into()),
+                    "abs_i8"      => args.push(zero_bool.into()),
+                    
                     "memcpy"      => args.push(zero_bool.into()),
                     "memmove"     => args.push(zero_bool.into()),
                     "memset"      => args.push(zero_bool.into()),
@@ -2744,16 +2749,29 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
             
             module.set_data_layout(&target_data.get_data_layout());
             
-            let intrinsic_imports = [
-                ("sqrt", "llvm.sqrt", "funcptr(f64, (f64))", vec!["f64"]),
+            let mut intrinsic_imports = [
+                ("sqrt",     "llvm.sqrt", "funcptr(f64, (f64))", vec!["f64"]),
                 ("sqrt_f32", "llvm.sqrt", "funcptr(f32, (f32))", vec!["f32"]),
+                
                 ("memset"    , "llvm.memset", "funcptr(void, (ptr(u8), u8, u64))", vec!["ptr", "i64"]),
                 ("memset_vol", "llvm.memset", "funcptr(void, (ptr(u8), u8, u64))", vec!["ptr", "i64"]),
                 ("memcpy"    , "llvm.memcpy", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
                 ("memcpy_vol", "llvm.memcpy", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
                 ("memmove"    , "llvm.memmove", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
                 ("memmove_vol", "llvm.memmove", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
-            ];
+            ].into_iter().map(|(a, b, c, d)| (a.to_string(), b.to_string(), c.to_string(), d)).collect::<Vec<_>>();
+            
+            // signed-in unsigned-out multi-width intrinsics
+            for op in &["abs"]
+            {
+                for (i, (type_out, type_in)) in [("u64", "i64"), ("u32", "i32"), ("u16", "i16"), ("u8", "i8")].iter().enumerate()
+                {
+                    let a = if i == 0 { op.to_string() } else { format!("{}_{}", op, type_in) };
+                    let b = format!("llvm.{}", op);
+                    let c = format!("funcptr({}, ({}))", type_out, type_in);
+                    intrinsic_imports.push((a, b, c, vec!(type_in)));
+                }
+            }
             
             let mut intrinsic_decs = BTreeMap::new();
             
@@ -2765,7 +2783,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 let type_ = parse_type(&types, &type_ast).unwrap();
                 if let TypeData::FuncPointer(funcsig) = type_.data
                 {
-                    let intrinsic = inkwell::intrinsics::Intrinsic::find(llvm_name).unwrap();
+                    let intrinsic = inkwell::intrinsics::Intrinsic::find(&llvm_name).unwrap();
                     
                     let mut arg_types = Vec::new();
                     for arg_type in &overloaded_args
