@@ -35,7 +35,6 @@ TODO list:
 
 low:
 - standard text input function
-- decay_to_ptr $expr$ for arrays (what C does automatically, but manually) (currently done by manually casting)
 - float operation intrisics (sin/cos/tan, floor/ceil/round, exp/log/pow)
 - bit rotate intrinsics
 
