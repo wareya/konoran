@@ -47,7 +47,6 @@ maybe:
 FIXMEs:
 
 - sizeof might not compile properly on non-64-bit because idk if it needs to be manually upcasted to u64 or not
-- suboptimal codegen with some temporary allocas due to lack of hoisting into entry block 
 
 */
 
@@ -2256,12 +2255,12 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     let (mut right_type, right_val)  = env.stack.pop().unwrap();
                     let (    left_type , left_val )  = env.stack.pop().unwrap();
                     
-                    // allow shifting signed by unsigned
-                    // (makes type check always pass; semantics are the same)
+                    // allow shifting signed by unsigned, and not signed by signed
                     if (op == ">>" || op == "<<" || op == "shl_unsafe" || op == "shr_unsafe") && left_type.is_int_signed()
                     {
                         if right_type.is_int_unsigned()
                         {
+                            // (makes type check pass; semantics are the same because they're purely determined by the left operand)
                             right_type = right_type.to_signed();
                         }
                         else
@@ -2600,6 +2599,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
     
     let env_options = &env_options;
     
+    // import the "standrad library"
     import_function::<unsafe extern "C" fn(*mut u8, *mut *mut u8)>(&types, &mut parser, &mut imports, "print_fmt", print_fmt, print_fmt as usize, "funcptr(void, (ptr(u8), ptr(ptr(u8))))");
     
     import_function::<unsafe extern "C" fn(*mut u8)>(&types, &mut parser, &mut imports, "print_str", print_str, print_str as usize, "funcptr(void, (ptr(u8)))");
