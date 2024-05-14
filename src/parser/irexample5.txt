@@ -9,7 +9,6 @@ struct Vector3Holder
 {
     Vector3 vec;
 }
-
 void main()
 {
     f64 myfloat = 12953.94193f64;
@@ -25,16 +24,21 @@ void main()
     print_float((-1i64 >> 63u64) as f64);
     print_float((-1i64 >> 64u64) as f64);
     print_float((-1i64 >> 65u64) as f64);
-    print_float((-1i64 shr_unsafe 400u64) as f64);
+    print_float((-1i64 shr_unsafe 400u64) as f64); // poison
     print_float((-1i64 shr_unsafe 63u64) as f64);
-    print_float((-1i64 shr_unsafe 64u64) as f64);
-    print_float((-1i64 shr_unsafe 65u64) as f64);
+    print_float((-1i64 shr_unsafe 64u64) as f64); // poison
+    print_float((-1i64 shr_unsafe 65u64) as f64); // poison
     
     print_float(((~0u8 ? 539u64 : 31u64)) as f64);
     print_float((~0u8) as f64);
     
     f64 mydouble = 3.14159265358979f64;
     print_fmt("a cute f64 float: %F\n", decay_to_ptr [(&mydouble) bit_as ptr(u8)]);
+    
+    f64 undef;
+    print_float(undef); // undefined
+    f64 frozen = freeze undef;
+    print_float(frozen);
     
     return;
 }

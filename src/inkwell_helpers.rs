@@ -1,31 +1,31 @@
 use inkwell::types::*;
 use inkwell::values::{BasicValueEnum, AsValueRef};
 
-pub (crate) fn get_any_type_context(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum) -> inkwell::context::ContextRef
+pub (crate) fn get_any_type_context(sdkawuidsguisagugarewudsga : BasicTypeEnum) -> inkwell::context::ContextRef
 {
     match sdkawuidsguisagugarewudsga
     {
-        inkwell::types::BasicTypeEnum::ArrayType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        inkwell::types::BasicTypeEnum::FloatType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        inkwell::types::BasicTypeEnum::IntType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        inkwell::types::BasicTypeEnum::PointerType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        inkwell::types::BasicTypeEnum::StructType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        BasicTypeEnum::ArrayType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        BasicTypeEnum::FloatType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        BasicTypeEnum::IntType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        BasicTypeEnum::PointerType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        BasicTypeEnum::StructType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
     }
 }
-pub (crate) fn get_any_type_poison(sdkawuidsguisagugarewudsga : inkwell::types::BasicTypeEnum) -> inkwell::values::BasicValueEnum
+pub (crate) fn get_any_type_poison(sdkawuidsguisagugarewudsga : BasicTypeEnum) -> inkwell::values::BasicValueEnum
 {
     match sdkawuidsguisagugarewudsga
     {
-        inkwell::types::BasicTypeEnum::ArrayType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        inkwell::types::BasicTypeEnum::FloatType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        inkwell::types::BasicTypeEnum::IntType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        inkwell::types::BasicTypeEnum::PointerType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        inkwell::types::BasicTypeEnum::StructType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        inkwell::types::BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        BasicTypeEnum::ArrayType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        BasicTypeEnum::FloatType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        BasicTypeEnum::IntType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        BasicTypeEnum::PointerType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        BasicTypeEnum::StructType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
     }
 }
-pub (crate) fn val_is_const(mut is_const : bool, val : inkwell::values::BasicValueEnum) -> bool
+pub (crate) fn val_is_const(mut is_const : bool, val : BasicValueEnum) -> bool
 {
     match val
     {
@@ -38,7 +38,11 @@ pub (crate) fn val_is_const(mut is_const : bool, val : inkwell::values::BasicVal
     }
     is_const
 }
-pub (crate) fn basic_const_array<'ctx>(type_ : inkwell::types::BasicTypeEnum<'ctx>, vals : &[inkwell::values::BasicValueEnum<'ctx>]) -> inkwell::values::ArrayValue<'ctx>
+pub (crate) fn build_freeze<'ctx>(builder : &inkwell::builder::Builder<'ctx>, val : inkwell::values::BasicValueEnum<'ctx>) -> inkwell::values::BasicValueEnum<'ctx>
+{
+    unsafe{ BasicValueEnum::new(llvm_sys::core::LLVMBuildFreeze(builder.as_mut_ptr(), val.as_value_ref(), c"".as_ptr())) }
+}
+pub (crate) fn basic_const_array<'ctx>(type_ : BasicTypeEnum<'ctx>, vals : &[inkwell::values::BasicValueEnum<'ctx>]) -> inkwell::values::ArrayValue<'ctx>
 {
     match type_
     {

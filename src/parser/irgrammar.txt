@@ -106,12 +106,16 @@ $struct_type$ { $expr$..., $unusedcomma$? }
 sizeof: HIDELITERALS
 sizeof $type$
 
+freeze: HIDELITERALS
+freeze $expr$
+
 constexpr: HIDELITERALS
 constexpr $expr$
 
 supersimplexpr: SIMPLIFY
-$constexpr$
 $sizeof$
+$constexpr$
+$freeze$
 $ternary$
 $cast$
 $unsafe_cast$
@@ -126,8 +130,9 @@ $string$
 $rvarname$
 
 simplexpr: SIMPLIFY
-$constexpr$
 $sizeof$
+$constexpr$
+$freeze$
 $intrinsic$
 $ternary$
 $cast$

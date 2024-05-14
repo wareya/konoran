@@ -35,7 +35,7 @@ TODO list:
 
 low:
 - standard text input function
-- float operation intrisics (sin/cos/tan, floor/ceil/round, exp/log/pow)
+- float operation intrisics (sin/cos/tan, exp/log/pow, floor/ceil/round, abs/sign
 - bit rotate intrinsics
 
 maybe:
@@ -1364,6 +1364,13 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     panic_error!("error: constexpr contains non-constant parts; {:?}", env.stack.last());
                 }
+            }
+            "freeze" =>
+            {
+                compile(env, node.child(0).unwrap(), want_pointer);
+                let (type_, val) = env.stack.pop().unwrap();
+                let res = build_freeze(env.builder, val.into());
+                env.stack.push((type_, res));
             }
             "array_literal" =>
             {
