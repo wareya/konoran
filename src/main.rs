@@ -608,7 +608,6 @@ impl Program
         let mut constants = BTreeMap::new();
         let mut globals_order = Vec::new();
         
-        //println!("starting struct defs...");
         for child in ast.get_children()?
         {
             if child.is_parent() && child.text == "structdef"
@@ -643,12 +642,10 @@ impl Program
             }
         }
         
-        //println!("starting func defs...");
         for child in ast.get_children()?
         {
             if child.is_parent() && child.text == "importfunc"
             {
-                //println!("import func");
                 let prefix = if child.child(0)?.child_count().unwrap() != 0 { child.child(0)?.child(0)?.text.clone() } else { Default::default() };
                 let visibility = match prefix.as_str()
                 {
@@ -698,7 +695,6 @@ impl Program
             }
         }
         
-        //println!("starting global defs...");
         for child in ast.get_children()?
         {
             if child.is_parent() && child.text == "importglobal"
