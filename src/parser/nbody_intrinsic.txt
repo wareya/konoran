@@ -80,6 +80,9 @@ void advance(ptr(array(Body, 5)) bodies, f64 delta)
             Vector3 vel2 = (*bodies)[j].vel;
             
             Vector3 pos_diff = vec3_sub_vec3(pos, pos2);
+            f64 distance_sq = vec3_sq_length(pos_diff);
+            //f64 distance = intrinsic sqrt(distance_sq);
+            //f64 mag = delta / (distance_sq * distance);
             f64 distance = vec3_length(pos_diff);
             f64 mag = delta / (distance * distance * distance);
             

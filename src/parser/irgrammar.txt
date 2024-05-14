@@ -134,6 +134,7 @@ $sizeof$
 $constexpr$
 $freeze$
 $intrinsic$
+$intrinsic_v$
 $ternary$
 $cast$
 $unsafe_cast$
@@ -271,6 +272,9 @@ $statementlist$
 intrinsic: HIDELITERALS
 intrinsic $name$ $funcargs$
 
+intrinsic_v: HIDELITERALS
+intrinsic_v $name$ $funcargs$
+
 vismodifier:
 # best effort export for dlls etc
 >>? export_extern
@@ -317,12 +321,6 @@ return ;
 instruction:
 $goto$
 $return$
-#$intrinsic_memcpy$
-#$intrinsic_memcpy_volatile$
-#$intrinsic_memmove$
-#$intrinsic_memmove_volatile$
-#$intrinsic_memset$
-#$intrinsic_memset_volatile$
 
 label: HIDELITERALS
 $name$ :

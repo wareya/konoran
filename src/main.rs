@@ -41,7 +41,6 @@ maybe:
 - implement other control flow constructs than just "if -> goto"
 - have proper scoped variable declarations, not function-level variable declarations
 
-
 FIXMEs:
 
 - sizeof might not compile properly on non-64-bit because idk if it needs to be manually upcasted to u64 or not
@@ -101,6 +100,27 @@ impl Type
             TypeData::Struct(_) => "<unrepresented>".to_string(),
             TypeData::IncompleteStruct => "<unrepresented>".to_string(),
             TypeData::FuncPointer(sig) => sig.to_string_rusttype(),
+        }
+    }
+    fn inner_type(&self) -> Type
+    {
+        match &self.data
+        {
+            TypeData::Void => panic!("internal error: tried to get inner type of void"),
+            TypeData::Primitive => panic!("internal error: tried to get inner type of a primitive"),
+            TypeData::Pointer(t, _) => t.borrow().clone(),
+            TypeData::VirtualPointer(t, _) | TypeData::Array(t, _) => *t.clone(),
+            TypeData::Struct(_) => panic!("internal error: tried to get inner type of a struct"),
+            TypeData::IncompleteStruct => panic!("internal error: tried to get inner type of a struct"),
+            TypeData::FuncPointer(_) => panic!("internal error: tried to get inner type of a function pointer"),
+        }
+    }
+    fn array_len(&self) -> usize
+    {
+        match &self.data
+        {
+            TypeData::Array(_, len) => *len,
+            _ => panic!("internal error: tried to get length of a non-array"),
         }
     }
     fn to_array(&self, count : usize) -> Type
@@ -817,6 +837,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     let u8_type_frontend = env.types.get("u8").unwrap();
     let i1_type = env.backend_types.get("i1").unwrap().into_int_type();
     let u8_type = env.backend_types.get("u8").unwrap().into_int_type();
+    let u32_type = env.backend_types.get("u32").unwrap().into_int_type();
     let u64_type = env.backend_types.get("u64").unwrap().into_int_type();
     let ptr_type = env.context.ptr_type(inkwell::AddressSpace::default());
     
@@ -1107,7 +1128,11 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     panic_error!("tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
                 };
-                assert!(type_val == type_left, "binstate type failure, {:?} vs {:?}, line {}", type_val, type_left, node.line);
+                if type_val != type_left
+                {
+                    //panic_error!("binstate type mismatch, {:?} (left) vs {:?} (right), line {}", type_left, type_val, node.line);
+                    panic_error!("tried to assign a value with type {} to a variable with type {}", type_val.name, type_left.name);
+                }
                 
                 if let Ok(addr) = inkwell::values::PointerValue::try_from(left_addr)
                 {
@@ -1305,6 +1330,90 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     compile(env, child, WantPointer::None);
                 }
+            "intrinsic_v" =>
+            {
+                let intrinsic_name = &node.child(0).unwrap().child(0).unwrap().text;
+                let llvm_name = format!("llvm.vp.{}", intrinsic_name);
+                let intrinsic = inkwell::intrinsics::Intrinsic::find(&llvm_name).unwrap_or_else(|| panic_error!("failed to find intrinsic {}", llvm_name));
+                let stack_len_start = env.stack.len();
+                for child in node.child(1).unwrap().get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::Virtual);
+                }
+                let stack_len_end = env.stack.len();
+                
+                let num_args = match intrinsic_name.as_str()
+                {
+                    "fmul" => 2,
+                    "fadd" => 2,
+                    "fsub" => 2,
+                    "fdiv" => 2,
+                    "fmuladd" => 3,
+                    _ => panic_error!("error: tried to call non-existent intrinsic {}", intrinsic_name),
+                };
+                
+                assert!(num_args == stack_len_end - stack_len_start, "incorrect number of arguments to function on line {}", node.line);
+                
+                let last_arg_type : Type = unwrap_or_panic!(env.stack.last().unwrap().0.deref_vptr()).0;
+                if !last_arg_type.is_array() || !last_arg_type.inner_type().is_float()
+                {
+                    panic_error!("all vector intrinsic arguments must be arrays with the same length and the same floating-point element type (refer: {:?})", last_arg_type);
+                }
+                let backend_array_type = get_backend_type_sized(env.backend_types, env.types, &last_arg_type);
+                let val_type = get_backend_type_sized(env.backend_types, env.types, &last_arg_type.inner_type());
+                let len = last_arg_type.array_len();
+                let vec_len = len.next_power_of_two() as u32;
+                let vec_len_val = u32_type.const_int(vec_len as u64, false).into();
+                let vec_type = val_type.into_float_type().vec_type(vec_len);
+                //let len_val = u32_type.const_int(len as u64, false).into();
+                
+                let function = intrinsic.get_declaration(&env.module, &[vec_type.into()]).unwrap();
+                
+                let mut vec_mask = i1_type.vec_type(vec_len).get_poison();
+                for i in 0..vec_len
+                {
+                    let index = u64_type.const_int(i as u64, false);
+                    let element = i1_type.const_int(if (i as usize) < len { 1 } else { 0 }, false);
+                    vec_mask = env.builder.build_insert_element(vec_mask, element, index, "").unwrap();
+                }
+                let mut arg_vals = Vec::new();
+                for _ in 0..num_args
+                {
+                    let (type_, val) = env.stack.pop().unwrap();
+                    let val = env.builder.build_load(backend_array_type, val.into_pointer_value(), "").unwrap().into_array_value();
+                    let type_ = unwrap_or_panic!(type_.deref_vptr()).0;
+                    if type_ != last_arg_type
+                    {
+                        panic_error!("all vector intrinsic arguments must be arrays with the same length and the same floating-point element type");
+                    }
+                    let mut vec_val = vec_type.get_poison();
+                    for i in 0..len
+                    {
+                        let index = u64_type.const_int(i as u64, false);
+                        let element = env.builder.build_extract_value(val, i as u32, "").unwrap();
+                        vec_val = env.builder.build_insert_element(vec_val, element, index, "").unwrap();
+                    }
+                    arg_vals.push(vec_val.into());
+                }
+                arg_vals.push(vec_mask.into());
+                arg_vals.push(vec_len_val);
+                
+                let callval = env.builder.build_direct_call(function, &arg_vals, "").unwrap();
+                let result = callval.try_as_basic_value().left().unwrap();
+                
+                let mut array_val = backend_array_type.into_array_type().get_poison().into();
+                for i in 0..len
+                {
+                    let index = u64_type.const_int(i as u64, false);
+                    let element = env.builder.build_extract_element(result.into_vector_value(), index, "").unwrap();
+                    array_val = env.builder.build_insert_value(array_val, element, i as u32, "").unwrap();
+                }
+                
+                let slot = emit_alloca!(backend_array_type, "");
+                env.builder.build_store(slot, array_val).unwrap();
+                
+                push_val_or_ptr!(last_arg_type.clone(), slot, false);
+            }
             "intrinsic" =>
             {
                 let intrinsic_name = &node.child(0).unwrap().child(0).unwrap().text;
@@ -1936,7 +2045,18 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 // both composite
                 else if left_size == right_size && right_type.is_composite() && left_type.is_composite()
                 {
-                    env.stack.push((right_type, left_val));
+                    //println!("comp-to-comp bitcast!!! {:?} to {:?} (val: {:?})", left_type, right_type, left_val);
+                    if want_pointer == WantPointer::None
+                    {
+                        env.stack.push((right_type, left_val));
+                    }
+                    else
+                    {
+                        let slot = emit_alloca!(right_basic_type, "");
+                        let len = right_basic_type.size_of().unwrap().into();
+                        build_memcpy!(slot, left_val, len, false).unwrap();
+                        push_val_or_ptr!(right_type, slot, false);
+                    }
                 }
                 // composite to primitive
                 else if left_size == right_size && left_type.is_composite() && !right_type.is_composite() && !right_type.is_pointer_or_fpointer()
@@ -1944,8 +2064,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     let slot = emit_alloca!(right_basic_type, "");
                     let len = right_basic_type.size_of().unwrap().into();
                     build_memcpy!(slot, left_val, len, false).unwrap();
-                    let res = env.builder.build_load(right_basic_type, slot, "").unwrap();
-                    env.stack.push((right_type, res.into()));
+                    push_val_or_ptr!(right_type, slot, false);
                 }
                 // primitive to composite
                 else if left_size == right_size && right_type.is_composite() && !left_type.is_composite() && !left_type.is_pointer_or_fpointer()
@@ -2844,7 +2963,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
             
             if VERBOSE
             {
-                println!("individual module compile time: {}", start.elapsed().as_secs_f64());
                 println!("adding global mappings...");
             }
             
@@ -3070,9 +3188,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 let s_val = s_type.const_named_struct(&[context.i32_type().const_int(65535, false).into(), func_val.as_global_value().as_pointer_value().into(), ptr_type.const_null().into()]);
                 let a_val = s_type.const_array(&[s_val]);
                 ctors.set_initializer(&a_val);
-                // @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__init_allglobal_asdf3f6g, ptr null }
-
-                //"llvm.global_ctors"
             }
             
             for f in &program.funcs
@@ -3197,10 +3312,20 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 builder.build_unconditional_branch(body_block).unwrap();
             }
             
+            if VERBOSE
+            {
+                println!("individual module compile time: {}", start.elapsed().as_secs_f64());
+            }
+            
             if let Err(err) = module.verify()
             {
-                println!("Internal compiler error:\n{}", err.to_string());
-                //panic!();
+                module.print_to_file("out_unopt.ll").unwrap();
+                panic!("Internal compiler error:\n{}", err.to_string());
+            }
+            
+            if VERBOSE
+            {
+                println!("module verified");
             }
             
             module
@@ -3211,6 +3336,11 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
     for arg in &modules
     {
         loaded_modules.push(load_module!(arg));
+    }
+    
+    if VERBOSE
+    {
+        println!("finished initial IR generation");
     }
     
     if DEBUG_FIRST_MODULE
@@ -3266,6 +3396,8 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
     
     if !skip_jit
     {
+        println!("running code...");
+        
         let executor = executor.unwrap();
         
         macro_rules! get_func
