@@ -869,6 +869,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             panic!($($t)*);
         }};
     }
+    macro_rules! assert_error { ($expr:expr, $($t:tt)*) => {{ if !$expr { panic_error!($($t)*) } }} }
+    
     macro_rules! unwrap_or_panic
     {
         ($($t:tt)*) =>
@@ -876,14 +878,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             let x = ($($t)*);
             let mut unwrappable = false;
             let _ = x.as_ref().inspect(|_| unwrappable = true);
-            if unwrappable
-            {
-                x.unwrap()
-            }
-            else
-            {
-                panic_error!("{:?}", x);
-            }
+            assert_error!(unwrappable, "{}", format!("{:?}", x));
+            x.unwrap()
         }}
     }
     
@@ -1039,10 +1035,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 if let Some((type_val, val)) = returns.first()
                 {
-                    if env.return_type != Some(type_val.clone())
-                    {
-                        panic_error!("error: tried to return wrong type from function");
-                    }
+                    assert_error!(env.return_type == Some(type_val.clone()), "error: tried to return wrong type from function");
                     if let Some((return_type, return_slot)) = &env.hoisted_return
                     {
                         let return_backend_type = get_backend_type_sized(env.backend_types, env.types, return_type);
@@ -1058,10 +1051,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 else
                 {
-                    if env.return_type != env.types.get("void").cloned()
-                    {
-                        panic_error!("error: tried to return nothing from function that requires a return value");
-                    }
+                    assert_error!(env.return_type == env.types.get("void").cloned(), "error: tried to return nothing from function that requires a return value");
                     env.builder.build_return(None).unwrap();
                 }
                 env.just_returned = true;
@@ -1070,47 +1060,31 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "fulldeclaration" =>
             {
                 let name = &node.child(1).unwrap().child(0).unwrap().text;
-                if env.variables.contains_key(name)
-                {
-                    let (mut type_var, slot) = env.variables[name].clone();
-                    check_struct_incomplete(env, &mut type_var);
-                    
-                    compile(env, node.child(2).unwrap(), WantPointer::None);
-                    let (type_val, val) = unwrap_or_panic!(env.stack.pop());
-                    
-                    assert!(type_val == type_var, "fulldec type failure, {:?} vs {:?}, line {}", type_val, type_var, node.line);
-                    
-                    store_or_memcpy!(type_var, slot, type_val, val, false);
-                }
-                else
-                {
-                    panic_error!("internal error: failed to find variable in full declaration");
-                }
+                assert_error!(env.variables.contains_key(name), "internal error: failed to find variable in full declaration");
+                let (mut type_var, slot) = env.variables[name].clone();
+                check_struct_incomplete(env, &mut type_var);
+                
+                compile(env, node.child(2).unwrap(), WantPointer::None);
+                let (type_val, val) = unwrap_or_panic!(env.stack.pop());
+                
+                assert_error!(type_val == type_var, "declaration type mismatch, {:?} vs {:?}, line {}", type_val, type_var, node.line);
+                
+                store_or_memcpy!(type_var, slot, type_val, val, false);
             }
             "constexpr_fulldeclaration" =>
             {
                 let name = &node.child(1).unwrap().child(0).unwrap().text;
-                if !env.constants.contains_key(name)
-                {
-                    let type_var = parse_type(env.types, node.child(0).unwrap()).unwrap();
-                    //let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &type_var);
-                    
-                    compile(env, node.child(2).unwrap(), want_pointer);
-                    let (type_val, val) = unwrap_or_panic!(env.stack.pop());
-                    
-                    assert!(type_val == type_var, "fulldec type failure, {:?} vs {:?}, line {}", type_val, type_var, node.line);
-                    
-                    if !val_is_const(true, val)
-                    {
-                        panic_error!("error: constexpr contains non-constant parts");
-                    }
-                    
-                    env.constants.insert(name.clone(), (type_var, val));
-                }
-                else
-                {
-                    panic_error!("error: tried to redeclare constant {}", name);
-                }
+                assert_error!(!env.constants.contains_key(name), "error: tried to redeclare constant {}", name);
+                let type_var = parse_type(env.types, node.child(0).unwrap()).unwrap();
+                //let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &type_var);
+                
+                compile(env, node.child(2).unwrap(), want_pointer);
+                let (type_val, val) = unwrap_or_panic!(env.stack.pop());
+                
+                assert_error!(type_val == type_var, "constexpr type mismatch, {:?} vs {:?}, line {}", type_val, type_var, node.line);
+                assert_error!(val_is_const(true, val), "error: constexpr contains non-constant parts");
+                
+                env.constants.insert(name.clone(), (type_var, val));
             }
             "binstate" =>
             {
@@ -1128,11 +1102,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     panic_error!("tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
                 };
-                if type_val != type_left
-                {
-                    //panic_error!("binstate type mismatch, {:?} (left) vs {:?} (right), line {}", type_left, type_val, node.line);
-                    panic_error!("tried to assign a value with type {} to a variable with type {}", type_val.name, type_left.name);
-                }
+                assert_error!(type_val == type_left, "tried to assign a value with type {} to a variable with type {}", type_val.name, type_left.name);
                 
                 if let Ok(addr) = inkwell::values::PointerValue::try_from(left_addr)
                 {
@@ -1160,16 +1130,10 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     
                     push_val_or_ptr!(type_, slot, false);
                 }
-                else if env.global_decs.contains_key(name)
-                {
-                    panic_error!("error: found global but not implemented yet");
-                }
-                else if env.constants.contains_key(name)
-                {
-                    panic_error!("error: cannot assign to constant `{}`", name);
-                }
                 else
                 {
+                    assert_error!(!env.global_decs.contains_key(name), "error: found global but not implemented yet");
+                    assert_error!(!env.constants.contains_key(name), "error: cannot assign to constant `{}`", name);
                     panic_error!("error: unrecognized variable `{}`", name);
                 }
             }
@@ -1216,10 +1180,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let (base_type, base_addr) = env.stack.pop().unwrap();
                 let (base_type, volatile) = unwrap_or_panic!(base_type.deref_vptr());
                 
-                if offset_type.name != "i64"
-                {
-                    panic_error!("error: can't offset into arrays except with type i64 (used type `{}`)", offset_type.name)
-                }
+                assert_error!(offset_type.name == "i64", "error: can't offset into arrays except with type i64 (used type `{}`)", offset_type.name);
                 
                 let mut inner_type = unwrap_or_panic!(base_type.array_to_inner());
                 check_struct_incomplete(env, &mut inner_type);
@@ -1280,10 +1241,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                         {
                             let (type_, mut val) = env.stack.pop().unwrap();
-                            if type_ != *arg_type
-                            {
-                                panic_error!("mismatched types for parameter {} in call to function {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
-                            }
+                            assert_error!(type_ == *arg_type, "mismatched types for parameter {} in call to function {:?} on line {}: expected `{}`, got `{}`",
+                                i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
                             if val.is_pointer_value() && val.into_pointer_value().get_type().get_address_space() != inkwell::AddressSpace::default()
                             {
                                 val = env.builder.build_address_space_cast(val.try_into().unwrap(), ptr_type, "").unwrap().into();
@@ -1348,6 +1307,11 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     "fadd" => 2,
                     "fsub" => 2,
                     "fdiv" => 2,
+                    "frem" => 2,
+                    "fneg" => 1,
+                    "fabs" => 1,
+                    "sqrt" => 1,
+                    "fma" => 3,
                     "fmuladd" => 3,
                     _ => panic_error!("error: tried to call non-existent intrinsic {}", intrinsic_name),
                 };
@@ -1355,10 +1319,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 assert!(num_args == stack_len_end - stack_len_start, "incorrect number of arguments to function on line {}", node.line);
                 
                 let last_arg_type : Type = unwrap_or_panic!(env.stack.last().unwrap().0.deref_vptr()).0;
-                if !last_arg_type.is_array() || !last_arg_type.inner_type().is_float()
-                {
-                    panic_error!("all vector intrinsic arguments must be arrays with the same length and the same floating-point element type (refer: {:?})", last_arg_type);
-                }
+                assert_error!(last_arg_type.is_array() && last_arg_type.inner_type().is_float(),
+                    "all vector intrinsic arguments must be arrays with the same length and the same floating-point element type (refer: {:?})", last_arg_type);
                 let backend_array_type = get_backend_type_sized(env.backend_types, env.types, &last_arg_type);
                 let val_type = get_backend_type_sized(env.backend_types, env.types, &last_arg_type.inner_type());
                 let len = last_arg_type.array_len();
@@ -1382,10 +1344,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     let (type_, val) = env.stack.pop().unwrap();
                     let val = env.builder.build_load(backend_array_type, val.into_pointer_value(), "").unwrap().into_array_value();
                     let type_ = unwrap_or_panic!(type_.deref_vptr()).0;
-                    if type_ != last_arg_type
-                    {
-                        panic_error!("all vector intrinsic arguments must be arrays with the same length and the same floating-point element type");
-                    }
+                    assert_error!(type_ == last_arg_type,
+                        "all vector intrinsic arguments must be arrays with the same length and the same floating-point element type");
                     let mut vec_val = vec_type.get_poison();
                     for i in 0..len
                     {
@@ -1395,6 +1355,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     }
                     arg_vals.push(vec_val.into());
                 }
+                arg_vals.reverse();
+                
                 arg_vals.push(vec_mask.into());
                 arg_vals.push(vec_len_val);
                 
@@ -1432,10 +1394,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                 {
                     let (type_, val) = env.stack.pop().unwrap();
-                    if type_ != *arg_type
-                    {
-                        panic_error!("mismatched types for parameter {} in call to intrinsic {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
-                    }
+                    assert_error!(type_ == *arg_type,
+                        "mismatched types for parameter {} in call to intrinsic {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
                     args.push(val.into());
                 }
                 
@@ -1477,10 +1437,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "constexpr" =>
             {
                 compile(env, node.child(0).unwrap(), want_pointer);
-                if !val_is_const(true, env.stack.last().unwrap().1)
-                {
-                    panic_error!("error: constexpr contains non-constant parts; {:?}", env.stack.last());
-                }
+                assert_error!(val_is_const(true, env.stack.last().unwrap().1), "error: constexpr contains non-constant parts; {:?}", env.stack.last());
             }
             "freeze" =>
             {
@@ -1509,10 +1466,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         element_type = Some(type_.clone());
                         element_backend_type = Some(get_backend_type_sized(env.backend_types, env.types, &type_));
                     }
-                    if Some(type_.clone()) != element_type
-                    {
-                        panic_error!("error: array literals must entirely be of a single type");
-                    }
+                    assert_error!(Some(type_.clone()) == element_type, "error: array literals must entirely be of a single type");
                     is_const = val_is_const(is_const, val);
                     if val_is_const(is_const, val) && type_.is_composite() && val.is_pointer_value()
                     {
@@ -1694,26 +1648,17 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     }
                 }
                 let val = u32::from(c);
-                if text.ends_with("u32")
+                let type_ = if text.ends_with("u32")
                 {
-                    let type_ = env.types.get("u32").unwrap();
-                    let backend_type = get_backend_type(env.backend_types, env.types, type_);
-                    let int_type = backend_type.into_int_type();
-                    let res = int_type.const_int(val as u64, false);
-                    env.stack.push((type_.clone(), res.into()));
+                    env.types.get("u32").unwrap()
                 }
                 else
                 {
-                    if val > 0xFF
-                    {
-                        panic_error!("u8 char literal has a value greater than 255");
-                    }
-                    let type_ = env.types.get("u8").unwrap();
-                    let backend_type = get_backend_type(env.backend_types, env.types, type_);
-                    let int_type = backend_type.into_int_type();
-                    let res = int_type.const_int(val as u64, false);
-                    env.stack.push((type_.clone(), res.into()));
-                }
+                    assert_error!(val <= 0xFF, "u8 char literal has a value greater than 255");
+                    env.types.get("u8").unwrap()
+                };
+                let res = get_backend_type(env.backend_types, env.types, type_).into_int_type().const_int(val as u64, false);
+                env.stack.push((type_.clone(), res.into()));
             }
             "string" =>
             {
@@ -1764,10 +1709,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 else
                 {
-                    if want_pointer != WantPointer::None
-                    {
-                        panic_error!("tried to get pointer of pointer-to-string literal");
-                    }
+                    assert_error!(want_pointer == WantPointer::None, "tried to get pointer of pointer-to-string literal");
                     let global = make_anonymous_const_global!(array_val);
                     env.stack.push((type_.clone(), global.as_pointer_value().into()));
                 }
@@ -1783,10 +1725,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     location = text.rfind("i");
                     signed = true;
                 }
-                if location.is_none()
-                {
-                    panic_error!("internal error: unknown integer type literal suffix");
-                }
+                assert_error!(!location.is_none(), "internal error: unknown integer type literal suffix");
                 let location = location.unwrap();
                 let parts = text.split_at(location);
                 let text = parts.0;
@@ -1842,10 +1781,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     compile(env, node.child(1).unwrap(), WantPointer::Real);
                     let (type_, val) = env.stack.pop().unwrap();
-                    if !type_.is_pointer()
-                    {
-                        panic_error!("error: tried to get address of non-variable");
-                    }
+                    assert_error!(type_.is_pointer(), "error: tried to get address of non-variable");
                     env.stack.push((type_, val));
                 }
                 else
@@ -1868,10 +1804,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                                 ("*", _) =>
                                 {
                                     let (inner_type, volatile) = unwrap_or_panic!(type_.deref_ptr());
-                                    if inner_type.is_void()
-                                    {
-                                        panic_error!("can't dereference void pointers");
-                                    }
+                                    assert_error!(!inner_type.is_void(), "can't dereference void pointers");
                                     let basic_type = get_backend_type_sized(env.backend_types, env.types, &inner_type);
                                     
                                     let res = env.builder.build_load(basic_type, val.into_pointer_value(), "").unwrap();
@@ -1929,23 +1862,17 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         }
                         _ =>
                         {
-                            if type_.is_array() && op.as_str() == "decay_to_ptr"
+                            assert_error!(!type_.is_array() || op.as_str() != "decay_to_ptr", "error: type `{}` is not supported by unary operators", type_.name);
+                            if !env.options.contains_key("bypass_agg_memcpy")
                             {
-                                if !env.options.contains_key("bypass_agg_memcpy")
-                                {
-                                    env.stack.push((type_.array_as_ptr().unwrap(), val));
-                                }
-                                else
-                                {
-                                    let backend_type = get_backend_type_sized(env.backend_types, env.types, &type_);
-                                    let slot = emit_alloca!(backend_type, "__temp_decay_");
-                                    env.builder.build_store(slot, val).unwrap();
-                                    env.stack.push((type_.array_as_ptr().unwrap(), slot.into()));
-                                }
+                                env.stack.push((type_.array_as_ptr().unwrap(), val));
                             }
                             else
                             {
-                                panic_error!("error: type `{}` is not supported by unary operators", type_.name)
+                                let backend_type = get_backend_type_sized(env.backend_types, env.types, &type_);
+                                let slot = emit_alloca!(backend_type, "__temp_decay_");
+                                env.builder.build_store(slot, val).unwrap();
+                                env.stack.push((type_.array_as_ptr().unwrap(), slot.into()));
                             }
                         }
                     }
@@ -2089,12 +2016,10 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let _right_basic_type : BasicTypeEnum = right_backend_type.try_into().unwrap();
                 
                 
-                if left_type.name == right_type.name
-                {
-                    panic_error!("unsupported unsafe cast from type {} to same type (unsafe casts are only for type pairs with expensive standard casts)", left_type.to_string());
-                }
+                assert_error!(left_type.name != right_type.name,
+                    "unsupported unsafe cast from type {} to same type (unsafe casts are only for type pairs with expensive standard casts)", left_type.to_string());
                 // cast from float to int (must be int, not pointer)
-                else if left_type.is_float() && right_type.is_int_unsigned()
+                if left_type.is_float() && right_type.is_int_unsigned()
                 {
                     if let (Ok(left_val), Ok(target_type)) = (inkwell::values::FloatValue::try_from(left_val), inkwell::types::IntType::try_from(right_backend_type))
                     {
@@ -2340,10 +2265,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     (a.clone(), a, c)
                 };
                 
-                if type_b != type_c
-                {
-                    panic_error!("middle and right expressions of ternary operator must be exactly the same type");
-                }
+                assert_error!(type_b == type_c, "middle and right expressions of ternary operator must be exactly the same type");
                 
                 let comp_val = match type_a.name.as_str()
                 {
@@ -2385,15 +2307,9 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     // allow shifting signed by unsigned, and not signed by signed
                     if (op == ">>" || op == "<<" || op == "shl_unsafe" || op == "shr_unsafe") && left_type.is_int_signed()
                     {
-                        if right_type.is_int_unsigned()
-                        {
-                            // (makes type check pass; semantics are the same because they're purely determined by the left operand)
-                            right_type = right_type.to_signed();
-                        }
-                        else
-                        {
-                            panic_error!("cannot bitshift with a right-hand type of signed int")
-                        }
+                        assert_error!(right_type.is_int_unsigned(), "cannot bitshift with a right-hand type of signed int");
+                        // (makes type check pass; semantics are the same because they're purely determined by the left operand)
+                        right_type = right_type.to_signed();
                     }
                     
                     let is_u = left_type.is_int_unsigned();
@@ -2407,10 +2323,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         {
                             "&" =>
                             {
-                                if !right_type.is_int_unsigned() || right_type.size() as u32 * 8 != env.ptr_int_type.get_bit_width()
-                                {
-                                    panic_error!("ptr mask (&) operation is only supported with a right-hand operand of the target's pointer-sized int type (usually u64 or u32) {:?}", right_basic_type);
-                                }
+                                assert_error!(right_type.is_int_unsigned() && right_type.size() as u32 * 8 == env.ptr_int_type.get_bit_width(),
+                                    "ptr mask (&) operation is only supported with a right-hand operand of the target's pointer-sized int type (usually u64 or u32) {:?}", right_basic_type);
                                 if val_is_const(true, left_val) && val_is_const(true, right_val)
                                 {
                                     let intptr : inkwell::values::IntValue = env.builder.build_ptr_to_int(left_val.into_pointer_value(), env.ptr_int_type, "").unwrap();
