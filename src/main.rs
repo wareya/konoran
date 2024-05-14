@@ -770,7 +770,7 @@ fn check_struct_incomplete(env : &mut Environment, type_ : &mut Type)
     }
     
 }
-macro_rules! build_memcpy
+macro_rules! build_memcpy_raw
 {
     ($builder:expr, $module:expr, $dst:expr, $src:expr, $len:expr, $volatile:expr) =>
     {{
@@ -855,6 +855,11 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
         }}
     }
     
+    macro_rules! build_memcpy
+    {
+        ($dst:expr, $src:expr, $len:expr, $volatile:expr) => { build_memcpy_raw!(&env.builder, &env.module, $dst, $src, $len, $volatile) }
+    }
+    
     macro_rules! emit_alloca
     {
         ($type:expr, $name:expr) =>
@@ -890,7 +895,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let slot = emit_alloca!(basic_type, "__temp_synthetic_");
                 let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type);
                 let len = backend_type.size_of().unwrap().into();
-                build_memcpy!(env.builder, env.module, slot, $addr, len, $volatile).unwrap();
+                build_memcpy!(slot, $addr, len, $volatile).unwrap();
                 env.stack.push(($type, slot.into()));
             }
             else
@@ -915,7 +920,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     if $val.is_pointer_value() // already assigned to global const, load straight form its pointer
                     {
-                        build_memcpy!(env.builder, env.module, $slot, $val, len, $volatile).unwrap();
+                        build_memcpy!($slot, $val, len, $volatile).unwrap();
                     }
                     else
                     {
@@ -926,12 +931,12 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         global.set_linkage(inkwell::module::Linkage::Private);
                         
                         let val = global.as_pointer_value();
-                        build_memcpy!(env.builder, env.module, $slot, val, len, $volatile).unwrap();
+                        build_memcpy!($slot, val, len, $volatile).unwrap();
                     }
                 }
                 else
                 {
-                    build_memcpy!(env.builder, env.module, $slot, $val, len, $volatile).unwrap();
+                    build_memcpy!($slot, $val, len, $volatile).unwrap();
                 }
             }
             // FIXME maybe always do this if the store is volatile...?
@@ -1010,7 +1015,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     {
                         let return_backend_type = get_backend_type_sized(env.backend_types, env.types, return_type);
                         let len = return_backend_type.size_of().unwrap().into();
-                        build_memcpy!(env.builder, env.module, *return_slot, *val, len, false).unwrap();
+                        build_memcpy!(*return_slot, *val, len, false).unwrap();
                         
                         env.builder.build_return(None).unwrap();
                     }
@@ -1890,7 +1895,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     let slot = emit_alloca!(right_basic_type, "");
                     let len = right_basic_type.size_of().unwrap().into();
-                    build_memcpy!(env.builder, env.module, slot, left_val, len, false).unwrap();
+                    build_memcpy!(slot, left_val, len, false).unwrap();
                     let res = env.builder.build_load(right_basic_type, slot, "").unwrap();
                     env.stack.push((right_type, res.into()));
                 }
@@ -2889,7 +2894,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                         let len = basic_type.size_of().unwrap().into();
                         
                         let val = func_val.get_nth_param(j as u32).unwrap();
-                        build_memcpy!(builder, module, slot, val, len, false).unwrap();
+                        build_memcpy_raw!(builder, module, slot, val, len, false).unwrap();
                         
                         if variables.contains_key(&var_name)
                         {
