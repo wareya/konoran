@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use inkwell::passes::PassBuilderOptions;
 use inkwell::types::*;
-use inkwell::values::{BasicValue, BasicMetadataValueEnum};
+use inkwell::values::{PointerValue, BasicValue, BasicMetadataValueEnum};
 use inkwell::targets::{Target, TargetMachine, TargetTriple, TargetData, CodeModel, RelocMode};
 
 use parser::ast::ASTNode;
@@ -801,35 +801,31 @@ fn check_struct_incomplete(env : &mut Environment, type_ : &mut Type)
         _ => {}
     }
 }
-macro_rules! build_memcpy_raw
+use inkwell::values::CallSiteValue;
+use inkwell::builder::BuilderError;
+fn build_memcpy_raw<'a>(builder : &inkwell::builder::Builder<'a>, module : &inkwell::module::Module<'a>, dst : PointerValue<'a>, src : PointerValue<'a>, len : BasicMetadataValueEnum<'a>, volatile : bool) -> Result<CallSiteValue<'a>, BuilderError>
 {
-    ($builder:expr, $module:expr, $dst:expr, $src:expr, $len:expr, $volatile:expr) =>
-    {{
-        let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcpy.p0.i64").unwrap();
-        let u64_type = $module.get_context().i64_type();
-        let i1_type = $module.get_context().bool_type();
-        let zero_bool = i1_type.const_int(0, true);
-        let one_bool = i1_type.const_int(1, true);
-        
-        let vol_bool = if $volatile { one_bool } else { zero_bool }.into();
-        let dst_type : PointerType = $dst.get_type().try_into().unwrap();
-        let src_type : PointerType = $src.get_type().try_into().unwrap();
+    let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcpy.p0.i64").unwrap();
+    let u64_type = module.get_context().i64_type();
+    
+    let vol_bool = module.get_context().bool_type().const_int(if volatile { 1 } else { 0 }, true).into();
+    let dst_type : PointerType = dst.get_type().try_into().unwrap();
+    let src_type : PointerType = src.get_type().try_into().unwrap();
+    if dst_type.get_address_space() != src_type.get_address_space()
+    {
         // TODO: maybe this cast should be done where the pointers are received instead?
-        if dst_type.get_address_space() != src_type.get_address_space()
-        {
-            let function = intrinsic.get_declaration(&$module, &[dst_type.into(), dst_type.into(), u64_type.into()]).unwrap();
-            let src = $builder.build_address_space_cast($src.try_into().unwrap(), dst_type, "").unwrap();
-            $builder.build_direct_call(function, &[$dst.into(), src.into(), $len, vol_bool], "")
-            //let function = intrinsic.get_declaration($module, &[src_type.into(), src_type.into(), u64_type.into()]).unwrap();
-            //let dst = $builder.build_address_space_cast($dst.try_into().unwrap(), src_type, "").unwrap();
-            //$builder.build_direct_call(function, &[dst.into(), $src.into(), $len, vol_bool], "")
-        }
-        else
-        {
-            let function = intrinsic.get_declaration(&$module, &[dst_type.into(), src_type.into(), u64_type.into()]).unwrap();
-            $builder.build_direct_call(function, &[$dst.into(), $src.into(), $len, vol_bool], "")
-        }
-    }}
+        let function = intrinsic.get_declaration(&module, &[dst_type.into(), dst_type.into(), u64_type.into()]).unwrap();
+        let src = builder.build_address_space_cast(src.try_into().unwrap(), dst_type, "").unwrap();
+        builder.build_direct_call(function, &[dst.into(), src.into(), len, vol_bool], "")
+        //let function = intrinsic.get_declaration(module, &[src_type.into(), src_type.into(), u64_type.into()]).unwrap();
+        //let dst = builder.build_address_space_cast(dst.try_into().unwrap(), src_type, "").unwrap();
+        //builder.build_direct_call(function, &[dst.into(), src.into(), len, vol_bool], "")
+    }
+    else
+    {
+        let function = intrinsic.get_declaration(&module, &[dst_type.into(), src_type.into(), u64_type.into()]).unwrap();
+        builder.build_direct_call(function, &[dst.into(), src.into(), len, vol_bool], "")
+    }
 }
 fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
 {
@@ -844,151 +840,128 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     let zero_bool = i1_type.const_int(0, true);
     let one_bool = i1_type.const_int(1, true);
     
-    macro_rules! panic_error
-    {
-        ($($t:tt)*) =>
-        {{
-            eprintln!("\x1b[91mError:\x1b[0m {}", format!($($t)*));
-            eprintln!("at line {}, column {}", node.line, node.position);
-            
-            let s = env.source_text[node.line-1].clone();
-            let ix = s.char_indices().map(|(p, _)| p).collect::<Vec<_>>();
-            let start = ix[node.position - 1];
-            let end = (start + node.span).min(s.len());
-            let a = &s[0..start];
-            let b = &s[start..end];
-            let c = &s[end..s.len()];
-            
-            eprintln!("{}\x1b[96m{}\x1b[0m{}", a, b, c);
-            
-            for _ in 0..node.position-1
-            {
-                eprint!("\x1b[93m-");
-            }
-            eprintln!("^\x1b[0m");
-            panic!($($t)*);
-        }};
-    }
+    macro_rules! panic_error { ($($t:tt)*) =>
+    {{
+        eprintln!("\x1b[91mError:\x1b[0m {}", format!($($t)*));
+        eprintln!("at line {}, column {}", node.line, node.position);
+        
+        let s = env.source_text[node.line-1].clone();
+        let ix = s.char_indices().map(|(p, _)| p).collect::<Vec<_>>();
+        let start = ix[node.position - 1];
+        let end = (start + node.span).min(s.len());
+        
+        eprintln!("{}\x1b[96m{}\x1b[0m{}", &s[0..start], &s[start..end], &s[end..s.len()]);
+        
+        for _ in 0..node.position-1
+        {
+            eprint!("\x1b[93m-");
+        }
+        eprintln!("^\x1b[0m");
+        panic!($($t)*);
+    }} }
+    
     macro_rules! assert_error { ($expr:expr, $($t:tt)*) => {{ if !$expr { panic_error!($($t)*) } }} }
     
-    macro_rules! unwrap_or_panic
-    {
-        ($($t:tt)*) =>
-        {{
-            let x = ($($t)*);
-            let mut unwrappable = false;
-            let _ = x.as_ref().inspect(|_| unwrappable = true);
-            assert_error!(unwrappable, "{}", format!("{:?}", x));
-            x.unwrap()
-        }}
-    }
+    macro_rules! unwrap_or_panic { ($($t:tt)*) =>
+    {{
+        let x = ($($t)*);
+        let mut unwrappable = false;
+        let _ = x.as_ref().inspect(|_| unwrappable = true);
+        assert_error!(unwrappable, "{}", format!("{:?}", x));
+        x.unwrap()
+    }} }
     
-    macro_rules! build_memcpy
-    {
-        ($dst:expr, $src:expr, $len:expr, $volatile:expr) => { build_memcpy_raw!(&env.builder, &env.module, $dst, $src, $len, $volatile) }
-    }
+    macro_rules! build_memcpy { ($dst:expr, $src:expr, $len:expr, $volatile:expr) => { build_memcpy_raw(env.builder, env.module, $dst, $src, $len, $volatile) } }
     
-    macro_rules! emit_alloca
-    {
-        ($type:expr, $name:expr) =>
-        {{
-            // get_insert_block store current block
-            let block = env.builder.get_insert_block().unwrap();
-            // position_at_end to entry block
-            env.builder.position_at_end(env.entry_block);
-            // insert alloca
-            let slot = env.builder.build_alloca($type, $name).unwrap();
-            // jump back
-            env.builder.position_at_end(block);
+    macro_rules! emit_alloca { ($type:expr, $name:expr) =>
+    {{
+        // get_insert_block store current block
+        let block = env.builder.get_insert_block().unwrap();
+        // position_at_end to entry block
+        env.builder.position_at_end(env.entry_block);
+        // insert alloca
+        let slot = env.builder.build_alloca($type, $name).unwrap();
+        // jump back
+        env.builder.position_at_end(block);
+        
+        slot
+    }} }
+    
+    macro_rules! push_val_or_ptr { ($type:expr, $addr:expr, $volatile:expr) =>
+    {{
+        let basic_type = get_backend_type_sized(env.backend_types, env.types, &$type);
+        if want_pointer == WantPointer::Real
+        {
+            env.stack.push(($type.to_ptr($volatile), $addr.into()));
+        }
+        else if want_pointer == WantPointer::Virtual
+        {
+            env.stack.push(($type.to_vptr($volatile), $addr.into()));
+        }
+        else if $type.is_composite() && !env.options.contains_key("bypass_agg_memcpy")
+        {
+            let slot = emit_alloca!(basic_type, "__temp_synthetic_");
+            let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type);
+            let len = backend_type.size_of().unwrap().into();
+            build_memcpy!(slot, $addr, len, $volatile).unwrap();
+            env.stack.push(($type, slot.into()));
+        }
+        else
+        {
+            let val = env.builder.build_load(basic_type, $addr, "").unwrap();
+            val.as_instruction_value().unwrap().set_volatile($volatile).unwrap();
+            env.stack.push(($type.clone(), val));
+        }
+    }} }
+    macro_rules! store_or_memcpy { ($type_var:expr, $slot:expr, $type_val:expr, $val:expr, $volatile:expr) =>
+    {{
+        if $type_val.is_composite() && !env.options.contains_key("bypass_agg_memcpy")
+        {
+            assert!($type_var == $type_val);
+            let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type_var);
+            let len = backend_type.size_of().unwrap().into();
             
-            slot
-        }}
-    }
-    
-    macro_rules! push_val_or_ptr
-    {
-        ($type:expr, $addr:expr, $volatile:expr) =>
-        {{
-            let basic_type = get_backend_type_sized(env.backend_types, env.types, &$type);
-            if want_pointer == WantPointer::Real
+            if val_is_const(true, $val)
             {
-                env.stack.push(($type.to_ptr($volatile), $addr.into()));
-            }
-            else if want_pointer == WantPointer::Virtual
-            {
-                env.stack.push(($type.to_vptr($volatile), $addr.into()));
-            }
-            else if $type.is_composite() && !env.options.contains_key("bypass_agg_memcpy")
-            {
-                let slot = emit_alloca!(basic_type, "__temp_synthetic_");
-                let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type);
-                let len = backend_type.size_of().unwrap().into();
-                build_memcpy!(slot, $addr, len, $volatile).unwrap();
-                env.stack.push(($type, slot.into()));
-            }
-            else
-            {
-                let val = env.builder.build_load(basic_type, $addr, "").unwrap();
-                val.as_instruction_value().unwrap().set_volatile($volatile).unwrap();
-                env.stack.push(($type.clone(), val));
-            }
-        }}
-    }
-    macro_rules! store_or_memcpy
-    {
-        ($type_var:expr, $slot:expr, $type_val:expr, $val:expr, $volatile:expr) =>
-        {{
-            if $type_val.is_composite() && !env.options.contains_key("bypass_agg_memcpy")
-            {
-                assert!($type_var == $type_val);
-                let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type_var);
-                let len = backend_type.size_of().unwrap().into();
-                
-                if val_is_const(true, $val)
+                if $val.is_pointer_value() // already assigned to global const, load straight form its pointer
                 {
-                    if $val.is_pointer_value() // already assigned to global const, load straight form its pointer
-                    {
-                        build_memcpy!($slot, $val, len, $volatile).unwrap();
-                    }
-                    else
-                    {
-                        let global = env.module.add_global(backend_type, Some(inkwell::AddressSpace::default()), "");
-                        global.set_constant(true);
-                        global.set_initializer(&$val);
-                        
-                        global.set_linkage(inkwell::module::Linkage::Private);
-                        
-                        let val = global.as_pointer_value();
-                        build_memcpy!($slot, val, len, $volatile).unwrap();
-                    }
+                    build_memcpy!($slot, $val.into_pointer_value(), len, $volatile).unwrap();
                 }
                 else
                 {
-                    build_memcpy!($slot, $val, len, $volatile).unwrap();
+                    let global = env.module.add_global(backend_type, Some(inkwell::AddressSpace::default()), "");
+                    global.set_constant(true);
+                    global.set_initializer(&$val);
+                    
+                    global.set_linkage(inkwell::module::Linkage::Private);
+                    
+                    let val = global.as_pointer_value();
+                    build_memcpy!($slot, val, len, $volatile).unwrap();
                 }
             }
-            // FIXME maybe always do this if the store is volatile...?
             else
             {
-                let store = env.builder.build_store($slot, $val).unwrap();
-                store.set_volatile($volatile).unwrap();
+                build_memcpy!($slot, $val.into_pointer_value(), len, $volatile).unwrap();
             }
-        }}
-    }
+        }
+        // FIXME maybe always do this if the store is volatile...?
+        else
+        {
+            let store = env.builder.build_store($slot, $val).unwrap();
+            store.set_volatile($volatile).unwrap();
+        }
+    }} }
     
-    macro_rules! make_anonymous_const_global
-    {
-        ($initializer:expr) =>
-        {{
-            let global = env.module.add_global($initializer.get_type(), Some(inkwell::AddressSpace::default()), "");
-            global.set_constant(true);
-            global.set_initializer(&$initializer);
-            global.set_linkage(inkwell::module::Linkage::Private);
-            env.anon_globals.insert(global.as_pointer_value(), $initializer.into());
-            
-            global
-        }}
-    }
+    macro_rules! make_anonymous_const_global { ($initializer:expr) =>
+    {{
+        let global = env.module.add_global($initializer.get_type(), Some(inkwell::AddressSpace::default()), "");
+        global.set_constant(true);
+        global.set_initializer(&$initializer);
+        global.set_linkage(inkwell::module::Linkage::Private);
+        env.anon_globals.insert(global.as_pointer_value(), $initializer.into());
+        
+        global
+    }} }
     
     if node.is_parent()
     {
@@ -1040,7 +1013,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     {
                         let return_backend_type = get_backend_type_sized(env.backend_types, env.types, return_type);
                         let len = return_backend_type.size_of().unwrap().into();
-                        build_memcpy!(*return_slot, *val, len, false).unwrap();
+                        build_memcpy!(*return_slot, val.into_pointer_value(), len, false).unwrap();
                         
                         env.builder.build_return(None).unwrap();
                     }
@@ -1981,7 +1954,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     {
                         let slot = emit_alloca!(right_basic_type, "");
                         let len = right_basic_type.size_of().unwrap().into();
-                        build_memcpy!(slot, left_val, len, false).unwrap();
+                        build_memcpy!(slot, left_val.into_pointer_value(), len, false).unwrap();
                         push_val_or_ptr!(right_type, slot, false);
                     }
                 }
@@ -1990,7 +1963,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     let slot = emit_alloca!(right_basic_type, "");
                     let len = right_basic_type.size_of().unwrap().into();
-                    build_memcpy!(slot, left_val, len, false).unwrap();
+                    build_memcpy!(slot, left_val.into_pointer_value(), len, false).unwrap();
                     push_val_or_ptr!(right_type, slot, false);
                 }
                 // primitive to composite
@@ -3132,8 +3105,8 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                         let slot = builder.build_alloca(basic_type, &var_name).unwrap();
                         let len = basic_type.size_of().unwrap().into();
                         
-                        let val = func_val.get_nth_param(j as u32).unwrap();
-                        build_memcpy_raw!(builder, module, slot, val, len, false).unwrap();
+                        let val = func_val.get_nth_param(j as u32).unwrap().try_into().unwrap();
+                        build_memcpy_raw(&builder, &module, slot, val, len, false).unwrap();
                         
                         if variables.contains_key(&var_name)
                         {
@@ -3314,25 +3287,22 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
         
         let executor = executor.unwrap();
         
-        macro_rules! get_func
-        {
-            ($name:expr, $T:ty) =>
-            {{
-                let dec = func_decs.get(&$name.to_string());
-                if dec.is_none()
-                {
-                    panic!("error: no `{}` function", $name);
-                }
-                let dec = dec.unwrap();
-                let type_string = dec.1.to_string_rusttype();
-                
-                let want_type_string = std::any::type_name::<$T>(); // FIXME: not guaranteed to be stable across rust versions
-                assert!(want_type_string == type_string, "types do not match:\n{}\n{}\n", want_type_string, type_string);
-                assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
-                
-                executor.get_function::<$T>(&$name).unwrap()
-            }}
-        }
+        macro_rules! get_func { ($name:expr, $T:ty) =>
+        {{
+            let dec = func_decs.get(&$name.to_string());
+            if dec.is_none()
+            {
+                panic!("error: no `{}` function", $name);
+            }
+            let dec = dec.unwrap();
+            let type_string = dec.1.to_string_rusttype();
+            
+            let want_type_string = std::any::type_name::<$T>(); // FIXME: not guaranteed to be stable across rust versions
+            assert!(want_type_string == type_string, "types do not match:\n{}\n{}\n", want_type_string, type_string);
+            assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
+            
+            executor.get_function::<$T>(&$name).unwrap()
+        }} }
         
         executor.run_static_constructors();
         
