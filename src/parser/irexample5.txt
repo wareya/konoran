@@ -13,7 +13,8 @@ struct Vector3Holder
 void main()
 {
     f64 myfloat = 12953.94193f64;
-    //Vector3Holder holder = Vector3Holder { Vector3 { 1.52938f64 * myfloat, 0.0f64, 0.0f64 } };
+    Vector3Holder holder2 = Vector3Holder { Vector3 { 1.52938f64 * myfloat, 0.0f64, 0.0f64 } };
+    print_float(holder2.vec.x);
     array(Vector3, 1) holder = [ Vector3 { 1.52938f64 * myfloat, 0.0f64, 0.0f64 } ];
     print_float(holder[0i64].x);
     
