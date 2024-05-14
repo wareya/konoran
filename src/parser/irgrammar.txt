@@ -81,6 +81,10 @@ $rhunexpr$
 $unary$
 $lvar_name$
 
+ternary: HIDELITERALS
+( $expr$ ? $expr$ : $expr$ )
+( $expr$ ? : $expr$ )
+
 cast: HIDELITERALS
 ( $expr$ ) as $type$
 
@@ -108,6 +112,7 @@ constexpr $expr$
 supersimplexpr: SIMPLIFY
 $constexpr$
 $sizeof$
+$ternary$
 $cast$
 $unsafe_cast$
 $bitcast$
@@ -124,6 +129,7 @@ simplexpr: SIMPLIFY
 $constexpr$
 $sizeof$
 $intrinsic$
+$ternary$
 $cast$
 $unsafe_cast$
 $bitcast$
@@ -183,8 +189,8 @@ or
 ||
 
 binop_1:
-|
 &
+|
 ^
 
 binop_2:

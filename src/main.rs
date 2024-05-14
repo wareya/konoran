@@ -33,13 +33,11 @@ use inkwell_helpers::*;
 
 TODO list:
 
-high:
-- ternary operator
-
 low:
-- standard io functions
+- standard text input function
 - decay_to_ptr $expr$ for arrays (what C does automatically, but manually) (currently done by manually casting)
 - float operation intrisics (sin/cos/tan, floor/ceil/round, exp/log/pow)
+- bit rotate intrinsics
 
 maybe:
 - varargs in declarations (not definitions) (for printf mainly)
@@ -1844,7 +1842,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 else
                 {
-                    panic_error!("error: tried to branch on non-integer expression");
+                    panic_error!("error: tried to branch on non-integer/non-pointer expression");
                 }
             }
             "sizeof" =>
@@ -2160,6 +2158,59 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     panic_error!("unsupported cast from type {} to type {}", left_type.to_string(), right_type.to_string());
                 }
+            }
+            "ternary" =>
+            {
+                let ((type_a, val_a), (type_b, val_b), (type_c, val_c)) = if node.child_count().unwrap() == 3
+                {
+                    compile(env, node.child(0).unwrap(), WantPointer::None);
+                    let a = env.stack.pop().unwrap();
+                    compile(env, node.child(1).unwrap(), WantPointer::None);
+                    let b = env.stack.pop().unwrap();
+                    compile(env, node.child(2).unwrap(), WantPointer::None);
+                    let c = env.stack.pop().unwrap();
+                    (a, b, c)
+                }
+                else
+                {
+                    compile(env, node.child(0).unwrap(), WantPointer::None);
+                    let a = env.stack.pop().unwrap();
+                    compile(env, node.child(1).unwrap(), WantPointer::None);
+                    let c = env.stack.pop().unwrap();
+                    (a.clone(), a, c)
+                };
+                
+                if type_b != type_c
+                {
+                    panic_error!("middle and right expressions of ternary operator must be exactly the same type");
+                }
+                
+                let comp_val = match type_a.name.as_str()
+                {
+                    "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" =>
+                    {
+                        let backend_type = get_backend_type(env.backend_types, env.types, &type_a);
+                        if let (Ok(type_a), Ok(val_a)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val_a))
+                        {
+                            let zero = type_a.const_int(0, true);
+                            let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, val_a, zero, "").unwrap().into();
+                            env.builder.build_int_cast_sign_flag(int_val, u8_type, false, "").unwrap()
+                        }
+                        else
+                        {
+                            panic_error!("internal error: condition not an integer in ternary operator");
+                        }
+                    }
+                    "ptr" => 
+                    {
+                        let res = env.builder.build_is_not_null(inkwell::values::PointerValue::try_from(val_a).unwrap(), "").unwrap();
+                        env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap()
+                    }
+                    _ => panic_error!("error: tried to use ternary with non-integer/non-pointer condition expression"),
+                };
+                
+                let res = env.builder.build_select(comp_val, val_b, val_c, "").unwrap();
+                env.stack.push((type_b.clone(), res));
             }
             text => 
             {
