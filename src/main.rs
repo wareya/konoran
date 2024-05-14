@@ -34,7 +34,6 @@ use inkwell_helpers::*;
 TODO list:
 
 high:
-- bit shift operators
 - ternary operator
 
 low:
@@ -207,6 +206,17 @@ impl Type
             "u16" | "i16" => 2,
             "u32" | "i32" => 4,
             "u64" | "i64" => 8,
+            _ => panic!("internal error: tried to get the size of a non-primitive-int type")
+        }
+    }
+    fn to_signed(&self) -> Type
+    {
+        match self.name.as_str()
+        {
+            "u8"  => Type { name : "i8" .to_string(), data : TypeData::Primitive },
+            "u16" => Type { name : "i16".to_string(), data : TypeData::Primitive },
+            "u32" => Type { name : "i32".to_string(), data : TypeData::Primitive },
+            "u64" => Type { name : "i64".to_string(), data : TypeData::Primitive },
             _ => panic!("internal error: tried to get the size of a non-primitive-int type")
         }
     }
@@ -768,7 +778,6 @@ fn check_struct_incomplete(env : &mut Environment, type_ : &mut Type)
         TypeData::Pointer(inner_type, _) => check_struct_incomplete(env, &mut inner_type.borrow_mut()),
         _ => {}
     }
-    
 }
 macro_rules! build_memcpy_raw
 {
@@ -1721,7 +1730,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         {
                             match (op.as_str(), want_pointer)
                             {
-                                ("!", _) =>
+                                ("!", _) | ("not", _) =>
                                 {
                                     let res = env.builder.build_is_null(inkwell::values::PointerValue::try_from(val).unwrap(), "").unwrap();
                                     let res = env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap();
@@ -1772,7 +1781,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                                 "+" => val,
                                 "-" => env.builder.build_int_neg(val.into_int_value(), "").unwrap().into(),
                                 "~" => env.builder.build_not(val.into_int_value(), "").unwrap().into(),
-                                "!" =>
+                                "!" | "not" =>
                                 {
                                     let backend_type = get_backend_type(env.backend_types, env.types, &type_);
                                     if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
@@ -2159,10 +2168,24 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     compile(env, node.child(0).unwrap(), WantPointer::None);
                     compile(env, node.child(2).unwrap(), WantPointer::None);
                     let op = &node.child(1).unwrap().child(0).unwrap().text;
-                    let (right_type, right_val)  = env.stack.pop().unwrap();
-                    let (left_type , left_val )  = env.stack.pop().unwrap();
+                    let (mut right_type, right_val)  = env.stack.pop().unwrap();
+                    let (    left_type , left_val )  = env.stack.pop().unwrap();
                     
-                    let is_u = left_type.name.starts_with("u");
+                    // allow shifting signed by unsigned
+                    // (makes type check always pass; semantics are the same)
+                    if (op == ">>" || op == "<<" || op == "shl_unsafe" || op == "shr_unsafe") && left_type.is_int_signed()
+                    {
+                        if right_type.is_int_unsigned()
+                        {
+                            right_type = right_type.to_signed();
+                        }
+                        else
+                        {
+                            panic_error!("cannot bitshift with a right-hand type of signed int")
+                        }
+                    }
+                    
+                    let is_u = left_type.is_int_unsigned();
                     
                     if left_type.is_pointer() && right_type.is_int()
                     {
@@ -2286,13 +2309,51 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                                         }.unwrap();
                                         env.stack.push((left_type.clone(), res.into()));
                                     }
-                                    "+" | "-" | "*" | "div_unsafe" | "rem_unsafe" =>
+                                    "+" | "-" | "*" | "div_unsafe" | "rem_unsafe" | "<<" | ">>" | "shl_unsafe" | "shr_unsafe" =>
                                     {
                                         let res = match op.as_str()
                                         {
-                                            "+" => env.builder.build_int_add(left_val, right_val, ""),
-                                            "-" => env.builder.build_int_sub(left_val, right_val, ""),
-                                            "*" => env.builder.build_int_mul(left_val, right_val, ""),
+                                            "+"  => env.builder.build_int_add(left_val, right_val, ""),
+                                            "-"  => env.builder.build_int_sub(left_val, right_val, ""),
+                                            "*"  => env.builder.build_int_mul(left_val, right_val, ""),
+                                            "<<" =>
+                                            {
+                                                let zero = left_val.get_type().const_int(0, true);
+                                                let max_shift = right_val.get_type().const_int(left_type.size() as u64*8 - 1, true);
+                                                
+                                                let op_res = env.builder.build_left_shift(left_val, right_val, "").unwrap();
+                                                
+                                                // if shifted value would be poison (i.e. all bits would be shifted out)
+                                                // return zero instead of shifted value
+                                                let comp_val = env.builder.build_int_compare(inkwell::IntPredicate::UGT, right_val, max_shift, "").unwrap();
+                                                env.builder.build_select(comp_val, zero, op_res, "").map(|x| x.try_into().unwrap())
+                                            }
+                                            ">>" =>
+                                            {
+                                                let max_shift = right_val.get_type().const_int(left_type.size() as u64*8 - 1, true);
+                                                
+                                                let op_res = match is_u
+                                                {
+                                                    true => env.builder.build_right_shift(left_val, right_val, false, ""),
+                                                    false => env.builder.build_right_shift(left_val, right_val, true, ""),
+                                                }.unwrap();
+                                                let alt_op_res = match is_u
+                                                {
+                                                    true => env.builder.build_right_shift(left_val, max_shift, false, ""),
+                                                    false => env.builder.build_right_shift(left_val, max_shift, true, ""),
+                                                }.unwrap();
+                                                
+                                                // if shifted value would be poison (i.e. all bits would be shifted out)
+                                                // then return maximally-shifted value (e.g. 7, 15, 31, 63 bit shift) instead of actual shifted value
+                                                let comp_val = env.builder.build_int_compare(inkwell::IntPredicate::UGT, right_val, max_shift, "").unwrap();
+                                                env.builder.build_select(comp_val, alt_op_res, op_res, "").map(|x| x.try_into().unwrap())
+                                            }
+                                            "shl_unsafe" => env.builder.build_left_shift(left_val, right_val, ""),
+                                            "shr_unsafe" => match is_u
+                                            {
+                                                true => env.builder.build_right_shift(left_val, right_val, false, ""),
+                                                false => env.builder.build_right_shift(left_val, right_val, true, ""),
+                                            }
                                             "div_unsafe" => match is_u
                                             {
                                                 true => env.builder.build_int_unsigned_div(left_val, right_val, ""),

@@ -17,5 +17,17 @@ void main()
     array(Vector3, 1) holder = [ Vector3 { 1.52938f64 * myfloat, 0.0f64, 0.0f64 } ];
     print_float(holder[0i64].x);
     
+    print_float((194u64 >> 4u64) as f64);
+    print_float((-194i64 >> 4u64) as f64);
+    print_float((-1i64 >> 4u64) as f64);
+    print_float((-1i64 >> 400u64) as f64);
+    print_float((-1i64 >> 63u64) as f64);
+    print_float((-1i64 >> 64u64) as f64);
+    print_float((-1i64 >> 65u64) as f64);
+    print_float((-1i64 shr_unsafe 400u64) as f64);
+    print_float((-1i64 shr_unsafe 63u64) as f64);
+    print_float((-1i64 shr_unsafe 64u64) as f64);
+    print_float((-1i64 shr_unsafe 65u64) as f64);
+    
     return;
 }

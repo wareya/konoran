@@ -153,7 +153,10 @@ binexpr_3: SIMPLIFY LEFTBINEXPR 3
 $binexpr_4$ >>? $binop_3$ $binexpr_3$
 
 binexpr_4: SIMPLIFY LEFTBINEXPR 4
-$lhunop$ >>? $binop_4$ $binexpr_4$
+$binexpr_5$ >>? $binop_4$ $binexpr_4$
+
+binexpr_5: SIMPLIFY LEFTBINEXPR 5
+$lhunop$ >>? $binop_5$ $binexpr_5$
 
 unary:
 $unop$ $lhunop$
@@ -164,6 +167,7 @@ $simplexpr$
 
 
 unop:
+not
 !
 -
 +
@@ -192,10 +196,16 @@ binop_2:
 <
 
 binop_3:
+<<
+>>
+shl_unsafe
+shr_unsafe
+
+binop_4:
 +
 -
 
-binop_4:
+binop_5:
 *
 /
 div_unsafe
