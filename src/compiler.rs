@@ -761,7 +761,7 @@ struct Environment<'a, 'b, 'c, 'e, 'g>
     context        : &'c inkwell::context::Context,
     module         : &'a inkwell::module::Module<'c>,
     stack          : Vec<(Type, inkwell::values::BasicValueEnum<'c>)>,
-    variables      : BTreeMap<String, (Type, inkwell::values::PointerValue<'c>)>,
+    variables      : Vec<BTreeMap<String, (Type, inkwell::values::PointerValue<'c>)>>,
     constants      : BTreeMap<String, (Type, inkwell::values::BasicValueEnum<'c>)>,
     builder        : &'b inkwell::builder::Builder<'c>,
     func_decs      : &'a BTreeMap<String, (inkwell::values::FunctionValue<'c>, FunctionSig)>,
@@ -997,6 +997,22 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
         parse_type(&env.types, &type_ast)
     }} }
     
+    macro_rules! find_variable { ($name:expr) =>
+    {{
+        let mut var = None;
+        for frame in env.variables.iter().rev()
+        {
+            if frame.contains_key($name)
+            {
+                let (mut type_, slot) = frame[$name].clone();
+                check_struct_incomplete(env, &mut type_);
+                var = Some((type_, slot));
+                break;
+            }
+        }
+        var
+    }} }
+    
     if node.is_parent()
     {
         if env.just_returned
@@ -1020,16 +1036,29 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     panic_error!("error: functions must explicitly return, even if their return type is void");
                 }
             }
-            "statementlist" | "statement" | "instruction" =>
+            "statementlist" =>
+            {
+                env.variables.push(BTreeMap::new());
                 for child in node.get_children().unwrap()
                 {
                     compile(env, child, WantPointer::None);
                 }
+                env.variables.pop();
+            }
+            "statement" | "instruction" =>
+            {
+                for child in node.get_children().unwrap()
+                {
+                    compile(env, child, WantPointer::None);
+                }
+            }
             "parenexpr" | "arrayindex" =>
+            {
                 for child in node.get_children().unwrap()
                 {
                     compile(env, child, want_pointer);
                 }
+            }
             "unusedcomma" => {},
             "return" =>
             {
@@ -1063,26 +1092,41 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 env.just_returned = true;
             }
-            "declaration" => { }
-            "fulldeclaration" =>
+            "declaration" | "fulldeclaration" =>
             {
-                let name = &node.child(1).unwrap().child(0).unwrap().text;
-                assert_error!(env.variables.contains_key(name), "internal error: failed to find variable in full declaration");
-                let (mut type_var, slot) = env.variables[name].clone();
+                // get type
+                let mut type_var = parse_type(env.types, node.child(0).unwrap()).unwrap();
                 check_struct_incomplete(env, &mut type_var);
+                let basic_type = get_backend_type_sized(env.backend_types, env.types, &type_var);
                 
-                compile(env, node.child(2).unwrap(), WantPointer::None);
-                let (type_val, val) = unwrap_or_panic!(env.stack.pop());
+                // create slot
+                let name = &node.child(1).unwrap().child(0).unwrap().text;
+                assert_error!(!env.variables.last().unwrap().contains_key(name), "error: redeclared variable {}", name);
+                let slot = emit_alloca!(basic_type, name);
                 
-                assert_error!(type_val == type_var, "declaration type mismatch, {:?} vs {:?}, line {}", type_val, type_var, node.line);
-                
-                store_or_memcpy!(type_var, slot, type_val, val, false);
+                if node.text.as_str() == "fulldeclaration"
+                {
+                    // compile initializer and assign into variable, then register variable
+                    compile(env, node.child(2).unwrap(), WantPointer::None);
+                    let (type_val, val) = unwrap_or_panic!(env.stack.pop());
+                    
+                    assert_error!(type_val == type_var, "declaration type mismatch, {:?} vs {:?}, line {}", type_val, type_var, node.line);
+                    
+                    store_or_memcpy!(type_var, slot, type_val, val, false);
+                    
+                    env.variables.last_mut().unwrap().insert(name.clone(), (type_var.clone(), slot));
+                }
+                else
+                {
+                    // register variable
+                    env.variables.last_mut().unwrap().insert(name.clone(), (type_var.clone(), slot));
+                }
             }
             "constexpr_fulldeclaration" =>
             {
+                let type_var = parse_type(env.types, node.child(0).unwrap()).unwrap();
                 let name = &node.child(1).unwrap().child(0).unwrap().text;
                 assert_error!(!env.constants.contains_key(name), "error: tried to redeclare constant {}", name);
-                let type_var = parse_type(env.types, node.child(0).unwrap()).unwrap();
                 
                 compile(env, node.child(2).unwrap(), want_pointer);
                 let (type_val, val) = unwrap_or_panic!(env.stack.pop());
@@ -1123,11 +1167,9 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 assert!(want_pointer != WantPointer::None);
                 
                 let name = &node.child(0).unwrap().child(0).unwrap().text;
-                if env.variables.contains_key(name)
+                if let Some((mut type_, slot)) = find_variable!(name).clone()
                 {
-                    let (mut type_, slot) = env.variables[name].clone();
                     check_struct_incomplete(env, &mut type_);
-                    
                     push_val_or_ptr!(type_, slot, false);
                 }
                 else if let Some((type_, val, _)) = env.global_decs.get(name)
@@ -1146,11 +1188,9 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "rvarname" =>
             {
                 let name = &node.child(0).unwrap().text;
-                if env.variables.contains_key(name)
+                if let Some((mut type_, slot)) = find_variable!(name).clone()
                 {
-                    let (mut type_, slot) = env.variables[name].clone();
                     check_struct_incomplete(env, &mut type_);
-                    
                     push_val_or_ptr!(type_, slot, false);
                 }
                 else if env.constants.contains_key(name)
@@ -3001,7 +3041,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
+                        let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![BTreeMap::new(), BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -3077,7 +3117,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                     
                     let stack = Vec::new();
                     let blocks = HashMap::new();
-                    let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
+                    let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![BTreeMap::new(), BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
                     
                     compile(&mut env, &node, WantPointer::None);
                     let (type_val, val) = env.stack.pop().unwrap();
@@ -3132,10 +3172,9 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                 let builder = context.create_builder();
                 builder.position_at_end(entry_block);
                 
-                let mut variables = BTreeMap::new();
+                let mut arguments = BTreeMap::new();
                 
                 // declare and define arguments
-                let mut i = 0;
                 for (j, param) in function.args.iter().enumerate()
                 {
                     let var_type = param.0.clone();
@@ -3152,8 +3191,8 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                         let val = func_val.get_nth_param(j as u32).unwrap().try_into().unwrap();
                         build_memcpy_raw(&builder, &module, slot, val, len, false).unwrap();
                         
-                        assert!(!variables.contains_key(&var_name), "error: parameter {} redeclared", var_name);
-                        variables.insert(var_name, (var_type, slot));
+                        assert!(!arguments.contains_key(&var_name), "error: parameter {} redeclared", var_name);
+                        arguments.insert(var_name, (var_type, slot));
                     }
                     else
                     {
@@ -3162,42 +3201,10 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                         let val = func_val.get_nth_param(j as u32).unwrap();
                         builder.build_store(slot, val).unwrap();
                         
-                        assert!(!variables.contains_key(&var_name), "error: parameter {} redeclared", var_name);
-                        variables.insert(var_name, (var_type, slot));
+                        assert!(!arguments.contains_key(&var_name), "error: parameter {} redeclared", var_name);
+                        arguments.insert(var_name, (var_type, slot));
                     }
-                    
-                    i += 1;
                 }
-                
-                // TODO don't declare variables ahead of time, declare them on the go, and support variable scoping
-                // declare variables
-                function.body.visit(&mut |node : &ASTNode|
-                {
-                    if node.is_parent() && (node.text == "declaration" || node.text == "fulldeclaration")
-                    {
-                        let var_type = parse_type(&types, &node.child(0).unwrap()).unwrap();
-                        let var_name = node.child(1).unwrap().child(0).unwrap().text.clone();
-                        
-                        let basic_type = get_backend_type_sized(&mut backend_types, &types, &var_type);
-                        
-                        let slot = if let TypeData::Array(inner_type, size) = &var_type.data
-                        {
-                            let size = get_backend_type_sized(&mut backend_types, &types, types.get("u64").unwrap()).into_int_type().const_int(*size as u64, false);
-                            let inner_basic_type = get_backend_type_sized(&mut backend_types, &types, inner_type);
-                            builder.build_array_alloca(inner_basic_type, size, &var_name)
-                        }
-                        else
-                        {
-                            builder.build_alloca(basic_type, &var_name)
-                        }.unwrap();
-                        
-                        assert!(!variables.contains_key(&var_name), "error: variable {} redeclared", var_name);
-                        variables.insert(var_name, (var_type, slot));
-                        
-                        i += 1;
-                    }
-                    false
-                });
                 
                 // collect labels (blocks)
                 let mut blocks = HashMap::new();
@@ -3220,7 +3227,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                 }
                 
                 let stack = Vec::new();
-                let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables, constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, just_returned : false, options : env_options };
+                let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![arguments, BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, just_returned : false, options : env_options };
                 
                 let body_block = context.append_basic_block(func_val, "body");
                 builder.position_at_end(body_block);
