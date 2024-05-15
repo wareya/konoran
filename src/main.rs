@@ -1351,7 +1351,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         let index = u64_type.const_int(i as u64, false);
                         let bit = env.builder.build_int_truncate(val.into_int_value(), i1_type, "").unwrap();
                         vec_mask = env.builder.build_insert_element(vec_mask, bit, index, "").unwrap();
-                        val = env.builder.build_right_shift(val.into_int_value(), u64_type.const_int(1, false).into(), false, "").unwrap().into();
+                        val = env.builder.build_right_shift(val.into_int_value(), u64_type.const_int(1, false), false, "").unwrap().into();
                     }
                     forced_mask = Some(vec_mask);
                     stack_len_end = env.stack.len();
@@ -1437,7 +1437,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 else
                 {
-                    env.stack.push((funcsig.return_type.clone(), result.into()));
+                    env.stack.push((funcsig.return_type.clone(), result));
                 }
             }
             "intrinsic" =>
