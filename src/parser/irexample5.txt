@@ -9,6 +9,8 @@ struct Vector3Holder
 {
     Vector3 vec;
 }
+
+f64 fekf = 9152.0f64;
 void main()
 {
     f64 myfloat = 12953.94193f64;
@@ -75,5 +77,9 @@ void main()
     f64 buhuh = intrinsic_v 2 x f64 fadd_reduce(40000.0f64, [3.14f64, 10.005f64], 3u64);
     print_float(buhuh);
     
+    print_float(fekf);
+    fekf = 5913.14530f64;
+    print_float(fekf);
+
     return;
 }

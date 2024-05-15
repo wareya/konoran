@@ -1124,19 +1124,22 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
             "lvar_name" =>
             {
+                assert!(want_pointer != WantPointer::None);
+                
                 let name = &node.child(0).unwrap().child(0).unwrap().text;
                 if env.variables.contains_key(name)
                 {
                     let (mut type_, slot) = env.variables[name].clone();
                     check_struct_incomplete(env, &mut type_);
                     
-                    assert!(want_pointer != WantPointer::None);
-                    
                     push_val_or_ptr!(type_, slot, false);
                 }
-                else if env.global_decs.contains_key(name)
+                else if let Some((type_, val, _)) = env.global_decs.get(name)
                 {
-                    panic_error!("error: found global but not implemented yet");   
+                    let mut type_ = type_.clone();
+                    check_struct_incomplete(env, &mut type_);
+                    
+                    push_val_or_ptr!(type_, val.as_pointer_value(), false);
                 }
                 else
                 {
@@ -1425,7 +1428,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     let slot = emit_alloca!(backend_array_type, "");
                     env.builder.build_store(slot, array_val).unwrap();
                     
-                    // FIXME return type can be different
                     push_val_or_ptr!(rtype, slot, false);
                 }
                 else
