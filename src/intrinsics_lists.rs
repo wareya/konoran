@@ -30,11 +30,11 @@ pub (crate) fn get_vector_intrinsic_info(typename : &str, len : u32, funcname : 
     }.into_iter()
     .filter(|(name, _, _, _, _)| *name == funcname)
     .map(|(_, llvmname, funcsig, overloads, hasmask)|
-       (llvmname.replace("ST", &typename).replace("VT", &vtypename).to_string(),
-        funcsig .replace("ST", &typename).replace("VT", &vtypename).to_string(),
-        overloads.iter().map(|x| x.replace("ST", &typename).replace("VT", &vtypename)).collect::<Vec<_>>(),
+       (llvmname.replace("ST", typename).replace("VT", &vtypename).to_string(),
+        funcsig .replace("ST", typename).replace("VT", &vtypename).to_string(),
+        overloads.iter().map(|x| x.replace("ST", typename).replace("VT", &vtypename)).collect::<Vec<_>>(),
         hasmask
-       )).nth(0).unwrap()
+       )).next().unwrap()
 }
 pub (crate) fn get_basic_intrinsics() -> Vec<(String, String, String, Vec<&'static str>)>
 {

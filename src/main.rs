@@ -506,8 +506,6 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
             var_type = var_type.to_ptr(false);
         }
         let backend_type = get_backend_type_sized(backend_types, types, &var_type);
-        let backend_type = inkwell::types::BasicTypeEnum::try_from(backend_type)
-            .unwrap_or_else(|_| panic!("error: non-primitive type {} can't be used in function arguments or return types. use a `ptr({})` instead", var_type.name, var_type.name));
         params.push(backend_type.into());
     }
     
@@ -605,7 +603,7 @@ fn struct_check_recursive(types : &BTreeMap<String, Type>, root_type : &Type, ty
             {
                 panic!("internal error: struct type broken");
             }
-            struct_check_recursive(types, root_type, &complete_type);
+            struct_check_recursive(types, root_type, complete_type);
         }
         _ => {}
     }
@@ -822,13 +820,13 @@ fn build_memcpy_raw<'a>(builder : &inkwell::builder::Builder<'a>, module : &inkw
     let u64_type = module.get_context().i64_type();
     
     let vol_bool = module.get_context().bool_type().const_int(if volatile { 1 } else { 0 }, true).into();
-    let dst_type : PointerType = dst.get_type().try_into().unwrap();
-    let src_type : PointerType = src.get_type().try_into().unwrap();
+    let dst_type : PointerType = dst.get_type();
+    let src_type : PointerType = src.get_type();
     if dst_type.get_address_space() != src_type.get_address_space()
     {
         // TODO: maybe this cast should be done where the pointers are received instead?
-        let function = intrinsic.get_declaration(&module, &[dst_type.into(), dst_type.into(), u64_type.into()]).unwrap();
-        let src = builder.build_address_space_cast(src.try_into().unwrap(), dst_type, "").unwrap();
+        let function = intrinsic.get_declaration(module, &[dst_type.into(), dst_type.into(), u64_type.into()]).unwrap();
+        let src = builder.build_address_space_cast(src, dst_type, "").unwrap();
         builder.build_direct_call(function, &[dst.into(), src.into(), len, vol_bool], "")
         //let function = intrinsic.get_declaration(module, &[src_type.into(), src_type.into(), u64_type.into()]).unwrap();
         //let dst = builder.build_address_space_cast(dst.try_into().unwrap(), src_type, "").unwrap();
@@ -836,7 +834,7 @@ fn build_memcpy_raw<'a>(builder : &inkwell::builder::Builder<'a>, module : &inkw
     }
     else
     {
-        let function = intrinsic.get_declaration(&module, &[dst_type.into(), src_type.into(), u64_type.into()]).unwrap();
+        let function = intrinsic.get_declaration(module, &[dst_type.into(), src_type.into(), u64_type.into()]).unwrap();
         builder.build_direct_call(function, &[dst.into(), src.into(), len, vol_bool], "")
     }
 }
@@ -1251,7 +1249,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                             let mut slot = emit_alloca!(return_backend_type, "");
                             if slot.get_type().get_address_space() != inkwell::AddressSpace::default()
                             {
-                                slot = env.builder.build_address_space_cast(slot.try_into().unwrap(), ptr_type, "").unwrap().into();
+                                slot = env.builder.build_address_space_cast(slot, ptr_type, "").unwrap();
                             }
                             args.push(slot.into());
                             arg_types.push(funcsig.return_type.clone());
@@ -1293,7 +1291,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 assert_error!(inner_type.is_float() || inner_type.is_int(), "vector intrinsic type must float or int (refer: {:?})", inner_type);
                 
                 // get info
-                let (llvm_name, sigstring, overloads, has_mask) = get_vector_intrinsic_info(&inner_type.name, vec_len, &intrinsic_name);
+                let (llvm_name, sigstring, overloads, has_mask) = get_vector_intrinsic_info(&inner_type.name, vec_len, intrinsic_name);
                 
                 // get high-level signature
                 let funcsig = parse_type_string!(sigstring).unwrap().funcsig_info();
@@ -1306,10 +1304,10 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     let inner_type = t.inner_type();
                     //let len = t.array_len();
                     let val_type = get_backend_type_sized(env.backend_types, env.types, &inner_type);
-                    let vec_type = get_vec_type(val_type, vec_len as u32);
+                    let vec_type = get_vec_type(val_type, vec_len);
                     vec_type.into()
                 }).collect::<Vec<_>>();
-                let function = intrinsic.get_declaration(&env.module, &overload_args).unwrap();
+                let function = intrinsic.get_declaration(env.module, &overload_args).unwrap();
                 
                 let stack_len_start = env.stack.len();
                 for child in node.child(3).unwrap().get_children().unwrap()
@@ -1337,7 +1335,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     let mut vec_val = vec_type.get_poison();
                     for i in 0..count
                     {
-                        let index = u64_type.const_int(i as u64, false);
+                        let index = u64_type.const_int(i, false);
                         let element = env.builder.build_extract_value(val, i as u32, "").unwrap();
                         vec_val = env.builder.build_insert_element(vec_val, element, index, "").unwrap();
                     }
@@ -1369,7 +1367,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let mut array_val = backend_array_type.into_array_type().get_poison().into();
                 for i in 0..count
                 {
-                    let index = u64_type.const_int(i as u64, false);
+                    let index = u64_type.const_int(i, false);
                     let element = env.builder.build_extract_element(result.into_vector_value(), index, "").unwrap();
                     array_val = env.builder.build_insert_value(array_val, element, i as u32, "").unwrap();
                 }
@@ -1447,7 +1445,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             {
                 compile(env, node.child(0).unwrap(), want_pointer);
                 let (type_, val) = env.stack.pop().unwrap();
-                let res = build_freeze(env.builder, val.into());
+                let res = build_freeze(env.builder, val);
                 env.stack.push((type_, res));
             }
             "array_literal" =>
@@ -1630,7 +1628,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let val = match parts.1
                 {
                     "f32" => text.parse::<f32>().unwrap() as f64,
-                    "f64" => text.parse::<f64>().unwrap() as f64,
+                    "f64" => text.parse::<f64>().unwrap(),
                     _ => panic_error!("unknown float suffix pattern {}", parts.1)
                 };
                 let res = float_type.const_float(val);
@@ -1729,7 +1727,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     location = text.rfind("i");
                     signed = true;
                 }
-                assert_error!(!location.is_none(), "internal error: unknown integer type literal suffix");
+                assert_error!(location.is_some(), "internal error: unknown integer type literal suffix");
                 let location = location.unwrap();
                 let parts = text.split_at(location);
                 let text = parts.0;
@@ -2279,7 +2277,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         if let (Ok(type_a), Ok(val_a)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val_a))
                         {
                             let zero = type_a.const_int(0, true);
-                            let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, val_a, zero, "").unwrap().into();
+                            let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, val_a, zero, "").unwrap();
                             env.builder.build_int_cast_sign_flag(int_val, u8_type, false, "").unwrap()
                         }
                         else
@@ -2680,7 +2678,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
     let (triple, mut target_data, machine) = if let Some(triple_string) = settings.get("asm_triple")
     {
         inkwell::targets::Target::initialize_all(&config);
-        let mut triple = TargetTriple::create(&triple_string);
+        let mut triple = TargetTriple::create(triple_string);
         if triple_string == "native"
         {
             if settings.get("cpu").is_none()
@@ -2709,7 +2707,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
         }
         let triple = if let Some(triple_string) = settings.get("triple")
         {
-            TargetTriple::create(&triple_string)
+            TargetTriple::create(triple_string)
         }
         else
         {
