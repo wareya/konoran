@@ -20,6 +20,7 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::types::*;
 use inkwell::values::{PointerValue, BasicValue, BasicMetadataValueEnum};
 use inkwell::targets::{Target, TargetMachine, TargetTriple, TargetData, CodeModel, RelocMode};
+use inkwell::intrinsics::Intrinsic;
 
 use parser::ast::ASTNode;
 
@@ -28,6 +29,9 @@ use stdlib::*;
 
 mod inkwell_helpers;
 use inkwell_helpers::*;
+
+mod intrinsics_lists;
+use intrinsics_lists::*;
 
 /*
 
@@ -206,6 +210,14 @@ impl Type
             TypeData::Pointer(_, _) => true,
             TypeData::FuncPointer(_) => true,
             _ => false,
+        }
+    }
+    fn funcsig_info(&self) -> FunctionSig
+    {
+        match &self.data
+        {
+            TypeData::FuncPointer(data) => *data.clone(),
+            _ => panic!("internal error: tried to get funcsig info of non-funcsig type"),
         }
     }
     fn is_virtual_pointer(&self) -> bool
@@ -751,8 +763,9 @@ impl Program
     }
 }
 
-struct Environment<'a, 'b, 'c, 'e>
+struct Environment<'a, 'b, 'c, 'e, 'g>
 {
+    parser         : &'g mut parser::Parser,
     source_text    : &'e Vec<String>,
     context        : &'c inkwell::context::Context,
     module         : &'a inkwell::module::Module<'c>,
@@ -805,7 +818,7 @@ use inkwell::values::CallSiteValue;
 use inkwell::builder::BuilderError;
 fn build_memcpy_raw<'a>(builder : &inkwell::builder::Builder<'a>, module : &inkwell::module::Module<'a>, dst : PointerValue<'a>, src : PointerValue<'a>, len : BasicMetadataValueEnum<'a>, volatile : bool) -> Result<CallSiteValue<'a>, BuilderError>
 {
-    let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.memcpy.p0.i64").unwrap();
+    let intrinsic = Intrinsic::find("llvm.memcpy.p0.i64").unwrap();
     let u64_type = module.get_context().i64_type();
     
     let vol_bool = module.get_context().bool_type().const_int(if volatile { 1 } else { 0 }, true).into();
@@ -961,6 +974,13 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
         env.anon_globals.insert(global.as_pointer_value(), $initializer.into());
         
         global
+    }} }
+    
+    macro_rules! parse_type_string { ($string:expr) =>
+    {{
+        let tokens = env.parser.tokenize(&[$string.clone()], true).unwrap();
+        let type_ast = env.parser.parse_with_root_node_type(&tokens, &[$string.clone()], true, "type").unwrap().unwrap();
+        parse_type(&env.types, &type_ast)
     }} }
     
     if node.is_parent()
@@ -1264,63 +1284,58 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
             "intrinsic_v" =>
             {
-                let intrinsic_name = &node.child(0).unwrap().child(0).unwrap().text;
-                let llvm_name = format!("llvm.vp.{}", intrinsic_name);
-                let intrinsic = inkwell::intrinsics::Intrinsic::find(&llvm_name).unwrap_or_else(|| panic_error!("failed to find intrinsic {}", llvm_name));
+                let count : u64 = node.child(0).unwrap().child(0).unwrap().text.parse().unwrap();
+                let vec_len = count.next_power_of_two() as u32;
+                let inner_type = parse_type(env.types, node.child(1).unwrap()).unwrap();
+                let outer_type = inner_type.to_array(count as usize);
+                let intrinsic_name = &node.child(2).unwrap().child(0).unwrap().text;
+                
+                assert_error!(inner_type.is_float() || inner_type.is_int(), "vector intrinsic type must float or int (refer: {:?})", inner_type);
+                
+                // get info
+                let (llvm_name, sigstring, overloads, has_mask) = get_vector_intrinsic_info(&inner_type.name, vec_len, &intrinsic_name);
+                
+                // get high-level signature
+                let funcsig = parse_type_string!(sigstring).unwrap().funcsig_info();
+                
+                // get low-level reference
+                let intrinsic = Intrinsic::find(&llvm_name) .unwrap_or_else(|| panic_error!("failed to find intrinsic {}", llvm_name));
+                let overload_args = overloads.iter().map(|x|
+                {
+                    let t = parse_type_string!(x).unwrap();
+                    let inner_type = t.inner_type();
+                    //let len = t.array_len();
+                    let val_type = get_backend_type_sized(env.backend_types, env.types, &inner_type);
+                    let vec_type = get_vec_type(val_type, vec_len as u32);
+                    vec_type.into()
+                }).collect::<Vec<_>>();
+                let function = intrinsic.get_declaration(&env.module, &overload_args).unwrap();
+                
                 let stack_len_start = env.stack.len();
-                for child in node.child(1).unwrap().get_children().unwrap()
+                for child in node.child(3).unwrap().get_children().unwrap()
                 {
                     compile(env, child, WantPointer::Virtual);
                 }
                 let stack_len_end = env.stack.len();
                 
-                let num_args = match intrinsic_name.as_str()
-                {
-                    "fmul" => 2,
-                    "fadd" => 2,
-                    "fsub" => 2,
-                    "fdiv" => 2,
-                    "frem" => 2,
-                    "fneg" => 1,
-                    "fabs" => 1,
-                    "sqrt" => 1,
-                    "fma" => 3,
-                    "fmuladd" => 3,
-                    _ => panic_error!("error: tried to call non-existent intrinsic {}", intrinsic_name),
-                };
+                assert!(funcsig.args.len() == stack_len_end - stack_len_start, "incorrect number of arguments to function on line {}", node.line);
                 
-                assert!(num_args == stack_len_end - stack_len_start, "incorrect number of arguments to function on line {}", node.line);
-                
-                let last_arg_type : Type = unwrap_or_panic!(env.stack.last().unwrap().0.deref_vptr()).0;
-                assert_error!(last_arg_type.is_array() && last_arg_type.inner_type().is_float(),
-                    "all vector intrinsic arguments must be arrays with the same length and the same floating-point element type (refer: {:?})", last_arg_type);
-                let backend_array_type = get_backend_type_sized(env.backend_types, env.types, &last_arg_type);
-                let val_type = get_backend_type_sized(env.backend_types, env.types, &last_arg_type.inner_type());
-                let len = last_arg_type.array_len();
-                let vec_len = len.next_power_of_two() as u32;
-                let vec_len_val = u32_type.const_int(vec_len as u64, false).into();
-                let vec_type = val_type.into_float_type().vec_type(vec_len);
-                //let len_val = u32_type.const_int(len as u64, false).into();
-                
-                let function = intrinsic.get_declaration(&env.module, &[vec_type.into()]).unwrap();
-                
-                let mut vec_mask = i1_type.vec_type(vec_len).get_poison();
-                for i in 0..vec_len
-                {
-                    let index = u64_type.const_int(i as u64, false);
-                    let element = i1_type.const_int(if (i as usize) < len { 1 } else { 0 }, false);
-                    vec_mask = env.builder.build_insert_element(vec_mask, element, index, "").unwrap();
-                }
+                // copy arrays into vec
                 let mut arg_vals = Vec::new();
-                for _ in 0..num_args
+                for arg_type in funcsig.args.iter().rev()
                 {
                     let (type_, val) = env.stack.pop().unwrap();
-                    let val = env.builder.build_load(backend_array_type, val.into_pointer_value(), "").unwrap().into_array_value();
                     let type_ = unwrap_or_panic!(type_.deref_vptr()).0;
-                    assert_error!(type_ == last_arg_type,
-                        "all vector intrinsic arguments must be arrays with the same length and the same floating-point element type");
+                    assert_error!(type_.inner_type() == arg_type.inner_type() && type_.array_len() <= arg_type.array_len(),
+                        "vector intrinsic argument type mismatch; got {}, expected {}", type_.to_string(), arg_type.to_string());
+                    
+                    let backend_array_type = get_backend_type_sized(env.backend_types, env.types, &type_);
+                    let val_type = get_backend_type_sized(env.backend_types, env.types, &type_.inner_type());
+                    let vec_type = val_type.into_float_type().vec_type(vec_len);
+                    
+                    let val = env.builder.build_load(backend_array_type, val.into_pointer_value(), "").unwrap().into_array_value();
                     let mut vec_val = vec_type.get_poison();
-                    for i in 0..len
+                    for i in 0..count
                     {
                         let index = u64_type.const_int(i as u64, false);
                         let element = env.builder.build_extract_value(val, i as u32, "").unwrap();
@@ -1330,14 +1345,29 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 arg_vals.reverse();
                 
-                arg_vals.push(vec_mask.into());
+                if has_mask
+                {
+                    let mut vec_mask = i1_type.vec_type(vec_len).get_poison();
+                    for i in 0..vec_len
+                    {
+                        let index = u64_type.const_int(i as u64, false);
+                        let element = i1_type.const_int(if (i as u64) < count { 1 } else { 0 }, false);
+                        vec_mask = env.builder.build_insert_element(vec_mask, element, index, "").unwrap();
+                    }
+                    arg_vals.push(vec_mask.into());
+                }
+                
+                let vec_len_val = u32_type.const_int(vec_len as u64, false).into();
                 arg_vals.push(vec_len_val);
                 
                 let callval = env.builder.build_direct_call(function, &arg_vals, "").unwrap();
                 let result = callval.try_as_basic_value().left().unwrap();
                 
+                let backend_array_type = get_backend_type_sized(env.backend_types, env.types, &funcsig.return_type);
+                
+                // copy array out of vec
                 let mut array_val = backend_array_type.into_array_type().get_poison().into();
-                for i in 0..len
+                for i in 0..count
                 {
                     let index = u64_type.const_int(i as u64, false);
                     let element = env.builder.build_extract_element(result.into_vector_value(), index, "").unwrap();
@@ -1347,7 +1377,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let slot = emit_alloca!(backend_array_type, "");
                 env.builder.build_store(slot, array_val).unwrap();
                 
-                push_val_or_ptr!(last_arg_type.clone(), slot, false);
+                // FIXME return type can be different
+                push_val_or_ptr!(outer_type.clone(), slot, false);
             }
             "intrinsic" =>
             {
@@ -2112,7 +2143,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         }
                         else
                         {
-                            let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.fptoui.sat").unwrap();
+                            let intrinsic = Intrinsic::find("llvm.fptoui.sat").unwrap();
                             let function = intrinsic.get_declaration(env.module, &[target_type.into(), left_basic_type]).unwrap();
                             
                             let callval = env.builder.build_direct_call(function, &[left_val.into()], "").unwrap();
@@ -2159,7 +2190,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         }
                         else
                         {
-                            let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.fptosi.sat").unwrap();
+                            let intrinsic = Intrinsic::find("llvm.fptosi.sat").unwrap();
                             let function = intrinsic.get_declaration(env.module, &[target_type.into(), left_basic_type]).unwrap();
                             
                             let callval = env.builder.build_direct_call(function, &[left_val.into()], "").unwrap();
@@ -2308,7 +2339,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                                 }
                                 else
                                 {
-                                    let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.ptrmask").unwrap();
+                                    let intrinsic = Intrinsic::find("llvm.ptrmask").unwrap();
                                     let function = intrinsic.get_declaration(env.module, &[ptr_type.into(), env.ptr_int_type.into()]).unwrap();
                                     
                                     let callval = env.builder.build_direct_call(function, &[left_val.into(), right_val.into()], "").unwrap();
@@ -2758,72 +2789,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
             
             module.set_data_layout(&target_data.get_data_layout());
             
-            let mut intrinsic_imports = [
-                ("pow"         , "llvm.pow",     "funcptr(f64, (f64, f64))", vec!["f64"]),
-                ("pow_f32"     , "llvm.pow",     "funcptr(f32, (f32, f32))", vec!["f32"]),
-                ("fmuladd"     , "llvm.fmuladd", "funcptr(f64, (f64, f64, f64))", vec!["f64"]),
-                ("fmuladd_f32" , "llvm.fmuladd", "funcptr(f32, (f32, f32, f32))", vec!["f32"]),
-                ("powi"        , "llvm.powi",    "funcptr(f64, (f64, i32))", vec!["f64", "i32"]),
-                ("powi_f32"    , "llvm.powi",    "funcptr(f32, (f32, i32))", vec!["f32", "i32"]),
-                
-                ("rotl"        , "llvm.fshl",    "funcptr(u64, (u64, u64))", vec!["u64"]),
-                ("rotl_u32"    , "llvm.fshl",    "funcptr(u32, (u32, u32))", vec!["u32"]),
-                ("rotl_u16"    , "llvm.fshl",    "funcptr(u16, (u16, u16))", vec!["u16"]),
-                ("rotl_u8"     , "llvm.fshl",    "funcptr(u8, (u8, u8))", vec!["u8"]),
-                
-                ("rotr"        , "llvm.fshr",    "funcptr(u64, (u64, u64))", vec!["u64"]),
-                ("rotr_u32"    , "llvm.fshr",    "funcptr(u32, (u32, u32))", vec!["u32"]),
-                ("rotr_u16"    , "llvm.fshr",    "funcptr(u16, (u16, u16))", vec!["u16"]),
-                ("rotr_u8"     , "llvm.fshr",    "funcptr(u8, (u8, u8))", vec!["u8"]),
-                
-                ("sign"       , "llvm.copysign", "funcptr(f64, (f64))", vec!["f64"]),
-                ("sign_f32"   , "llvm.copysign", "funcptr(f32, (f32))", vec!["f32"]),
-                
-                ("memset"     , "llvm.memset", "funcptr(void, (ptr(u8), u8, u64))", vec!["ptr", "i64"]),
-                ("memset_vol" , "llvm.memset", "funcptr(void, (ptr(u8), u8, u64))", vec!["ptr", "i64"]),
-                ("memcpy"     , "llvm.memcpy", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
-                ("memcpy_vol" , "llvm.memcpy", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
-                ("memmove"    , "llvm.memmove", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
-                ("memmove_vol", "llvm.memmove", "funcptr(void, (ptr(u8), ptr(u8), u64))", vec!["ptr", "ptr", "i64"]),
-            ].into_iter().map(|(a, b, c, d)| (a.to_string(), b.to_string(), c.to_string(), d)).collect::<Vec<_>>();
-            
-            // signed-in unsigned-out multi-width intrinsics
-            for op in &["abs"]
-            {
-                for (i, (type_out, type_in)) in [("u64", "i64"), ("u32", "i32"), ("u16", "i16"), ("u8", "i8")].iter().enumerate()
-                {
-                    let a = if i == 0 { op.to_string() } else { format!("{}_{}", op, type_in) };
-                    let b = format!("llvm.{}", op);
-                    let c = format!("funcptr({}, ({}))", type_out, type_in);
-                    intrinsic_imports.push((a, b, c, vec!(type_in)));
-                }
-            }
-            
-            // int-in same-int-out multi-width intrinsics
-            for op in &["bitreverse", "bswap", "ctpop", "ctlz", "cttz", "ctlz"]
-            {
-                for (i, type_) in ["u64", "i64", "u32", "i32", "u16", "i16", "u8", "i8"].iter().enumerate()
-                {
-                    let a = if i == 0 { op.to_string() } else { format!("{}_{}", op, type_) };
-                    let b = format!("llvm.{}", op);
-                    let c = format!("funcptr({}, ({}))", type_, type_);
-                    intrinsic_imports.push((a, b, c, vec!(type_)));
-                }
-            }
-            
-            // float-in float-out multi-width intrinsics
-            for op in &["sqrt", "sin", "cos", /*"tan",*/
-                        "exp", "exp2", /*"exp10",*/ "log", "log2", "log10",
-                        "fabs", "floor", "ceil", "trunc", "round"]
-            {
-                for (i, type_) in ["f64", "f32"].iter().enumerate()
-                {
-                    let a = if i == 0 { op.to_string() } else { format!("{}_{}", op, type_) };
-                    let b = format!("llvm.{}", op);
-                    let c = format!("funcptr({}, ({}))", type_, type_);
-                    intrinsic_imports.push((a, b, c, vec!(type_)));
-                }
-            }
+            let intrinsic_imports = get_basic_intrinsics();
             
             let mut intrinsic_decs = BTreeMap::new();
             
@@ -2835,7 +2801,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 let type_ = parse_type(&types, &type_ast).unwrap();
                 if let TypeData::FuncPointer(funcsig) = type_.data
                 {
-                    let intrinsic = inkwell::intrinsics::Intrinsic::find(&llvm_name).unwrap_or_else(|| panic!("failed to find intrinsic {}", llvm_name));
+                    let intrinsic = Intrinsic::find(&llvm_name).unwrap_or_else(|| panic!("failed to find intrinsic {}", llvm_name));
                     
                     let mut arg_types = Vec::new();
                     for arg_type in &overloaded_args
@@ -2959,7 +2925,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
+                        let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -3030,7 +2996,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     
                     let stack = Vec::new();
                     let blocks = HashMap::new();
-                    let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
+                    let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : BTreeMap::new(), constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
                     
                     compile(&mut env, &node, WantPointer::None);
                     let (type_val, val) = env.stack.pop().unwrap();
@@ -3188,7 +3154,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 }
                 
                 let stack = Vec::new();
-                let mut env = Environment { source_text : &program_lines, module : &module, context : &context, stack, variables, constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, just_returned : false, options : env_options };
+                let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables, constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, just_returned : false, options : env_options };
                 
                 let body_block = context.append_basic_block(func_val, "body");
                 builder.position_at_end(body_block);

@@ -1,28 +1,37 @@
 use inkwell::types::*;
 use inkwell::values::{BasicValueEnum, AsValueRef};
 
-pub (crate) fn get_any_type_context(sdkawuidsguisagugarewudsga : BasicTypeEnum) -> inkwell::context::ContextRef
+pub (crate) fn get_any_type_context(type_ : BasicTypeEnum) -> inkwell::context::ContextRef
 {
-    match sdkawuidsguisagugarewudsga
+    match type_
     {
-        BasicTypeEnum::ArrayType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        BasicTypeEnum::FloatType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        BasicTypeEnum::IntType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        BasicTypeEnum::PointerType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        BasicTypeEnum::StructType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
-        BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_context(),
+        BasicTypeEnum::ArrayType(inner_type) => inner_type.get_context(),
+        BasicTypeEnum::FloatType(inner_type) => inner_type.get_context(),
+        BasicTypeEnum::IntType(inner_type) => inner_type.get_context(),
+        BasicTypeEnum::PointerType(inner_type) => inner_type.get_context(),
+        BasicTypeEnum::StructType(inner_type) => inner_type.get_context(),
+        BasicTypeEnum::VectorType(inner_type) => inner_type.get_context(),
     }
 }
-pub (crate) fn get_any_type_poison(sdkawuidsguisagugarewudsga : BasicTypeEnum) -> inkwell::values::BasicValueEnum
+pub (crate) fn get_vec_type(type_ : BasicTypeEnum, len : u32) -> inkwell::types::VectorType
 {
-    match sdkawuidsguisagugarewudsga
+    match type_
     {
-        BasicTypeEnum::ArrayType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        BasicTypeEnum::FloatType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        BasicTypeEnum::IntType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        BasicTypeEnum::PointerType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        BasicTypeEnum::StructType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
-        BasicTypeEnum::VectorType(fdaguij34ihu34g789wafgjre) => fdaguij34ihu34g789wafgjre.get_poison().into(),
+        BasicTypeEnum::FloatType(inner_type) => inner_type.vec_type(len),
+        BasicTypeEnum::IntType(inner_type) => inner_type.vec_type(len),
+        _ => panic!("inernal error: tried to convert non-float/int type to backend vec type"),
+    }
+}
+pub (crate) fn get_any_type_poison(type_ : BasicTypeEnum) -> inkwell::values::BasicValueEnum
+{
+    match type_
+    {
+        BasicTypeEnum::ArrayType(inner_type) => inner_type.get_poison().into(),
+        BasicTypeEnum::FloatType(inner_type) => inner_type.get_poison().into(),
+        BasicTypeEnum::IntType(inner_type) => inner_type.get_poison().into(),
+        BasicTypeEnum::PointerType(inner_type) => inner_type.get_poison().into(),
+        BasicTypeEnum::StructType(inner_type) => inner_type.get_poison().into(),
+        BasicTypeEnum::VectorType(inner_type) => inner_type.get_poison().into(),
     }
 }
 pub (crate) fn val_is_const(mut is_const : bool, val : BasicValueEnum) -> bool

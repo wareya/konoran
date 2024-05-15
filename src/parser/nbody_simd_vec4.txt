@@ -10,42 +10,50 @@ struct Vector3 {
     f64 x;
     f64 y;
     f64 z;
+    f64 _;
 }
 
 Vector3 vec3_mul_f64(Vector3 a, f64 b)
 {
-    array(f64, 3) a_vec = (a) bit_as array(f64, 3);
-    return (intrinsic_v 3 x f64 fmul (a_vec, [b, b, b])) bit_as Vector3;
+    array(f64, 4) a_vec = (a) bit_as array(f64, 4);
+    a = (intrinsic_v fmul (a_vec, [b, b, b, b])) bit_as Vector3;
+    return a;
 }
 Vector3 vec3_mul_vec3(Vector3 a, Vector3 b)
 {
-    array(f64, 3) a_vec = (a) bit_as array(f64, 3);
-    array(f64, 3) b_vec = (b) bit_as array(f64, 3);
-    return (intrinsic_v 3 x f64 fmul (a_vec, b_vec)) bit_as Vector3;
+    array(f64, 4) a_vec = (a) bit_as array(f64, 4);
+    array(f64, 4) b_vec = (b) bit_as array(f64, 4);
+    a = (intrinsic_v fmul (a_vec, b_vec)) bit_as Vector3;
+    return a;
 }
 Vector3 vec3_add_vec3(Vector3 a, Vector3 b)
 {
-    array(f64, 3) a_vec = (a) bit_as array(f64, 3);
-    array(f64, 3) b_vec = (b) bit_as array(f64, 3);
-    return (intrinsic_v 3 x f64 fadd (a_vec, b_vec)) bit_as Vector3;
+    array(f64, 4) a_vec = (a) bit_as array(f64, 4);
+    array(f64, 4) b_vec = (b) bit_as array(f64, 4);
+    a = (intrinsic_v fadd (a_vec, b_vec)) bit_as Vector3;
+    return a;
 }
 Vector3 vec3_sub_vec3(Vector3 a, Vector3 b)
 {
-    array(f64, 3) a_vec = (a) bit_as array(f64, 3);
-    array(f64, 3) b_vec = (b) bit_as array(f64, 3);
-    return (intrinsic_v 3 x f64 fsub (a_vec, b_vec)) bit_as Vector3;
+    array(f64, 4) a_vec = (a) bit_as array(f64, 4);
+    array(f64, 4) b_vec = (b) bit_as array(f64, 4);
+    a = (intrinsic_v fsub (a_vec, b_vec)) bit_as Vector3;
+    return a;
 }
 f64 vec3_sq_length(Vector3 a)
 {
     return intrinsic fmuladd(a.z, a.z, a.x*a.x + a.y*a.y);
+    //return a.x*a.x + a.y*a.y + a.z*a.z;
 }
 Vector3 vec3_mul_f64_add_vec3(Vector3 a, f64 s, Vector3 b)
 {
-    array(f64, 3) a_vec = (a) bit_as array(f64, 3);
-    array(f64, 3) b_vec = (b) bit_as array(f64, 3);
-    array(f64, 3) out = intrinsic_v 3 x f64 fmuladd(a_vec, [s, s, s], b_vec);
-    return (out) bit_as Vector3;
+    array(f64, 4) a_vec = (a) bit_as array(f64, 4);
+    array(f64, 4) b_vec = (b) bit_as array(f64, 4);
+    array(f64, 4) out = intrinsic_v fmuladd(a_vec, [s, s, s, s], b_vec);
+    a = (out) bit_as Vector3;
+    return a;
 }
+
 f64 vec3_length(Vector3 a)
 {
     return intrinsic sqrt(vec3_sq_length(a));
@@ -78,7 +86,9 @@ void advance(ptr(array(Body, 5)) bodies, f64 delta)
             f64 distance = intrinsic sqrt(distance_sq);
             f64 mag = delta / (distance_sq * distance);
             
+            //vel = vec3_sub_vec3(vel, vec3_mul_f64(pos_diff, mass2 * mag));
             vel = vec3_mul_f64_add_vec3(pos_diff, -mass2 * mag, vel);
+            //vel2 = vec3_add_vec3(vel2, vec3_mul_f64(pos_diff, mass * mag));
             vel2 = vec3_mul_f64_add_vec3(pos_diff, mass * mag, vel2);
             
             (*bodies)[j].vel = vel2;
@@ -89,6 +99,7 @@ void advance(ptr(array(Body, 5)) bodies, f64 delta)
                 goto loop_inner;
         
         (*bodies)[i].vel = vel;
+        //(*bodies)[i].pos = vec3_add_vec3(pos, vec3_mul_f64(vel, delta));
         (*bodies)[i].pos = vec3_mul_f64_add_vec3(vel, delta, pos);
         
         i = i + 1i64;

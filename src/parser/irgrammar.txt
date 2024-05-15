@@ -273,7 +273,7 @@ intrinsic: HIDELITERALS
 intrinsic $name$ $funcargs$
 
 intrinsic_v: HIDELITERALS
-intrinsic_v $name$ $funcargs$
+intrinsic_v $integer_token$ x $type$ $name$ $funcargs$
 
 vismodifier:
 # best effort export for dlls etc
