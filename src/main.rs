@@ -958,27 +958,21 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type_var);
             let len = backend_type.size_of().unwrap().into();
             
-            if val_is_const(true, $val)
+            if !val_is_const(true, $val) || $val.is_pointer_value()
             {
-                if $val.is_pointer_value() // already assigned to global const, load straight form its pointer
-                {
-                    build_memcpy!($slot, $val.into_pointer_value(), len, $volatile).unwrap();
-                }
-                else
-                {
-                    let global = env.module.add_global(backend_type, Some(inkwell::AddressSpace::default()), "");
-                    global.set_constant(true);
-                    global.set_initializer(&$val);
-                    
-                    global.set_linkage(inkwell::module::Linkage::Private);
-                    
-                    let val = global.as_pointer_value();
-                    build_memcpy!($slot, val, len, $volatile).unwrap();
-                }
+                // already assigned to global const, or we know it's a pointer, load straight form its pointer
+                build_memcpy!($slot, $val.into_pointer_value(), len, $volatile).unwrap();
             }
             else
             {
-                build_memcpy!($slot, $val.into_pointer_value(), len, $volatile).unwrap();
+                let global = env.module.add_global(backend_type, Some(inkwell::AddressSpace::default()), "");
+                global.set_constant(true);
+                global.set_initializer(&$val);
+                
+                global.set_linkage(inkwell::module::Linkage::Private);
+                
+                let val = global.as_pointer_value();
+                build_memcpy!($slot, val, len, $volatile).unwrap();
             }
         }
         // FIXME maybe always do this if the store is volatile...?
@@ -1093,7 +1087,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let name = &node.child(1).unwrap().child(0).unwrap().text;
                 assert_error!(!env.constants.contains_key(name), "error: tried to redeclare constant {}", name);
                 let type_var = parse_type(env.types, node.child(0).unwrap()).unwrap();
-                //let basic_type = get_backend_type_sized(&mut env.backend_types, &env.types, &type_var);
                 
                 compile(env, node.child(2).unwrap(), want_pointer);
                 let (type_val, val) = unwrap_or_panic!(env.stack.pop());
@@ -1141,9 +1134,12 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     
                     push_val_or_ptr!(type_, slot, false);
                 }
+                else if env.global_decs.contains_key(name)
+                {
+                    panic_error!("error: found global but not implemented yet");   
+                }
                 else
                 {
-                    assert_error!(!env.global_decs.contains_key(name), "error: found global but not implemented yet");
                     assert_error!(!env.constants.contains_key(name), "error: cannot assign to constant `{}`", name);
                     panic_error!("error: unrecognized variable `{}`", name);
                 }
@@ -2038,21 +2034,14 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 // both composite
                 else if left_size == right_size && right_type.is_composite() && left_type.is_composite()
                 {
-                    if env.options.contains_key("value_aggregates")
-                    {
-                        let slot = emit_alloca!(right_basic_type, "");
-                        env.builder.build_store(slot, left_val).unwrap();
-                        push_val_or_ptr!(right_type, slot, false);
-                    }
-                    else if want_pointer == WantPointer::None
+                    if want_pointer == WantPointer::None && !env.options.contains_key("value_aggregates")
                     {
                         env.stack.push((right_type, left_val));
                     }
                     else
                     {
                         let slot = emit_alloca!(right_basic_type, "");
-                        let len = right_basic_type.size_of().unwrap().into();
-                        build_memcpy!(slot, left_val.into_pointer_value(), len, false).unwrap();
+                        maybe_store_aggregate!(left_type, left_val, slot, false);
                         push_val_or_ptr!(right_type, slot, false);
                     }
                 }
@@ -2353,10 +2342,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                             panic_error!("internal error: condition not an integer in ternary operator");
                         }
                     }
-                    "ptr" => 
-                    {
-                        env.builder.build_is_not_null(inkwell::values::PointerValue::try_from(val_a).unwrap(), "").unwrap()
-                    }
+                    "ptr" => env.builder.build_is_not_null(inkwell::values::PointerValue::try_from(val_a).unwrap(), "").unwrap(),
                     _ => panic_error!("error: tried to use ternary with non-integer/non-pointer condition expression"),
                 };
                 
@@ -2710,13 +2696,17 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
     let env_options = &env_options;
     
     // import the "standrad library"
-    import_function::<unsafe extern "C" fn(*mut u8, *mut *mut u8)>(&types, &mut parser, &mut imports, "print_fmt", print_fmt, print_fmt as usize, "funcptr(void, (ptr(u8), ptr(ptr(u8))))");
+    import_function::<unsafe extern "C" fn(*mut u8, *mut *mut u8)>
+        (&types, &mut parser, &mut imports, "print_fmt", print_fmt, print_fmt as usize, "funcptr(void, (ptr(u8), ptr(ptr(u8))))");
     
-    import_function::<unsafe extern "C" fn(*mut u8)>(&types, &mut parser, &mut imports, "print_str", print_str, print_str as usize, "funcptr(void, (ptr(u8)))");
+    import_function::<unsafe extern "C" fn(*mut u8)>
+        (&types, &mut parser, &mut imports, "print_str", print_str, print_str as usize, "funcptr(void, (ptr(u8)))");
     
-    import_function::<unsafe extern "C" fn(*mut u8, u64)>(&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
+    import_function::<unsafe extern "C" fn(*mut u8, u64)>
+        (&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
     
-    import_function::<unsafe extern "C" fn(f64)>(&types, &mut parser, &mut imports, "print_float", print_float, print_float as usize, "funcptr(void, (f64))");
+    import_function::<unsafe extern "C" fn(f64)>
+        (&types, &mut parser, &mut imports, "print_float", print_float, print_float as usize, "funcptr(void, (f64))");
     
     if VERBOSE
     {
@@ -2999,7 +2989,8 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                         if val_is_const(true, val)
                         {
                             let global = module.add_global(basic_type, None, g_name);
-                            if g_type.is_composite() && val.as_instruction_value().is_none()
+                            assert!(val.as_instruction_value().is_none(), "INTERNAL ERROR THIS SHOULD BE UNREACHABLE PLEASE REPORT. ERROR CODE 28753489");
+                            if g_type.is_composite()
                             {
                                 if !env_options.contains_key("value_aggregates")
                                 {
@@ -3011,10 +3002,6 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                                 {
                                     global.set_initializer(&val);
                                 }
-                            }
-                            else if g_type.is_composite()
-                            {
-                                panic!("INTERNAL ERROR THIS SHOULD BE UNREACHABLE PLEASE REPORT. ERROR CODE 28753489");
                             }
                             else
                             {
@@ -3075,10 +3062,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     let (type_val, val) = env.stack.pop().unwrap();
                     assert!(type_val == *g_type);
                     
-                    if !val_is_const(true, val)
-                    {
-                        panic!("error: tried to make global constexpr with non-constexpr expression")
-                    }
+                    assert!(val_is_const(true, val), "error: tried to make global constexpr with non-constexpr expression");
                     env.builder.build_return(None).unwrap();
                     constants.insert(g_name.clone(), (g_type.clone(), val));
                     
@@ -3147,10 +3131,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                         let val = func_val.get_nth_param(j as u32).unwrap().try_into().unwrap();
                         build_memcpy_raw(&builder, &module, slot, val, len, false).unwrap();
                         
-                        if variables.contains_key(&var_name)
-                        {
-                            panic!("error: parameter {} redeclared", var_name);
-                        }
+                        assert!(!variables.contains_key(&var_name), "error: parameter {} redeclared", var_name);
                         variables.insert(var_name, (var_type, slot));
                     }
                     else
@@ -3160,10 +3141,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                         let val = func_val.get_nth_param(j as u32).unwrap();
                         builder.build_store(slot, val).unwrap();
                         
-                        if variables.contains_key(&var_name)
-                        {
-                            panic!("error: parameter {} redeclared", var_name);
-                        }
+                        assert!(!variables.contains_key(&var_name), "error: parameter {} redeclared", var_name);
                         variables.insert(var_name, (var_type, slot));
                     }
                     
@@ -3192,10 +3170,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                             builder.build_alloca(basic_type, &var_name)
                         }.unwrap();
                         
-                        if variables.contains_key(&var_name)// || func_decs.contains_key(&var_name)
-                        {
-                            panic!("error: variable {} redeclared", var_name);
-                        }
+                        assert!(!variables.contains_key(&var_name), "error: variable {} redeclared", var_name);
                         variables.insert(var_name, (var_type, slot));
                         
                         i += 1;
@@ -3210,10 +3185,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     if node.is_parent() && node.text == "label"
                     {
                         let name = &node.child(0).unwrap().child(0).unwrap().text;
-                        if blocks.contains_key(name)
-                        {
-                            panic!("error: redeclared block {}", name);
-                        }
+                        assert!(!blocks.contains_key(name), "error: redeclared block {}", name);
                         blocks.insert(name.clone(), context.append_basic_block(func_val, name));
                     }
                     false
