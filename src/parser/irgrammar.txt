@@ -290,8 +290,13 @@ $declaration$+
 structdef: HIDELITERALS
 struct $name$ { $structparts$ }
 
-ifcondition: HIDELITERALS
+ifgoto: HIDELITERALS
 if $parenexpr$ goto $name$ ;
+
+ifcondition: HIDELITERALS
+if $parenexpr$ $statementlist$ else $ifcondition$
+if $parenexpr$ $statementlist$ else $statementlist$
+if $parenexpr$ $statementlist$
 
 goto: HIDELITERALS
 goto $name$ ;
@@ -359,6 +364,7 @@ $statementlist$
 $declaration$
 $fulldeclaration$
 $constexpr_fulldeclaration$
+$ifgoto$
 $ifcondition$
 $binstate$
 $label$

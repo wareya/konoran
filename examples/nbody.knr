@@ -189,11 +189,12 @@ void nbody_bench(u64 count)
     print_float(start_energy);
     
     loop_head:
+    if (count > 0u64)
+    {
         advance(&bodies, 0.01f64);
-        
         count = count - 1u64;
-        if (count > 0u64)
-            goto loop_head;
+        goto loop_head;
+    }
     
     f64 end_energy = energy(&bodies);
     print_float(end_energy);

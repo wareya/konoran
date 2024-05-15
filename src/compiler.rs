@@ -1949,34 +1949,70 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 env.builder.build_unconditional_branch(*then_block).unwrap();
                 env.builder.position_at_end(env.context.append_basic_block(env.func_val, ""));
             }
-            // TODO: all the other C-style control flow mechanisms
-            "ifcondition" =>
+            "ifgoto" | "ifcondition" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 let (type_, val) = env.stack.pop().unwrap();
-                let label = &node.child(1).unwrap().child(0).unwrap().text;
                 // anonymous block for "else" case
-                let else_block = env.context.append_basic_block(env.func_val, "");
-                let then_block = env.blocks.get(label).unwrap_or_else(|| panic_error!("error: no such label {}", label));
+                let mut terminal_block = None;
+                let else_block;
+                let then_block;
+                if node.text == "ifgoto"
+                {
+                    else_block = env.context.append_basic_block(env.func_val, "");
+                    let label = &node.child(1).unwrap().child(0).unwrap().text;
+                    then_block = *env.blocks.get(label).unwrap_or_else(|| panic_error!("error: no such label {}", label));
+                }
+                else
+                {
+                    then_block = env.context.append_basic_block(env.func_val, "then");
+                    else_block = env.context.append_basic_block(env.func_val, "else");
+                    
+                    let current_block = env.builder.get_insert_block().unwrap();
+                    
+                    env.builder.position_at_end(then_block);
+                    compile(env, node.child(1).unwrap(), WantPointer::None);
+                    let mut next_block = else_block;
+                    if node.child(2).is_ok()
+                    {
+                        terminal_block = Some(env.context.append_basic_block(env.func_val, "terminal"));
+                        next_block = terminal_block.unwrap();
+                    }
+                    if !env.just_returned
+                    {
+                        env.builder.build_unconditional_branch(next_block).unwrap();
+                    }
+                    env.just_returned = false;
+                    env.builder.position_at_end(current_block);
+                }
+                
                 let backend_type = get_backend_type(env.backend_types, env.types, &type_);
-                if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
+                let int_val =  if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
                 {
                     let zero = int_type.const_int(0, true);
-                    let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap();
-                    env.builder.build_conditional_branch(int_val, *then_block, else_block).unwrap();
-                    env.builder.position_at_end(else_block);
+                    env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap()
                 }
                 else if let (Ok(_ptr_type), Ok(ptr_val)) = (inkwell::types::PointerType::try_from(backend_type), inkwell::values::PointerValue::try_from(val))
                 {
                     let int_val = env.builder.build_ptr_to_int(ptr_val, env.ptr_int_type, "").unwrap();
                     let zero = env.ptr_int_type.const_int(0, true);
-                    let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap();
-                    env.builder.build_conditional_branch(int_val, *then_block, else_block).unwrap();
-                    env.builder.position_at_end(else_block);
+                    env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap()
                 }
                 else
                 {
                     panic_error!("error: tried to branch on non-integer/non-pointer expression");
+                };
+                env.builder.build_conditional_branch(int_val, then_block, else_block).unwrap();
+                env.builder.position_at_end(else_block);
+                if let Ok(else_ast) = node.child(2)
+                {
+                    compile(env, else_ast, WantPointer::None);
+                    if !env.just_returned
+                    {
+                        env.builder.build_unconditional_branch(terminal_block.unwrap()).unwrap();
+                    }
+                    env.just_returned = false;
+                    env.builder.position_at_end(terminal_block.unwrap());
                 }
             }
             "sizeof" =>
