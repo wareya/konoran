@@ -2723,7 +2723,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
         let mut triple = TargetTriple::create(triple_string);
         if triple_string == "native"
         {
-            if settings.get("cpu").is_none()
+            if settings.get("cpu").is_none() && settings.get("objfile").is_none()
             {
                 cpu = TargetMachine::get_host_cpu_name().to_string();
                 features = TargetMachine::get_host_cpu_features().to_string();
@@ -2737,7 +2737,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
     }
     else
     {
-        if settings.get("cpu").is_none()
+        if settings.get("cpu").is_none() && settings.get("objfile").is_none()
         {
             cpu = TargetMachine::get_host_cpu_name().to_string();
             features = TargetMachine::get_host_cpu_features().to_string();
