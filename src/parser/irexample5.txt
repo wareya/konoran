@@ -71,9 +71,9 @@ void main()
     print_float(agdk2[0i64]);
     print_float(agdk2[1i64]);
     
-    //array(f64, 2) agdk = [3.141f64, 3.141f64];
-    //f64 buhuh = intrinsic_v 2 x f64 fadd_reduce(0.0f64, [16.0f64, 16.0f64], 1u64);
-    //print_float(buhuh);
+    array(f64, 2) agdk = [3.141f64, 3.141f64];
+    f64 buhuh = intrinsic_v 2 x f64 fadd_reduce(40000.0f64, [3.14f64, 10.005f64], 3u64);
+    print_float(buhuh);
     
     return;
 }

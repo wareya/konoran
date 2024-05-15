@@ -1343,12 +1343,9 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     for i in 0..vec_len
                     {
                         let index = u64_type.const_int(i as u64, false);
-                        
                         let bit = env.builder.build_int_truncate(val.into_int_value(), i1_type, "").unwrap();
                         vec_mask = env.builder.build_insert_element(vec_mask, bit, index, "").unwrap();
-                        
-                        let one_const = u64_type.const_int(1, false);
-                        val = env.builder.build_right_shift(val.into_int_value(), one_const.into(), false, "").unwrap().into();
+                        val = env.builder.build_right_shift(val.into_int_value(), u64_type.const_int(1, false).into(), false, "").unwrap().into();
                     }
                     forced_mask = Some(vec_mask);
                     stack_len_end = env.stack.len();
@@ -1380,7 +1377,9 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     }
                     else
                     {
-                        panic!("not yet implemented");
+                        assert_error!(type_ == *arg_type,
+                            "vector intrinsic argument type mismatch; got {}, expected {}", type_.to_string(), arg_type.to_string());
+                        arg_vals.push(val.into());
                     }
                 }
                 arg_vals.reverse();
@@ -1452,8 +1451,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                 {
                     let (type_, val) = env.stack.pop().unwrap();
-                    assert_error!(type_ == *arg_type,
-                        "mismatched types for parameter {} in call to intrinsic {:?}: expected `{}`, got `{}`", i+1, funcaddr, arg_type.to_string(), type_.to_string());
+                    assert_error!(type_ == *arg_type, "mismatched types for parameter {} in call to intrinsic {:?}: expected `{}`, got `{}`",
+                        i+1, funcaddr, arg_type.to_string(), type_.to_string());
                     args.push(val.into());
                 }
                 
@@ -1466,20 +1465,13 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 match intrinsic_name.as_str()
                 {
-                    "sign"        => args.insert(0, args[0].into_float_value().get_type().const_float(1.0).into()),
-                    "sign_f32"    => args.insert(0, args[0].into_float_value().get_type().const_float(1.0).into()),
-                    
-                    "abs"         => args.push(zero_bool.into()),
-                    "abs_i32"     => args.push(zero_bool.into()),
-                    "abs_i16"     => args.push(zero_bool.into()),
-                    "abs_i8"      => args.push(zero_bool.into()),
-                    
-                    "memcpy"      => args.push(zero_bool.into()),
-                    "memmove"     => args.push(zero_bool.into()),
-                    "memset"      => args.push(zero_bool.into()),
-                    "memcpy_vol"  => args.push(one_bool.into()),
-                    "memmove_vol" => args.push(one_bool.into()),
-                    "memset_vol"  => args.push(one_bool.into()),
+                    "sign" | "sign_f32" =>
+                        args.insert(0, args[0].into_float_value().get_type().const_float(1.0).into()),
+                    "abs" | "abs_i32" | "abs_i16" | "abs_i8" |
+                    "memcpy" | "memmove" | "memset" =>
+                        args.push(zero_bool.into()),
+                    "memcpy_vol" | "memmove_vol" | "memset_vol" =>
+                        args.push(one_bool.into()),
                     _ => {}
                 }
                 
@@ -1526,7 +1518,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     }
                     assert_error!(Some(type_.clone()) == element_type, "error: array literals must entirely be of a single type");
                     is_const = val_is_const(is_const, val);
-                    if val_is_const(is_const, val) && type_.is_composite() && val.is_pointer_value()
+                    if val_is_const(true, val) && type_.is_composite() && val.is_pointer_value()
                     {
                         val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
                     }
@@ -1605,7 +1597,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     let (type_, mut val) = env.stack.pop().unwrap();
                     is_const = val_is_const(is_const, val);
-                    if val_is_const(is_const, val) && type_.is_composite() && val.is_pointer_value()
+                    if val_is_const(true, val) && type_.is_composite() && val.is_pointer_value()
                     {
                         val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
                     }
@@ -1724,8 +1716,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             }
             "string" =>
             {
-                let text = &node.child(0).unwrap().text;
-                let text = text.split_once('"').unwrap().1;
+                let text = &node.child(0).unwrap().text.split_once('"').unwrap().1;
                 let (text, suffix) = text.rsplit_once('"').unwrap();
                 let mut full_text = "".to_string();
                 let mut char_iter = text.chars();
@@ -1756,6 +1747,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let vals = bytes.iter().map(|x| u8_type.const_int(*x as u64, false).into()).collect::<Vec<_>>();
                 let array_val = basic_const_array(u8_type.into(), &vals);
                 let type_ = u8_type_frontend.to_ptr(false);
+                // FIXME make sure every case of this works in both normal and simple aggregates mode
                 if suffix.starts_with("array")
                 {
                     if want_pointer != WantPointer::None
