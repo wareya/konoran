@@ -43,7 +43,6 @@ Vector3 vec3_sub_vec3(Vector3 a, Vector3 b)
 f64 vec3_sq_length(Vector3 a)
 {
     return intrinsic fmuladd(a.z, a.z, a.x*a.x + a.y*a.y);
-    //return a.x*a.x + a.y*a.y + a.z*a.z;
 }
 Vector3 vec3_mul_f64_add_vec3(Vector3 a, f64 s, Vector3 b)
 {

@@ -59,7 +59,13 @@ export_extern void main()
     print_fmt("%i\n", (&[(&sgke4) bit_as ptr(u8)]) as ptr(ptr(u8)));
     print_float((sgke3) as f64);
     
-    ptr(u8) fudge = constexpr ("sdaoagweog" & 0xFFFFFFFFFFFFFFF0u64);
+    u8 choco = constexpr (15u8 + 15u8 + 15u8 + 15u8 & 15u8 & 15u8);
+    
+    u64 fudge0 = constexpr (198394u64 & 0xFFFFFFFFFFFFFFF0u64);
+    ptr(u8) fudge2 = constexpr ("sdaoagweog" + 4u64);
+    print_fmt("%s\n", decay_to_ptr [fudge2]);
+    ptr(u8) fudge = (("sdaoagweogsdaoagweog" & 0xFFFFFFFFFFFFFFF0u64) + 0x10u64);
+    print_fmt("%s\n", decay_to_ptr [fudge]);
     
     //print_fmt("An invalid print that's going to crash: %f\n", (&[(95138u64) bit_as ptr(u8)]) as ptr(ptr(u8)));
     

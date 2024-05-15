@@ -2380,23 +2380,13 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                             {
                                 assert_error!(right_type.is_int_unsigned() && right_type.size() as u32 * 8 == env.ptr_int_type.get_bit_width(),
                                     "ptr mask (&) operation is only supported with a right-hand operand of the target's pointer-sized int type (usually u64 or u32) {:?}", right_basic_type);
-                                if val_is_const(true, left_val) && val_is_const(true, right_val)
-                                {
-                                    let intptr : inkwell::values::IntValue = env.builder.build_ptr_to_int(left_val.into_pointer_value(), env.ptr_int_type, "").unwrap();
-                                    let masked = env.builder.build_and(intptr, right_val.into_int_value(), "").unwrap();
-                                    let diff = env.builder.build_int_sub(masked, intptr, "").unwrap();
-                                    let offset_addr = unsafe { env.builder.build_gep(u8_type, left_val.into_pointer_value(), &[diff], "").unwrap() };
-                                    env.stack.push((left_type.clone(), offset_addr.into()));
-                                }
-                                else
-                                {
-                                    let intrinsic = Intrinsic::find("llvm.ptrmask").unwrap();
-                                    let function = intrinsic.get_declaration(env.module, &[ptr_type.into(), env.ptr_int_type.into()]).unwrap();
-                                    
-                                    let callval = env.builder.build_direct_call(function, &[left_val.into(), right_val.into()], "").unwrap();
-                                    let result = callval.try_as_basic_value().left().unwrap();
-                                    env.stack.push((left_type.clone(), result));
-                                }
+                                
+                                let intrinsic = Intrinsic::find("llvm.ptrmask").unwrap();
+                                let function = intrinsic.get_declaration(env.module, &[ptr_type.into(), env.ptr_int_type.into()]).unwrap();
+                                
+                                let callval = env.builder.build_direct_call(function, &[left_val.into(), right_val.into()], "").unwrap();
+                                let result = callval.try_as_basic_value().left().unwrap();
+                                env.stack.push((left_type.clone(), result));
                             }
                             "+" | "-" =>
                             {
