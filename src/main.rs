@@ -47,6 +47,7 @@ maybe:
 
 FIXMEs:
 
+- there are some issues with virtual pointer acquisition consistency in complex expressions (WantPointer etc)
 - sizeof might not compile properly on non-64-bit because idk if it needs to be manually upcasted to u64 or not
 
 */
@@ -842,6 +843,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
 {
     // used to build constants for some lowerings, and to cast to bool
     let u8_type_frontend = env.types.get("u8").unwrap();
+    let u64_type_frontend = env.types.get("u64").unwrap();
     let i1_type = env.backend_types.get("i1").unwrap().into_int_type();
     let u8_type = env.backend_types.get("u8").unwrap().into_int_type();
     let u32_type = env.backend_types.get("u32").unwrap().into_int_type();
@@ -924,6 +926,20 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             env.stack.push(($type.clone(), val));
         }
     }} }
+    macro_rules! maybe_load_aggregate { ($type:expr, $val:expr, $volatile:expr) =>
+    {{
+        if $type.is_composite() && !env.options.contains_key("bypass_agg_memcpy")
+        {
+            let basic_type = get_backend_type_sized(env.backend_types, env.types, &$type);
+            let val = env.builder.build_load(basic_type, $val.into_pointer_value(), "").unwrap();
+            val.as_instruction_value().unwrap().set_volatile($volatile).unwrap();
+            val
+        }
+        else
+        {
+            $val
+        }
+    }} }
     macro_rules! store_or_memcpy { ($type_var:expr, $slot:expr, $type_val:expr, $val:expr, $volatile:expr) =>
     {{
         if $type_val.is_composite() && !env.options.contains_key("bypass_agg_memcpy")
@@ -1001,7 +1017,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 if env.builder.get_insert_block().unwrap().get_terminator().is_none()
                 {
-                    panic_error!("error: functions must explicitly return, even if their return type is void\n(on line {})", node.line);
+                    panic_error!("error: functions must explicitly return, even if their return type is void");
                 }
             }
             "statementlist" | "statement" | "instruction" =>
@@ -1224,8 +1240,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         let stack_len_end = env.stack.len();
                         
                         let num_args = node.child(1).unwrap().child_count().unwrap();
-                        assert!(num_args == stack_len_end - stack_len_start);
-                        assert!(num_args == funcsig.args.len(), "incorrect number of arguments to function on line {}", node.line);
+                        assert_error!(num_args == stack_len_end - stack_len_start, "");
+                        assert_error!(num_args == funcsig.args.len(), "incorrect number of arguments to function");
                         
                         let mut args = Vec::new();
                         let mut arg_types = Vec::new();
@@ -1285,7 +1301,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let count : u64 = node.child(0).unwrap().child(0).unwrap().text.parse().unwrap();
                 let vec_len = count.next_power_of_two() as u32;
                 let inner_type = parse_type(env.types, node.child(1).unwrap()).unwrap();
-                let outer_type = inner_type.to_array(count as usize);
                 let intrinsic_name = &node.child(2).unwrap().child(0).unwrap().text;
                 
                 assert_error!(inner_type.is_float() || inner_type.is_int(), "vector intrinsic type must float or int (refer: {:?})", inner_type);
@@ -1312,47 +1327,79 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let stack_len_start = env.stack.len();
                 for child in node.child(3).unwrap().get_children().unwrap()
                 {
-                    compile(env, child, WantPointer::Virtual);
+                    compile(env, child, WantPointer::None);
                 }
-                let stack_len_end = env.stack.len();
+                let mut stack_len_end = env.stack.len();
                 
-                assert!(funcsig.args.len() == stack_len_end - stack_len_start, "incorrect number of arguments to function on line {}", node.line);
+                let mut forced_mask = None;
+                if has_mask && funcsig.args.len() + 1 == stack_len_end - stack_len_start
+                {
+                    let (type_, mut val) = env.stack.pop().unwrap();
+                    assert_error!(type_ == *u64_type_frontend, "mask argument of vector intrinsic must be u64");
+                    
+                    let mut vec_mask = i1_type.vec_type(vec_len).get_poison();
+                    for i in 0..vec_len
+                    {
+                        let index = u64_type.const_int(i as u64, false);
+                        
+                        let bit = env.builder.build_int_truncate(val.into_int_value(), i1_type, "").unwrap();
+                        vec_mask = env.builder.build_insert_element(vec_mask, bit, index, "").unwrap();
+                        
+                        let one_const = u64_type.const_int(1, false);
+                        val = env.builder.build_right_shift(val.into_int_value(), one_const.into(), false, "").unwrap().into();
+                    }
+                    forced_mask = Some(vec_mask);
+                    stack_len_end = env.stack.len();
+                }
+                assert_error!(funcsig.args.len() == stack_len_end - stack_len_start, "incorrect number of arguments to intrinsic (expected {}, got {})", funcsig.args.len(), stack_len_end - stack_len_start);
                 
                 // copy arrays into vec
                 let mut arg_vals = Vec::new();
                 for arg_type in funcsig.args.iter().rev()
                 {
                     let (type_, val) = env.stack.pop().unwrap();
-                    let type_ = unwrap_or_panic!(type_.deref_vptr()).0;
-                    assert_error!(type_.inner_type() == arg_type.inner_type() && type_.array_len() <= arg_type.array_len(),
-                        "vector intrinsic argument type mismatch; got {}, expected {}", type_.to_string(), arg_type.to_string());
-                    
-                    let backend_array_type = get_backend_type_sized(env.backend_types, env.types, &type_);
-                    let val_type = get_backend_type_sized(env.backend_types, env.types, &type_.inner_type());
-                    let vec_type = val_type.into_float_type().vec_type(vec_len);
-                    
-                    let val = env.builder.build_load(backend_array_type, val.into_pointer_value(), "").unwrap().into_array_value();
-                    let mut vec_val = vec_type.get_poison();
-                    for i in 0..count
+                    if arg_type.is_array()
                     {
-                        let index = u64_type.const_int(i, false);
-                        let element = env.builder.build_extract_value(val, i as u32, "").unwrap();
-                        vec_val = env.builder.build_insert_element(vec_val, element, index, "").unwrap();
+                        assert_error!(type_.inner_type() == arg_type.inner_type() && type_.array_len() <= arg_type.array_len(),
+                            "vector intrinsic argument type mismatch; got {}, expected {}", type_.to_string(), arg_type.to_string());
+                        
+                        let val_type = get_backend_type_sized(env.backend_types, env.types, &type_.inner_type());
+                        let vec_type = val_type.into_float_type().vec_type(vec_len);
+                        
+                        let val = maybe_load_aggregate!(arg_type, val, false).into_array_value();
+                        let mut vec_val = vec_type.get_poison();
+                        for i in 0..count
+                        {
+                            let index = u64_type.const_int(i, false);
+                            let element = env.builder.build_extract_value(val, i as u32, "").unwrap();
+                            vec_val = env.builder.build_insert_element(vec_val, element, index, "").unwrap();
+                        }
+                        arg_vals.push(vec_val.into());
                     }
-                    arg_vals.push(vec_val.into());
+                    else
+                    {
+                        panic!("not yet implemented");
+                    }
                 }
                 arg_vals.reverse();
                 
                 if has_mask
                 {
-                    let mut vec_mask = i1_type.vec_type(vec_len).get_poison();
-                    for i in 0..vec_len
+                    if let Some(vec_mask) = forced_mask
                     {
-                        let index = u64_type.const_int(i as u64, false);
-                        let element = i1_type.const_int(if (i as u64) < count { 1 } else { 0 }, false);
-                        vec_mask = env.builder.build_insert_element(vec_mask, element, index, "").unwrap();
+                        arg_vals.push(vec_mask.into());
                     }
-                    arg_vals.push(vec_mask.into());
+                    else
+                    {
+                        let mut vec_mask = i1_type.vec_type(vec_len).get_poison();
+                        for i in 0..vec_len
+                        {
+                            let index = u64_type.const_int(i as u64, false);
+                            let element = i1_type.const_int(if (i as u64) < count { 1 } else { 0 }, false);
+                            vec_mask = env.builder.build_insert_element(vec_mask, element, index, "").unwrap();
+                        }
+                        arg_vals.push(vec_mask.into());
+                    }
                 }
                 
                 let vec_len_val = u32_type.const_int(vec_len as u64, false).into();
@@ -1361,22 +1408,29 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let callval = env.builder.build_direct_call(function, &arg_vals, "").unwrap();
                 let result = callval.try_as_basic_value().left().unwrap();
                 
-                let backend_array_type = get_backend_type_sized(env.backend_types, env.types, &funcsig.return_type);
-                
-                // copy array out of vec
-                let mut array_val = backend_array_type.into_array_type().get_poison().into();
-                for i in 0..count
+                if funcsig.return_type.is_array()
                 {
-                    let index = u64_type.const_int(i, false);
-                    let element = env.builder.build_extract_element(result.into_vector_value(), index, "").unwrap();
-                    array_val = env.builder.build_insert_value(array_val, element, i as u32, "").unwrap();
+                    let rtype = funcsig.return_type.inner_type().to_array(count as usize);
+                    let backend_array_type = get_backend_type_sized(env.backend_types, env.types, &rtype);
+                    // copy array out of vec
+                    let mut array_val = backend_array_type.into_array_type().get_poison().into();
+                    for i in 0..count
+                    {
+                        let index = u64_type.const_int(i, false);
+                        let element = env.builder.build_extract_element(result.into_vector_value(), index, "").unwrap();
+                        array_val = env.builder.build_insert_value(array_val, element, i as u32, "").unwrap();
+                    }
+                    
+                    let slot = emit_alloca!(backend_array_type, "");
+                    env.builder.build_store(slot, array_val).unwrap();
+                    
+                    // FIXME return type can be different
+                    push_val_or_ptr!(rtype, slot, false);
                 }
-                
-                let slot = emit_alloca!(backend_array_type, "");
-                env.builder.build_store(slot, array_val).unwrap();
-                
-                // FIXME return type can be different
-                push_val_or_ptr!(outer_type.clone(), slot, false);
+                else
+                {
+                    env.stack.push((funcsig.return_type.clone(), result.into()));
+                }
             }
             "intrinsic" =>
             {
@@ -1389,15 +1443,15 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let stack_len_end = env.stack.len();
                 
                 let num_args = node.child(1).unwrap().child_count().unwrap();
-                assert!(num_args == stack_len_end - stack_len_start);
-                assert!(num_args == funcsig.args.len(), "incorrect number of arguments to function on line {}", node.line);
+                assert_error!(num_args == stack_len_end - stack_len_start, "");
+                assert_error!(num_args == funcsig.args.len(), "incorrect number of arguments to intrinsic");
                 
                 let mut args : Vec<BasicMetadataValueEnum> = Vec::new();
                 for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                 {
                     let (type_, val) = env.stack.pop().unwrap();
                     assert_error!(type_ == *arg_type,
-                        "mismatched types for parameter {} in call to intrinsic {:?} on line {}: expected `{}`, got `{}`", i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
+                        "mismatched types for parameter {} in call to intrinsic {:?}: expected `{}`, got `{}`", i+1, funcaddr, arg_type.to_string(), type_.to_string());
                     args.push(val.into());
                 }
                 
@@ -1823,7 +1877,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                                     env.stack.push((type_, val));
                                     
                                 }
-                                _ => panic_error!("error: can't use operator `{}` on type `{}`", op, type_.name),
+                                _ => panic_error!("error: can't use unary operator `{}` on type `{}`", op, type_.name),
                             }
                         }
                         "f32" | "f64" =>
@@ -1832,7 +1886,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                             {
                                 "+" => val,
                                 "-" => env.builder.build_float_neg(val.into_float_value(), "").unwrap().into(),
-                                _ => panic_error!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                                _ => panic_error!("error: can't use unary operator `{}` on type `{}`", op, type_.name)
                             };
                             env.stack.push((type_.clone(), res));
                         }
@@ -1858,13 +1912,13 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                                         panic_error!("internal error: integer was not integer in ! operator");
                                     }
                                 }
-                                _ => panic_error!("error: can't use operator `{}` on type `{}`", op, type_.name)
+                                _ => panic_error!("error: can't use unary operator `{}` on type `{}`", op, type_.name)
                             };
                             env.stack.push((type_.clone(), res));
                         }
                         _ =>
                         {
-                            assert_error!(!type_.is_array() || op.as_str() != "decay_to_ptr", "error: type `{}` is not supported by unary operators", type_.name);
+                            assert_error!(type_.is_array() && op.as_str() == "decay_to_ptr", "error: type `{}` is not supported by unary operator {}", type_.to_string(), op);
                             if !env.options.contains_key("bypass_agg_memcpy")
                             {
                                 env.stack.push((type_.array_as_ptr().unwrap(), val));
@@ -2277,8 +2331,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         if let (Ok(type_a), Ok(val_a)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val_a))
                         {
                             let zero = type_a.const_int(0, true);
-                            let int_val = env.builder.build_int_compare(inkwell::IntPredicate::NE, val_a, zero, "").unwrap();
-                            env.builder.build_int_cast_sign_flag(int_val, u8_type, false, "").unwrap()
+                            env.builder.build_int_compare(inkwell::IntPredicate::NE, val_a, zero, "").unwrap()
                         }
                         else
                         {
@@ -2287,8 +2340,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     }
                     "ptr" => 
                     {
-                        let res = env.builder.build_is_not_null(inkwell::values::PointerValue::try_from(val_a).unwrap(), "").unwrap();
-                        env.builder.build_int_cast_sign_flag(res, u8_type, false, "").unwrap()
+                        env.builder.build_is_not_null(inkwell::values::PointerValue::try_from(val_a).unwrap(), "").unwrap()
                     }
                     _ => panic_error!("error: tried to use ternary with non-integer/non-pointer condition expression"),
                 };

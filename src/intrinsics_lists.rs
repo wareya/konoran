@@ -4,7 +4,7 @@ pub (crate) fn get_vector_intrinsic_info(typename : &str, len : u32, funcname : 
     if matches!(typename, "f32" | "f64")
     {
         [
-            ("fadd_reduce"     , "llvm.vp.reduce.fadd", "funcptr(ST, (VT, VT))", vec!["VT"], true),
+            ("fadd_reduce"     , "llvm.vp.reduce.fadd", "funcptr(ST, (ST, VT))", vec!["VT"], true),
             
             ("fmul"            , "llvm.vp.fmul",        "funcptr(VT, (VT, VT))", vec!["VT"], true),
             ("fadd"            , "llvm.vp.fadd",        "funcptr(VT, (VT, VT))", vec!["VT"], true),
