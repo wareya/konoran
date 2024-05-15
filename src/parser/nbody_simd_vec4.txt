@@ -16,28 +16,28 @@ struct Vector3 {
 Vector3 vec3_mul_f64(Vector3 a, f64 b)
 {
     array(f64, 4) a_vec = (a) bit_as array(f64, 4);
-    a = (intrinsic_v fmul (a_vec, [b, b, b, b])) bit_as Vector3;
+    a = (intrinsic_v 4 x f64 fmul (a_vec, [b, b, b, b])) bit_as Vector3;
     return a;
 }
 Vector3 vec3_mul_vec3(Vector3 a, Vector3 b)
 {
     array(f64, 4) a_vec = (a) bit_as array(f64, 4);
     array(f64, 4) b_vec = (b) bit_as array(f64, 4);
-    a = (intrinsic_v fmul (a_vec, b_vec)) bit_as Vector3;
+    a = (intrinsic_v 4 x f64 fmul (a_vec, b_vec)) bit_as Vector3;
     return a;
 }
 Vector3 vec3_add_vec3(Vector3 a, Vector3 b)
 {
     array(f64, 4) a_vec = (a) bit_as array(f64, 4);
     array(f64, 4) b_vec = (b) bit_as array(f64, 4);
-    a = (intrinsic_v fadd (a_vec, b_vec)) bit_as Vector3;
+    a = (intrinsic_v 4 x f64 fadd (a_vec, b_vec)) bit_as Vector3;
     return a;
 }
 Vector3 vec3_sub_vec3(Vector3 a, Vector3 b)
 {
     array(f64, 4) a_vec = (a) bit_as array(f64, 4);
     array(f64, 4) b_vec = (b) bit_as array(f64, 4);
-    a = (intrinsic_v fsub (a_vec, b_vec)) bit_as Vector3;
+    a = (intrinsic_v 4 x f64 fsub (a_vec, b_vec)) bit_as Vector3;
     return a;
 }
 f64 vec3_sq_length(Vector3 a)
@@ -49,7 +49,7 @@ Vector3 vec3_mul_f64_add_vec3(Vector3 a, f64 s, Vector3 b)
 {
     array(f64, 4) a_vec = (a) bit_as array(f64, 4);
     array(f64, 4) b_vec = (b) bit_as array(f64, 4);
-    array(f64, 4) out = intrinsic_v fmuladd(a_vec, [s, s, s, s], b_vec);
+    array(f64, 4) out = intrinsic_v 4 x f64 fmuladd (a_vec, [s, s, s, s], b_vec);
     a = (out) bit_as Vector3;
     return a;
 }
