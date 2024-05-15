@@ -1,4 +1,9 @@
-/target
+target/
 .trash
-*.asm
+*.exe
+*.exp
+*.lib
+*.o
 *.ll
+*.asm
+*.c
