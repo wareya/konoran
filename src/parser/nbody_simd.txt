@@ -40,8 +40,8 @@ f64 vec3_sq_length(Vector3 a)
     return intrinsic fmuladd(a.z, a.z, a.x*a.x + a.y*a.y);
     //array(f64, 3) a_vec = (a) bit_as array(f64, 3);
     //array(f64, 3) n = intrinsic_v 3 x f64 fmul(a_vec, a_vec);
-    //return n[0i64] + n[1i64] + n[2i64];
     //return intrinsic_v 3 x f64 fadd_reduce(0.0f64, n);
+    //return n[0i64] + n[1i64] + n[2i64];
 }
 Vector3 vec3_mul_f64_add_vec3(Vector3 a, f64 s, Vector3 b)
 {

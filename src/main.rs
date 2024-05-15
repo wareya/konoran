@@ -13,6 +13,7 @@ use core::cell::RefCell;
 
 use std::collections::{BTreeMap, HashMap};
 
+use inkwell::values::AsValueRef;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::types::*;
 use inkwell::values::{PointerValue, BasicValue, BasicMetadataValueEnum};
@@ -1329,6 +1330,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }).collect::<Vec<_>>();
                 let function = intrinsic.get_declaration(env.module, &overload_args).unwrap();
                 
+                // build arguments
                 let stack_len_start = env.stack.len();
                 for child in node.child(3).unwrap().get_children().unwrap()
                 {
@@ -1336,6 +1338,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 let mut stack_len_end = env.stack.len();
                 
+                // build forced mask if necessary
                 let mut forced_mask = None;
                 if has_mask && funcsig.args.len() + 1 == stack_len_end - stack_len_start
                 {
@@ -1387,6 +1390,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 arg_vals.reverse();
                 
+                // build auto mask if necessary
                 if has_mask
                 {
                     if let Some(vec_mask) = forced_mask
@@ -1410,6 +1414,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 arg_vals.push(vec_len_val);
                 
                 let callval = env.builder.build_direct_call(function, &arg_vals, "").unwrap();
+                unsafe { llvm_sys::core::LLVMSetFastMathFlags(callval.as_value_ref(), llvm_sys::LLVMFastMathAll) }
                 let result = callval.try_as_basic_value().left().unwrap();
                 
                 if funcsig.return_type.is_array()
@@ -1479,6 +1484,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 //println!("calling func with sigref {} and sig {}", sigref, funcsig.to_string());
                 let callval = env.builder.build_direct_call(*funcaddr, &args, "").unwrap();
+                unsafe { llvm_sys::core::LLVMSetFastMathFlags(callval.as_value_ref(), llvm_sys::LLVMFastMathAll) }
                 let result = callval.try_as_basic_value().left();
                 //println!("number of results {}", results.len());
                 for (result, type_) in result.iter().zip([&funcsig.return_type])
