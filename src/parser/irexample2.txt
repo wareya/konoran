@@ -413,6 +413,8 @@ export_extern void main()
     // test bitcasting between primitive and array
     
     array(u16, 2) gwerksd2 = (asdgwreids) bit_as array(u16, 2);
+    print_float((asdgwreids & 0xFFFFu32) as f64);
+    print_float((asdgwreids >> 16u32) as f64);
     print_float((gwerksd2[0i64]) as f64);
     print_float((gwerksd2[1i64]) as f64);
     

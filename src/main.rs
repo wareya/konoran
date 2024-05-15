@@ -8,13 +8,10 @@
 #![allow(clippy::match_like_matches_macro)] // refactoring ease
 #![allow(clippy::suspicious_else_formatting)] // false positive around commented-out code
 
-extern crate alloc;
-
-use alloc::rc::Rc;
+use std::rc::Rc;
 use core::cell::RefCell;
 
-use alloc::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use inkwell::passes::PassBuilderOptions;
 use inkwell::types::*;
@@ -47,7 +44,6 @@ maybe:
 
 FIXMEs:
 
-- there are some issues with virtual pointer acquisition consistency in complex expressions (WantPointer etc)
 - sizeof might not compile properly on non-64-bit because idk if it needs to be manually upcasted to u64 or not
 
 */
@@ -502,7 +498,7 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
         {
             panic!("error: void function arguments are not allowed");
         }
-        if var_type.is_composite() && !options.contains_key("bypass_agg_memcpy")
+        if var_type.is_composite() && !options.contains_key("value_aggregates")
         {
             var_type = var_type.to_ptr(false);
         }
@@ -512,7 +508,7 @@ fn get_function_type<'c>(function_types : &mut BTreeMap<String, inkwell::types::
     
     // struct returns may be hoisted into arguments
     let mut _return_type = sig.return_type.clone();
-    if _return_type.is_composite() && !options.contains_key("bypass_agg_memcpy")
+    if _return_type.is_composite() && !options.contains_key("value_aggregates")
     {
         let backend_type = get_backend_type_sized(backend_types, types, &_return_type.to_ptr(false));
         params.push(backend_type.into());
@@ -911,7 +907,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
         {
             env.stack.push(($type.to_vptr($volatile), $addr.into()));
         }
-        else if $type.is_composite() && !env.options.contains_key("bypass_agg_memcpy")
+        else if $type.is_composite() && !env.options.contains_key("value_aggregates")
         {
             let slot = emit_alloca!(basic_type, "__temp_synthetic_");
             let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type);
@@ -928,7 +924,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     }} }
     macro_rules! maybe_load_aggregate { ($type:expr, $val:expr, $volatile:expr) =>
     {{
-        if $type.is_composite() && !env.options.contains_key("bypass_agg_memcpy")
+        if $type.is_composite() && !env.options.contains_key("value_aggregates")
         {
             let basic_type = get_backend_type_sized(env.backend_types, env.types, &$type);
             let val = env.builder.build_load(basic_type, $val.into_pointer_value(), "").unwrap();
@@ -940,9 +936,23 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             $val
         }
     }} }
+    macro_rules! maybe_store_aggregate { ($type:expr, $val:expr, $addr:expr, $volatile:expr) =>
+    {{
+                        
+        if $type.is_composite() && !env.options.contains_key("value_aggregates")
+        {
+            let basic_type = get_backend_type_sized(env.backend_types, env.types, &$type);
+            let len = basic_type.size_of().unwrap().into();
+            build_memcpy!($addr, $val.into_pointer_value(), len, $volatile).unwrap();
+        }
+        else
+        {
+            env.builder.build_store($addr, $val).unwrap();
+        }
+    }} }
     macro_rules! store_or_memcpy { ($type_var:expr, $slot:expr, $type_val:expr, $val:expr, $volatile:expr) =>
     {{
-        if $type_val.is_composite() && !env.options.contains_key("bypass_agg_memcpy")
+        if $type_val.is_composite() && !env.options.contains_key("value_aggregates")
         {
             assert!($type_var == $type_val);
             let backend_type = get_backend_type_sized(env.backend_types, env.types, &$type_var);
@@ -1101,14 +1111,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let (type_val, val) = env.stack.pop().unwrap();
                 let (type_left_incomplete, left_addr) = env.stack.pop().unwrap();
                 
-                let (type_left, volatile) = if type_left_incomplete.is_virtual_pointer()
-                {
-                    unwrap_or_panic!(type_left_incomplete.deref_vptr())
-                }
-                else
-                {
-                    panic_error!("tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
-                };
+                assert_error!(type_left_incomplete.is_virtual_pointer(), "tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
+                let (type_left, volatile) = unwrap_or_panic!(type_left_incomplete.deref_vptr());
                 assert_error!(type_val == type_left, "tried to assign a value with type {} to a variable with type {}", type_val.name, type_left.name);
                 
                 if let Ok(addr) = inkwell::values::PointerValue::try_from(left_addr)
@@ -1193,6 +1197,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 check_struct_incomplete(env, &mut inner_type);
                 
                 let inner_backend_type = get_backend_type_sized(env.backend_types, env.types, &inner_type);
+                assert_error!(base_addr.is_pointer_value(), "internal error: failed to get virtual pointer to array");
                 let inner_addr = unsafe { env.builder.build_in_bounds_gep(inner_backend_type, base_addr.into_pointer_value(), &[offset_val.into_int_value()], "").unwrap() };
                 
                 push_val_or_ptr!(inner_type, inner_addr, volatile);
@@ -1217,6 +1222,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let mut inner_type = found.1.1.clone();
                 check_struct_incomplete(env, &mut inner_type);
                 
+                assert_error!(struct_addr.is_pointer_value(), "internal error: failed to get virtual pointer to struct");
                 let struct_addr = struct_addr.into_pointer_value();
                 
                 let index_addr = env.builder.build_struct_gep::<inkwell::types::BasicTypeEnum>(backend_type, struct_addr, inner_index as u32, "").unwrap();
@@ -1231,7 +1237,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     TypeData::FuncPointer(funcsig) =>
                     {
-                        let hoisted_return = funcsig.return_type.is_composite() && !env.options.contains_key("bypass_agg_memcpy");
+                        let hoisted_return = funcsig.return_type.is_composite() && !env.options.contains_key("value_aggregates");
                         
                         let func_type = get_function_type(env.function_types, env.backend_types, env.types, &funcsig, env.options);
                         
@@ -1558,15 +1564,17 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 else
                 {
                     let val = basic_const_array(element_backend_type, &vals);
-                    let global = make_anonymous_const_global!(val);
-                    
                     if want_pointer != WantPointer::None
                     {
-                        push_val_or_ptr!(array_type.clone(), global.as_pointer_value(), false);
+                        push_val_or_ptr!(array_type.clone(), make_anonymous_const_global!(val).as_pointer_value(), false);
+                    }
+                    else if env.options.contains_key("value_aggregates")
+                    {
+                        env.stack.push((array_type.clone(), val.into()));
                     }
                     else
                     {
-                        env.stack.push((array_type.clone(), global.as_pointer_value().into()));
+                        env.stack.push((array_type.clone(), make_anonymous_const_global!(val).as_pointer_value().into()));
                     }
                 }
             }
@@ -1657,15 +1665,17 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         }
                     }
                     let val = backend_type.into_struct_type().const_named_struct(&newvals);
-                    let global = make_anonymous_const_global!(val);
-                    
                     if want_pointer != WantPointer::None
                     {
-                        push_val_or_ptr!(struct_type, global.as_pointer_value(), false);
+                        push_val_or_ptr!(struct_type, make_anonymous_const_global!(val).as_pointer_value(), false);
+                    }
+                    else if env.options.contains_key("value_aggregates")
+                    {
+                        env.stack.push((struct_type, val.into()));
                     }
                     else
                     {
-                        env.stack.push((struct_type, global.as_pointer_value().into()));
+                        env.stack.push((struct_type, make_anonymous_const_global!(val).as_pointer_value().into()));
                     }
                 }
             }
@@ -1919,7 +1929,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         _ =>
                         {
                             assert_error!(type_.is_array() && op.as_str() == "decay_to_ptr", "error: type `{}` is not supported by unary operator {}", type_.to_string(), op);
-                            if !env.options.contains_key("bypass_agg_memcpy")
+                            if !env.options.contains_key("value_aggregates")
                             {
                                 env.stack.push((type_.array_as_ptr().unwrap(), val));
                             }
@@ -2028,8 +2038,13 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 // both composite
                 else if left_size == right_size && right_type.is_composite() && left_type.is_composite()
                 {
-                    //println!("comp-to-comp bitcast!!! {:?} to {:?} (val: {:?})", left_type, right_type, left_val);
-                    if want_pointer == WantPointer::None
+                    if env.options.contains_key("value_aggregates")
+                    {
+                        let slot = emit_alloca!(right_basic_type, "");
+                        env.builder.build_store(slot, left_val).unwrap();
+                        push_val_or_ptr!(right_type, slot, false);
+                    }
+                    else if want_pointer == WantPointer::None
                     {
                         env.stack.push((right_type, left_val));
                     }
@@ -2045,16 +2060,16 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 else if left_size == right_size && left_type.is_composite() && !right_type.is_composite() && !right_type.is_pointer_or_fpointer()
                 {
                     let slot = emit_alloca!(right_basic_type, "");
-                    let len = right_basic_type.size_of().unwrap().into();
-                    build_memcpy!(slot, left_val.into_pointer_value(), len, false).unwrap();
+                    maybe_store_aggregate!(left_type, left_val, slot, false);
                     push_val_or_ptr!(right_type, slot, false);
                 }
                 // primitive to composite
                 else if left_size == right_size && right_type.is_composite() && !left_type.is_composite() && !left_type.is_pointer_or_fpointer()
                 {
                     let slot = emit_alloca!(right_basic_type, "");
-                    env.builder.build_store(slot, left_val).unwrap();
-                    env.stack.push((right_type, slot.into()));
+                    let val = maybe_load_aggregate!(left_type, left_val, false);
+                    env.builder.build_store(slot, val).unwrap();
+                    push_val_or_ptr!(right_type, slot, false);
                 }
                 else
                 {
@@ -2689,7 +2704,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
     
     if settings.contains_key("simple_aggregates")
     {
-        env_options.insert("bypass_agg_memcpy", true);
+        env_options.insert("value_aggregates", true);
     }
     
     let env_options = &env_options;
@@ -2986,8 +3001,16 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                             let global = module.add_global(basic_type, None, g_name);
                             if g_type.is_composite() && val.as_instruction_value().is_none()
                             {
-                                let val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
-                                global.set_initializer(&val);
+                                if !env_options.contains_key("value_aggregates")
+                                {
+                                    assert!(val.is_pointer_value(), "internal error: failed to get pointer to global '{}'", g_name);
+                                    let val = *env.anon_globals.get(&val.into_pointer_value()).unwrap();
+                                    global.set_initializer(&val);
+                                }
+                                else
+                                {
+                                    global.set_initializer(&val);
+                                }
                             }
                             else if g_type.is_composite()
                             {
@@ -3116,7 +3139,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                     let backend_type = get_backend_type(&mut backend_types, &types, &var_type);
                     let basic_type = inkwell::types::BasicTypeEnum::try_from(backend_type)
                         .unwrap_or_else(|()| panic!("error: variables of type {} are not allowed", var_type.name));
-                    if var_type.is_composite() && !env_options.contains_key("bypass_agg_memcpy")
+                    if var_type.is_composite() && !env_options.contains_key("value_aggregates")
                     {
                         let slot = builder.build_alloca(basic_type, &var_name).unwrap();
                         let len = basic_type.size_of().unwrap().into();
@@ -3197,7 +3220,7 @@ fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'
                 });
                 
                 let mut hoisted_return = None;
-                if function.return_type.is_composite() && !env_options.contains_key("bypass_agg_memcpy")
+                if function.return_type.is_composite() && !env_options.contains_key("value_aggregates")
                 {
                     let val = func_val.get_last_param().unwrap();
                     hoisted_return = Some((function.return_type.clone(), val.into_pointer_value()));
