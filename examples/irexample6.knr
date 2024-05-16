@@ -25,6 +25,13 @@ i32 test3(i8 arg)
         return 0i32;
     }
 }
+i32 test4(i8 arg)
+{
+    infiniteloop:
+    {
+        goto infiniteloop;
+    }
+}
 
 void main()
 {

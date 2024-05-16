@@ -193,4 +193,5 @@ Defined basic casts (with the `as` operator):
 
 ## Operators
 
-Infix operators like `+`, `-`, `==`, etc. generally only operate on the same type on both sides. For example, to add a u8 to a u16, you have to use casts to make them the same type.
+Infix operators like `+`, `-`, `==`, etc. generally only operate on the same type on both sides. For example, to add a u8 to a u16, you have to use explicit casts to make them the same type. There are no automatic conversions, not even lossless ones.
+

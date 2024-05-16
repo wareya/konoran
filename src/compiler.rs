@@ -1007,11 +1007,9 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     
     if node.is_parent()
     {
+        // if we branched away from the previous block, add a new anonymous block
         if env.builder.get_insert_block().unwrap().get_terminator().is_some()
         {
-            // returns can only happen at the very end of a block
-            // and the end of a block can only have one flow control mechanism
-            // (so we can't explicitly jump to this new anonymous block we're making; it's dead code)
             env.builder.position_at_end(env.context.append_basic_block(env.func_val, ""));
         }
         match node.text.as_str()
@@ -1977,7 +1975,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let label = &node.child(0).unwrap().child(0).unwrap().text;
                 let then_block = env.blocks.get(label).unwrap_or_else(|| panic_error!("error: no such label {}", label));
                 env.builder.build_unconditional_branch(*then_block).unwrap();
-                env.builder.position_at_end(env.context.append_basic_block(env.func_val, ""));
             }
             "ifgoto" | "ifcondition" =>
             {
