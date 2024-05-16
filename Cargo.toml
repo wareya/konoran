@@ -12,5 +12,6 @@ inkwell = { git = "https://github.com/TheDan64/inkwell.git", rev = "5d5a531c765a
 llvm-sys = { version = "180", features = ["force-static"] }
 
 [profile.release]
-opt-level = 2
+opt-level = 1
 debug = true
+lto = "off"

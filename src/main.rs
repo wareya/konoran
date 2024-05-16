@@ -14,7 +14,8 @@ fn main()
     let mut args = Vec::new();
     let mut settings = HashMap::new();
     let mut mode = "";
-    for arg in env::args().skip(1)
+    let in_args = env::args();
+    for arg in in_args.skip(1)
     {
         if mode == "-i" || (mode == "" && !arg.starts_with("-"))
         {
@@ -49,6 +50,11 @@ fn main()
         {
             match arg.as_str()
             {
+                "-O0" | "-Od" | "-O1" | "-O2" | "-O3" | "-Os" | "-Oz" =>
+                {
+                    let which : String = arg.chars().skip(2).take(1).collect();
+                    settings.insert("optlevel", which);
+                }
                 "-i" => mode = "-i",
                 "--" => mode = "--",
                 "-oat" | "--output-assembly-triple" => mode = "-oat",

@@ -2666,6 +2666,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
         println!("startup...");
     }
     let skip_jit = settings.get("asm_triple").is_some() | settings.get("objfile").is_some();
+    let optlevel_string = settings.get("optlevel").cloned().unwrap_or("2".to_string());
     
     let true_start = std::time::Instant::now();
     
@@ -2714,8 +2715,16 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
     let ir_grammar = include_str!("parser/irgrammar.txt");
     let mut parser = parser::Parser::new_from_grammar(ir_grammar).unwrap();
     
-    //let opt_level = inkwell::OptimizationLevel::None;
-    let opt_level = inkwell::OptimizationLevel::Aggressive;
+    let opt_level = match optlevel_string.as_str()
+    {
+        "0" => inkwell::OptimizationLevel::None,
+        "1" | "d" => inkwell::OptimizationLevel::Less,
+        "2" | "s" | "z" => inkwell::OptimizationLevel::Default,
+        "3" => inkwell::OptimizationLevel::Aggressive,
+        _ => inkwell::OptimizationLevel::Default,
+    };
+    
+    //let opt_small = matches!(optlevel_string.as_str(), "s" | "z");
     
     let mut imports : BTreeMap<String, (*const u8, FunctionSig)> = BTreeMap::new();
     
@@ -2728,7 +2737,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
     
     let env_options = &env_options;
     
-    if !skip_jit
+    //if !skip_jit
     {
         // import the "standard library"
         import_stdlib(&types, &mut parser, &mut imports);
@@ -3257,17 +3266,39 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
     {
         let pass_options = PassBuilderOptions::create();
         pass_options.set_verify_each(true);
-        pass_options.set_loop_interleaving(true);
-        pass_options.set_loop_vectorization(true);
-        pass_options.set_loop_slp_vectorization(true);
-        pass_options.set_loop_unrolling(true);
-        pass_options.set_forget_all_scev_in_loop_unroll(true);
-        pass_options.set_licm_mssa_opt_cap(1);
-        pass_options.set_licm_mssa_no_acc_for_promotion_cap(10);
-        pass_options.set_call_graph_profile(true);
-        pass_options.set_merge_functions(true);
-        
-        module.run_passes("default<O3>", &machine, pass_options).unwrap();
+        match optlevel_string.as_str()
+        {
+            "0" => {}
+            _ => 
+            {
+                pass_options.set_loop_interleaving(true);
+                pass_options.set_loop_vectorization(true);
+                pass_options.set_loop_slp_vectorization(optlevel_string != "z");
+                pass_options.set_loop_unrolling(true);
+                pass_options.set_forget_all_scev_in_loop_unroll(true);
+                pass_options.set_licm_mssa_opt_cap(1);
+                pass_options.set_licm_mssa_no_acc_for_promotion_cap(10);
+                pass_options.set_call_graph_profile(true);
+                pass_options.set_merge_functions(true);
+            }
+        }
+        let passes = if optlevel_string != "d"
+        {
+            format!("default<O{}>", optlevel_string)
+        }
+        else
+        {
+            format!("{}{}{}{}", "always-inline,inline,constmerge,reassociate,gvn,simplifycfg,globalopt",
+                    ",function<eager-inv>(mem2reg,instcombine<max-iterations=1;no-use-loop-info;no-verify-fixpoint>",
+                     ",sccp,lower-constant-intrinsics,sroa,tailcallelim)",
+                    ",globaldce,function(annotation-remarks),verify")
+            //;format!("default<O3>")
+        };
+        //let manager : inkwell::passes::PassManager<inkwell::module::Module> = inkwell::passes::PassManager::create(());
+        //machine.add_analysis_passes(&manager);
+        //manager.run_on(module);
+        module.run_passes(&passes, &machine, pass_options).unwrap();
+        //manager.run_on(module);
     }
     
     if VERBOSE
@@ -3311,7 +3342,9 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
             executor.get_function::<$T>(&$name).unwrap()
         }} }
         
+            let start = std::time::Instant::now();
         executor.run_static_constructors();
+            println!("time to get func: {}", start.elapsed().as_secs_f64());
         
         unsafe
         {
