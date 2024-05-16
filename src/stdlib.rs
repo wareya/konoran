@@ -1,4 +1,45 @@
 
+use std::collections::BTreeMap;
+use crate::compiler::*;
+use crate::parser;
+
+pub (crate) fn import_function<T>(types: &BTreeMap<String, Type>, parser : &mut parser::Parser, imports : &mut BTreeMap<String, (*const u8, FunctionSig)>, name : &str, _pointer : T, pointer_usize : usize, type_string : &str)
+{
+    let type_lines = vec!(type_string.to_string());
+    let type_tokens = parser.tokenize(&type_lines, true).unwrap();
+    let type_ast = parser.parse_with_root_node_type(&type_tokens, &type_lines, true, "type").unwrap().unwrap();
+    let type_ = parse_type(types, &type_ast).unwrap();
+    if let TypeData::FuncPointer(funcsig) = type_.data
+    {
+        let want_type_string = std::any::type_name::<T>(); // FIXME: not guaranteed to be stable across rust versions
+        let type_string_rust = funcsig.to_string_rusttype();
+        assert!(want_type_string == type_string_rust, "types do not match:\n{}\n{}\n", want_type_string, type_string_rust);
+        assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
+        
+        let ptr = pointer_usize as *const u8;
+        imports.insert(name.to_string(), (ptr, *funcsig));
+    }
+    else
+    {
+        panic!("type string must be function type");
+    }
+}
+
+pub (crate) fn import_stdlib(types: &BTreeMap<String, Type>, parser : &mut parser::Parser, imports : &mut BTreeMap<String, (*const u8, FunctionSig)>)
+{
+    import_function::<unsafe extern "C" fn(*mut u8, *mut *mut u8)>
+        (types, parser, imports, "print_fmt", print_fmt, print_fmt as usize, "funcptr(void, (ptr(u8), ptr(ptr(u8))))");
+    
+    import_function::<unsafe extern "C" fn(*mut u8)>
+        (types, parser, imports, "print_str", print_str, print_str as usize, "funcptr(void, (ptr(u8)))");
+    
+    import_function::<unsafe extern "C" fn(*mut u8, u64)>
+        (types, parser, imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
+    
+    import_function::<unsafe extern "C" fn(f64)>
+        (types, parser, imports, "print_float", print_float, print_float as usize, "funcptr(void, (f64))");
+}
+
 // format specifiers:
 // %X - u64    uppercase hex
 // %x - u64    lowercase hex

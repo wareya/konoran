@@ -40,7 +40,7 @@ FIXMEs:
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum TypeData
+pub (crate) enum TypeData
 {
     IncompleteStruct,
     Void,
@@ -54,8 +54,8 @@ enum TypeData
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub (crate) struct Type
 {
-    name : String,
-    data : TypeData,
+    pub (crate) name : String,
+    pub (crate) data : TypeData,
 }
 
 impl ToString for Type
@@ -78,7 +78,7 @@ impl ToString for Type
 
 impl Type
 {
-    fn to_string_rusttype(&self, is_ptr : bool) -> String
+    pub (crate) fn to_string_rusttype(&self, is_ptr : bool) -> String
     {
         match &self.data
         {
@@ -258,7 +258,7 @@ impl Type
     }
 }
 
-fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, String>
+pub (crate) fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, String>
 {
     match (node.is_parent(), node.text.as_str())
     {
@@ -341,7 +341,7 @@ fn parse_type(types : &BTreeMap<String, Type>, node : &ASTNode) -> Result<Type, 
 }
 
 #[derive(Debug, Clone)]
-struct Function
+pub (crate) struct Function
 {
 #[allow(dead_code)]
     name : String,
@@ -350,7 +350,7 @@ struct Function
     body : ASTNode,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FunctionSig
+pub (crate) struct FunctionSig
 {
     return_type : Type,
     args : Vec<Type>,
@@ -376,7 +376,7 @@ impl ToString for FunctionSig
 
 impl FunctionSig
 {
-    fn to_string_rusttype(&self) -> String
+    pub (crate) fn to_string_rusttype(&self) -> String
     {
         let return_type = self.return_type.to_string_rusttype(false);
         let mut args = String::new();
@@ -2718,27 +2718,6 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
     let opt_level = inkwell::OptimizationLevel::Aggressive;
     
     let mut imports : BTreeMap<String, (*const u8, FunctionSig)> = BTreeMap::new();
-    fn import_function<T>(types: &BTreeMap<String, Type>, parser : &mut parser::Parser, imports : &mut BTreeMap<String, (*const u8, FunctionSig)>, name : &str, _pointer : T, pointer_usize : usize, type_string : &str)
-    {
-        let type_lines = vec!(type_string.to_string());
-        let type_tokens = parser.tokenize(&type_lines, true).unwrap();
-        let type_ast = parser.parse_with_root_node_type(&type_tokens, &type_lines, true, "type").unwrap().unwrap();
-        let type_ = parse_type(types, &type_ast).unwrap();
-        if let TypeData::FuncPointer(funcsig) = type_.data
-        {
-            let want_type_string = std::any::type_name::<T>(); // FIXME: not guaranteed to be stable across rust versions
-            let type_string_rust = funcsig.to_string_rusttype();
-            assert!(want_type_string == type_string_rust, "types do not match:\n{}\n{}\n", want_type_string, type_string_rust);
-            assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
-            
-            let ptr = pointer_usize as *const u8;
-            imports.insert(name.to_string(), (ptr, *funcsig));
-        }
-        else
-        {
-            panic!("type string must be function type");
-        }
-    }
     
     let mut env_options = HashMap::new();
     
@@ -2749,18 +2728,11 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
     
     let env_options = &env_options;
     
-    // import the "standrad library"
-    import_function::<unsafe extern "C" fn(*mut u8, *mut *mut u8)>
-        (&types, &mut parser, &mut imports, "print_fmt", print_fmt, print_fmt as usize, "funcptr(void, (ptr(u8), ptr(ptr(u8))))");
-    
-    import_function::<unsafe extern "C" fn(*mut u8)>
-        (&types, &mut parser, &mut imports, "print_str", print_str, print_str as usize, "funcptr(void, (ptr(u8)))");
-    
-    import_function::<unsafe extern "C" fn(*mut u8, u64)>
-        (&types, &mut parser, &mut imports, "print_bytes", print_bytes, print_bytes as usize, "funcptr(void, (ptr(u8), u64))");
-    
-    import_function::<unsafe extern "C" fn(f64)>
-        (&types, &mut parser, &mut imports, "print_float", print_float, print_float as usize, "funcptr(void, (f64))");
+    if !skip_jit
+    {
+        // import the "standard library"
+        import_stdlib(&types, &mut parser, &mut imports);
+    }
     
     if VERBOSE
     {
