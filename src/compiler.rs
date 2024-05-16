@@ -28,21 +28,14 @@ use crate::inkwell_helpers::*;
 use crate::intrinsics_lists::*;
 
 /*
-
 TODO list:
-
 low:
 - standard text input function
-
 maybe:
 - varargs in declarations (not definitions) (for printf mainly)
-- implement other control flow constructs than just "if -> goto"
-- have proper scoped variable declarations, not function-level variable declarations
 
 FIXMEs:
-
 - sizeof might not compile properly on non-64-bit because idk if it needs to be manually upcasted to u64 or not
-
 */
 
 
@@ -780,7 +773,6 @@ struct Environment<'a, 'b, 'c, 'e, 'g>
     
     return_type    : Option<Type>,
     hoisted_return : Option<(Type, inkwell::values::PointerValue<'c>)>,
-    just_returned  : bool,
     
     options        : &'e HashMap<&'static str, bool>,
 }
@@ -1015,13 +1007,12 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     
     if node.is_parent()
     {
-        if env.just_returned
+        if env.builder.get_insert_block().unwrap().get_terminator().is_some()
         {
             // returns can only happen at the very end of a block
             // and the end of a block can only have one flow control mechanism
             // (so we can't explicitly jump to this new anonymous block we're making; it's dead code)
             env.builder.position_at_end(env.context.append_basic_block(env.func_val, ""));
-            env.just_returned = false;
         }
         match node.text.as_str()
         {
@@ -1090,7 +1081,6 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     assert_error!(env.return_type == env.types.get("void").cloned(), "error: tried to return nothing from function that requires a return value");
                     env.builder.build_return(None).unwrap();
                 }
-                env.just_returned = true;
             }
             "declaration" | "fulldeclaration" =>
             {
@@ -1993,41 +1983,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 let (type_, val) = env.stack.pop().unwrap();
-                // anonymous block for "else" case
-                let mut terminal_block = None;
-                let else_block;
-                let then_block;
-                if node.text == "ifgoto"
-                {
-                    else_block = env.context.append_basic_block(env.func_val, "");
-                    let label = &node.child(1).unwrap().child(0).unwrap().text;
-                    then_block = *env.blocks.get(label).unwrap_or_else(|| panic_error!("error: no such label {}", label));
-                }
-                else
-                {
-                    then_block = env.context.append_basic_block(env.func_val, "then");
-                    else_block = env.context.append_basic_block(env.func_val, "else");
-                    
-                    let current_block = env.builder.get_insert_block().unwrap();
-                    
-                    env.builder.position_at_end(then_block);
-                    compile(env, node.child(1).unwrap(), WantPointer::None);
-                    let mut next_block = else_block;
-                    if node.child(2).is_ok()
-                    {
-                        terminal_block = Some(env.context.append_basic_block(env.func_val, "terminal"));
-                        next_block = terminal_block.unwrap();
-                    }
-                    if !env.just_returned
-                    {
-                        env.builder.build_unconditional_branch(next_block).unwrap();
-                    }
-                    env.just_returned = false;
-                    env.builder.position_at_end(current_block);
-                }
-                
                 let backend_type = get_backend_type(env.backend_types, env.types, &type_);
-                let int_val =  if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
+                let comp_val =  if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
                 {
                     let zero = int_type.const_int(0, true);
                     env.builder.build_int_compare(inkwell::IntPredicate::NE, int_val, zero, "").unwrap()
@@ -2042,17 +1999,56 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     panic_error!("error: tried to branch on non-integer/non-pointer expression");
                 };
-                env.builder.build_conditional_branch(int_val, then_block, else_block).unwrap();
-                env.builder.position_at_end(else_block);
-                if let Ok(else_ast) = node.child(2)
+                
+                if node.text == "ifgoto"
                 {
-                    compile(env, else_ast, WantPointer::None);
-                    if !env.just_returned
+                    let label = &node.child(1).unwrap().child(0).unwrap().text;
+                    let then_block = *env.blocks.get(label).unwrap_or_else(|| panic_error!("error: no such label {}", label));
+                    let else_block = env.context.append_basic_block(env.func_val, "stepover");
+                    
+                    env.builder.build_conditional_branch(comp_val, then_block, else_block).unwrap();
+                    env.builder.position_at_end(else_block);
+                }
+                else
+                {
+                    let then_block = env.context.append_basic_block(env.func_val, "then");
+                    let else_block = env.context.append_basic_block(env.func_val, "else");
+                    env.builder.build_conditional_branch(comp_val, then_block, else_block).unwrap();
+                    env.builder.position_at_end(then_block);
+                    compile(env, node.child(1).unwrap(), WantPointer::None);
+                    let then_block_end = env.builder.get_insert_block().unwrap();
+                    
+                    // has else
+                    if let Ok(else_ast) = node.child(2)
                     {
-                        env.builder.build_unconditional_branch(terminal_block.unwrap()).unwrap();
+                        env.builder.position_at_end(else_block);
+                        compile(env, else_ast, WantPointer::None);
+                        let else_block_end = env.builder.get_insert_block().unwrap();
+                        if then_block_end.get_terminator().is_none() || else_block_end.get_terminator().is_none()
+                        {
+                            let terminal_block = env.context.append_basic_block(env.func_val, "terminal");
+                            if then_block_end.get_terminator().is_none()
+                            {
+                                env.builder.position_at_end(then_block_end);
+                                env.builder.build_unconditional_branch(terminal_block).unwrap();
+                            }
+                            if else_block_end.get_terminator().is_none()
+                            {
+                                env.builder.position_at_end(else_block_end);
+                                env.builder.build_unconditional_branch(terminal_block).unwrap();
+                            }
+                            env.builder.position_at_end(terminal_block);
+                        }
                     }
-                    env.just_returned = false;
-                    env.builder.position_at_end(terminal_block.unwrap());
+                    // does not have else
+                    else
+                    {
+                        if then_block_end.get_terminator().is_none()
+                        {
+                            env.builder.build_unconditional_branch(else_block).unwrap();
+                        }
+                        env.builder.position_at_end(else_block);
+                    }
                 }
             }
             "sizeof" =>
@@ -3041,7 +3037,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![BTreeMap::new(), BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
+                        let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![BTreeMap::new(), BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, options : env_options };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -3117,7 +3113,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                     
                     let stack = Vec::new();
                     let blocks = HashMap::new();
-                    let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![BTreeMap::new(), BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, just_returned : false, options : env_options };
+                    let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![BTreeMap::new(), BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, options : env_options };
                     
                     compile(&mut env, &node, WantPointer::None);
                     let (type_val, val) = env.stack.pop().unwrap();
@@ -3227,7 +3223,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                 }
                 
                 let stack = Vec::new();
-                let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![arguments, BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, just_returned : false, options : env_options };
+                let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![arguments, BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, options : env_options };
                 
                 let body_block = context.append_basic_block(func_val, "body");
                 builder.position_at_end(body_block);

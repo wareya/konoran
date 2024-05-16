@@ -1,0 +1,81 @@
+
+i32 test1(i8 arg)
+{
+    {
+        return 0i32;
+    }
+}
+
+i32 test2(i8 arg)
+{
+    if (arg)
+    {
+        return 9245i32;
+    }
+    return 0i32;
+}
+i32 test3(i8 arg)
+{
+    if (arg)
+    {
+        return 9245i32;
+    }
+    else
+    {
+        return 0i32;
+    }
+}
+
+void main()
+{
+    f64 myfloat = 12953.94193f64;
+    if (myfloat == 0.0f64)
+        goto down;
+    
+    up:
+    goto furtherdown;
+    
+    down:
+    if (myfloat == 0.0f64)
+        goto up;
+    
+    furtherdown:
+    
+    if (1u8)
+    {
+        print_float(3.14f64);
+    }
+    
+    if (0u8)
+    {
+        print_float(13.14f64);
+    }
+    else
+    {
+        print_float(540.2f64);
+    }
+    
+    if (0u8)
+    {
+        print_float(13.14f64);
+    }
+    else if (152u8)
+    {
+        print_float(150.5154f64);
+    }
+    else
+    {
+        print_float(0.5154f64);
+    }
+    
+    if (0u8)
+    {
+        print_float(13.14f64);
+    }
+    else if (152u8)
+    {
+        print_float(05.5154f64);
+    }
+
+    return;
+}

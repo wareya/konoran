@@ -56,9 +56,7 @@ Differences from C:
 
 Some things that are probably subject to change:
 
-1) No block scopes (yet - probably subject to change!)
-2) Variable declarations (NOT their definitions) are hoisted to the top of the function (at the moment - probably subject to change!)
-3) No variadic functions (might be needed for better C ABI compatibility)
+1) No variadic functions (might be needed for better C ABI compatibility)
 
 Konoran is not meant to be the ultimate, or even a particularly powerful, compiler target language. It is meant to be used by high-level language projects that don't have the manpower or smarts to learn LLVM or machine code generation or anything else. As such, it doesn't expose everything that every target CPU is capable of, like SIMD intrinsics, branch probability metadata, static data location directives, dynamic stack allocations, etc. It only exposes what you need to generate *relatively* efficient machine code from other, much higher-level code.
 
@@ -74,7 +72,6 @@ Konoran's reference implementation uses a declarative grammar (i.e. specified in
 
 - Write documentation
 - Write a spec
-- Maybe implement blocks, block scope, and remove hoisting
 
 # Building info
 
