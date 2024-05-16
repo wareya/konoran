@@ -3290,8 +3290,10 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
         {
             ["always-inline,inline,constmerge,reassociate,gvn,simplifycfg,globalopt",
             ",function<eager-inv>(mem2reg,instcombine<max-iterations=1;no-use-loop-info;no-verify-fixpoint>",
-            ",sccp,lower-constant-intrinsics,sroa,memcpyopt,tailcallelim)",
-            ",globaldce,function(annotation-remarks),verify"].join("")
+            ",sccp,lower-constant-intrinsics,sroa,memcpyopt",
+            ",loop-simplify,indvars,loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;>,slp-vectorizer,vector-combine",
+            ",tailcallelim)",
+            ",simplifycfg,globaldce,function(annotation-remarks),verify"].join("")
         };
         module.run_passes(&passes, &machine, pass_options).unwrap();
     }
