@@ -10,6 +10,8 @@ struct Vec2
     f32 y;
 }
 
+using i32 testvar;
+
 using Vec2 myvec;
 
 void func_etc()
@@ -24,6 +26,9 @@ asdf:
     print_float(1.0f64/-0.0f64);
     print_float(1.0f64%0.0f64);
     print_float(1.0f64%-0.0f64);
+    
+    //print_float(((&testvar) bit_as u64) as f64);
+    print_float((testvar) as f64);
     return;
 }
 

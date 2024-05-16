@@ -10,5 +10,7 @@ struct Vec2
     f32 y;
 }
 
+i32 testvar = 100i32;
+
 Vec2 myvec = Vec2 { 151.015f32, 5.152f32 };
 using void func_etc();

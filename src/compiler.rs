@@ -647,7 +647,7 @@ impl Program
                 let visibility = match prefix.as_str()
                 {
                     "import_extern" => Visibility::Import,
-                    _ => Visibility::ImportLocal,
+                    _ => Visibility::ImportLocal, // "using"
                 };
                 
                 let return_type = parse_type(types, child.child(1)?).unwrap();
@@ -700,7 +700,7 @@ impl Program
                 let visibility = match prefix.as_str()
                 {
                     "import_extern" => Visibility::Import,
-                    _ => Visibility::ImportLocal,
+                    _ => Visibility::ImportLocal, // "using"
                 };
                 
                 let type_ = parse_type(types, child.child(1)?).unwrap();
@@ -3085,7 +3085,10 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                     else
                     {
                         let global = module.add_global(basic_type, None, g_name);
-                        global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
+                        if !matches!(*visibility, Visibility::Import | Visibility::ImportLocal)
+                        {
+                            global.set_initializer(&basic_type.as_basic_type_enum().const_zero());
+                        }
                         global.set_linkage(linkage);
                         global.set_dll_storage_class(storage_class);
                         global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
@@ -3340,21 +3343,37 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
         
         unsafe
         {
+            // check for errors
+            use core::ffi::c_char;
+            let mut msg : *mut c_char = 0 as *mut c_char;
+            let val = llvm_sys::execution_engine::LLVMExecutionEngineGetErrMsg(executor.as_mut_ptr(), &mut msg as *mut *mut c_char);
+            if val != 0
+            {
+                if !msg.is_null()
+                {
+                    panic!("linker error:\n{:?}", core::ffi::CStr::from_ptr(msg).to_string_lossy());
+                }
+                panic!("unknown linker error");
+            }
+            
+            // run main
+            // TODO: pass arguments if supported by underlying function
             let name = "main";
             let f = get_func!(name, unsafe extern "C" fn());
             
             let start = std::time::Instant::now();
+            
             if VERBOSE
             {
                 println!("running {}...", name);
             }
+            
             let out = f.call();
-            let elapsed_time = start.elapsed();
             
             if VERBOSE
             {
                 println!("{}() = {:?}", name, out);
-                println!("time: {}", elapsed_time.as_secs_f64());
+                println!("time: {}", start.elapsed().as_secs_f64());
             }
         }
         
