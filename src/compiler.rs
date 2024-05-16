@@ -3288,17 +3288,12 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
         }
         else
         {
-            format!("{}{}{}{}", "always-inline,inline,constmerge,reassociate,gvn,simplifycfg,globalopt",
-                    ",function<eager-inv>(mem2reg,instcombine<max-iterations=1;no-use-loop-info;no-verify-fixpoint>",
-                     ",sccp,lower-constant-intrinsics,sroa,tailcallelim)",
-                    ",globaldce,function(annotation-remarks),verify")
-            //;format!("default<O3>")
+            ["always-inline,inline,constmerge,reassociate,gvn,simplifycfg,globalopt",
+            ",function<eager-inv>(mem2reg,instcombine<max-iterations=1;no-use-loop-info;no-verify-fixpoint>",
+            ",sccp,lower-constant-intrinsics,sroa,memcpyopt,tailcallelim)",
+            ",globaldce,function(annotation-remarks),verify"].join("")
         };
-        //let manager : inkwell::passes::PassManager<inkwell::module::Module> = inkwell::passes::PassManager::create(());
-        //machine.add_analysis_passes(&manager);
-        //manager.run_on(module);
         module.run_passes(&passes, &machine, pass_options).unwrap();
-        //manager.run_on(module);
     }
     
     if VERBOSE
