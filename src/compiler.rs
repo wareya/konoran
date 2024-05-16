@@ -1293,7 +1293,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         if hoisted_return
                         {
                             let return_backend_type = get_backend_type_sized(env.backend_types, env.types, &funcsig.return_type);
-                            let mut slot = emit_alloca!(return_backend_type, "");
+                            let mut slot = emit_alloca!(return_backend_type, "__hoisted_return");
                             if slot.get_type().get_address_space() != inkwell::AddressSpace::default()
                             {
                                 slot = env.builder.build_address_space_cast(slot, ptr_type, "").unwrap();
@@ -1455,7 +1455,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         array_val = env.builder.build_insert_value(array_val, element, i as u32, "").unwrap();
                     }
                     
-                    let slot = emit_alloca!(backend_array_type, "");
+                    let slot = emit_alloca!(backend_array_type, "__temp_vec_conversion");
                     env.builder.build_store(slot, array_val).unwrap();
                     
                     push_val_or_ptr!(rtype, slot, false);
@@ -1570,7 +1570,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 if !is_const
                 {
-                    let slot = emit_alloca!(array_backend_type, "");
+                    let slot = emit_alloca!(array_backend_type, "__array_literal");
                     
                     for (offset, val) in vals.into_iter().enumerate()
                     {
@@ -1650,7 +1650,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 if !is_const
                 {
-                    let slot = emit_alloca!(backend_type, "");
+                    let slot = emit_alloca!(backend_type, "__struct_literal");
                     for (index, (type_, val)) in vals.into_iter().enumerate()
                     {
                         let real_index = struct_members[index].1;
@@ -2009,7 +2009,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     env.builder.build_conditional_branch(comp_val, then_block, else_block).unwrap();
                     env.builder.position_at_end(else_block);
                 }
-                else
+                else // full ifcondition
                 {
                     let then_block = env.context.append_basic_block(env.func_val, "then");
                     let else_block = env.context.append_basic_block(env.func_val, "else");
@@ -2107,7 +2107,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     }
                     else
                     {
-                        let slot = emit_alloca!(right_basic_type, "");
+                        let slot = emit_alloca!(right_basic_type, "__temp_agg_agg_cast");
                         maybe_store_aggregate!(left_type, left_val, slot, false);
                         push_val_or_ptr!(right_type, slot, false);
                     }
@@ -2115,14 +2115,14 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 // composite to primitive
                 else if left_size == right_size && left_type.is_composite() && !right_type.is_composite() && !right_type.is_pointer_or_fpointer()
                 {
-                    let slot = emit_alloca!(right_basic_type, "");
+                    let slot = emit_alloca!(right_basic_type, "__temp_agg_prim_cast");
                     maybe_store_aggregate!(left_type, left_val, slot, false);
                     push_val_or_ptr!(right_type, slot, false);
                 }
                 // primitive to composite
                 else if left_size == right_size && right_type.is_composite() && !left_type.is_composite() && !left_type.is_pointer_or_fpointer()
                 {
-                    let slot = emit_alloca!(right_basic_type, "");
+                    let slot = emit_alloca!(right_basic_type, "__temp_prim_agg_cast");
                     let val = maybe_load_aggregate!(left_type, left_val, false);
                     env.builder.build_store(slot, val).unwrap();
                     push_val_or_ptr!(right_type, slot, false);
