@@ -5,38 +5,42 @@
 use std::rc::Rc;
 use std::cell::RefCell;
 
-pub (crate) trait ReadSeek : std::io::Read + std::io::Seek {}
-impl<T> ReadSeek for T where T: std::io::Read + std::io::Seek {}
-
 /// Helper iterator for looping over the lines of a file. Unlike [std::io::BufRead::lines], can be cloned. Cloned copies start iterating from the same place as earlier copies started, but only one active iterator can exist at once.
 ///
 /// The underlying file must be utf-8 and have either LF or CRLF newlines, otherwise it may fail to iterate or return distorted Strings. (However, any returned Strings will be valid Strings, even if distorted.)
 ///
 /// The [FileLines::into_iter()] implementation silently fails if an existing iterator exists for this FileLines object.
-pub struct FileLines
+pub struct FileLines<T : std::io::Read + std::io::Seek>
 {
-    pub (crate) backend : Rc<RefCell<Option<Box<dyn ReadSeek>>>>,
+    pub (crate) backend : Rc<RefCell<Option<T>>>,
     position : u64,
 }
 /// Iterator of lines over a FileLines object.
-pub struct FileLinesIterator
+pub struct FileLinesIterator<T : std::io::Read + std::io::Seek>
 {
-    pub (crate) backend : Rc<RefCell<Option<Box<dyn ReadSeek>>>>,
-    lock : Option<Box<dyn ReadSeek>>,
+    pub (crate) backend : Rc<RefCell<Option<T>>>,
+    lock : Option<T>,
     startpos : u64,
 }
 
-impl FileLines
+impl<T : std::io::Read + std::io::Seek> FileLines<T>
 {
     /// Creates a cloneable lines iterator.
-    pub fn from_seekable<T : std::io::Read + std::io::Seek + 'static>(mut f : T) -> Self
+    pub fn from_seekable(mut f : T) -> Self
     {
         let position = f.stream_position().unwrap();
-        Self { backend : Rc::new(RefCell::new(Some(Box::new(f)))), position }
+        Self { backend : Rc::new(RefCell::new(Some(f))), position }
+    }
+    /// Returns the underlying object and invalidates any other cloned FileLines instances.
+    ///
+    /// Panics if an associated FileLinesIterator instance exists and is valid.
+    pub fn into_inner(self) -> T
+    {
+        self.backend.take().unwrap()
     }
 }
 
-impl Clone for FileLines
+impl<T : std::io::Read + std::io::Seek> Clone for FileLines<T>
 {
     fn clone(&self) -> Self
     {
@@ -44,12 +48,12 @@ impl Clone for FileLines
     }
 }
 
-impl IntoIterator for FileLines
+impl<T : std::io::Read + std::io::Seek> IntoIterator for FileLines<T>
 {
     type Item = String;
-    type IntoIter = FileLinesIterator;
+    type IntoIter = FileLinesIterator<T>;
     /// Silently fails if an existing iterator exists for this FileLines object.
-    fn into_iter(self) -> FileLinesIterator
+    fn into_iter(self) -> FileLinesIterator<T>
     {
         // Borrow by cloning the seekable's shared pointer into the iterator object.
         let backend = Rc::clone(&self.backend);
@@ -59,7 +63,7 @@ impl IntoIterator for FileLines
     }
 }
 
-impl FileLinesIterator
+impl<T : std::io::Read + std::io::Seek> FileLinesIterator<T>
 {
     fn invalidate(&mut self)
     {
@@ -75,7 +79,7 @@ impl FileLinesIterator
     }
 }
 
-impl Drop for FileLinesIterator
+impl<T : std::io::Read + std::io::Seek> Drop for FileLinesIterator<T>
 {
     fn drop(&mut self)
     {
@@ -83,7 +87,7 @@ impl Drop for FileLinesIterator
     }
 }
 
-impl Iterator for FileLinesIterator
+impl<T : std::io::Read + std::io::Seek> Iterator for FileLinesIterator<T>
 {
     type Item = String;
     fn next(&mut self) -> Option<String>
