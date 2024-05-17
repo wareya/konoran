@@ -1,4 +1,4 @@
-//! Helper iterator for looping over the lines of a file. Unlike [std::io::BufRead::lines], can be cloned and rewound.
+//! Helper iterator for looping over the lines of a file. Unlike [std::io::BufRead::lines], can be cloned.
 //!
 //! Makes it easier to pass files to [crate::compiler::process_program].
 
@@ -8,7 +8,7 @@ use std::cell::RefCell;
 pub (crate) trait ReadSeek : std::io::Read + std::io::Seek {}
 impl<T> ReadSeek for T where T: std::io::Read + std::io::Seek {}
 
-/// Helper iterator for looping over the lines of a file. Unlike [std::io::BufRead::lines], can be cloned and rewound.
+/// Helper iterator for looping over the lines of a file. Unlike [std::io::BufRead::lines], can be cloned. Cloned copies start iterating from the same place as earlier copies started, but only one active iterator can exist at once.
 ///
 /// The underlying file must be utf-8 and have either LF or CRLF newlines, otherwise it may fail to iterate or return distorted Strings. (However, any returned Strings will be valid Strings, even if distorted.)
 ///
@@ -49,13 +49,13 @@ impl IntoIterator for FileLines
     type Item = String;
     type IntoIter = FileLinesIterator;
     /// Silently fails if an existing iterator exists for this FileLines object.
-    fn into_iter(self) -> Self::IntoIter
+    fn into_iter(self) -> FileLinesIterator
     {
         // Borrow by cloning the seekable's shared pointer into the iterator object.
         let backend = Rc::clone(&self.backend);
         // Null the seekable and move it into the iterator object. (The iterator object will put it back when it drops or finishes.)
         let lock = backend.take();
-        Self::IntoIter { backend, lock, startpos : self.position }
+        FileLinesIterator { backend, lock, startpos : self.position }
     }
 }
 
