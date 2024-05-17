@@ -19,8 +19,7 @@ jobs:
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v1
         with:
-          version: " 18 "
-          env: true
+          version: 18
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: llvm-config
