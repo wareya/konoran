@@ -72,8 +72,8 @@ Konoran's reference implementation uses a declarative grammar (i.e. specified in
 
 ## TODO
 
-- Write documentation
-- Write a spec
+- Write documentation (WIP: [Design.md](Design.md))
+- Write a spec (WIP: [Spec.md](Spec.md))
 
 # Building info
 
