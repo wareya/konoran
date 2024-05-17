@@ -2892,14 +2892,18 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
             {
                 println!("parsing {}...", $fname);
             }
-            let mut token_lines = $program_lines_iter.clone().into_iter();
-            let mut parse_lines = $program_lines_iter.clone().into_iter();
-            let mut program_lines = $program_lines_iter.clone().into_iter();
             
             let parse_start = std::time::Instant::now();
             
+            let mut token_lines = $program_lines_iter.clone().into_iter();
             let tokens = parser.tokenize(&mut token_lines, true).unwrap();
+            let _ = token_lines.count(); // force invalidation
+            
+            let mut parse_lines = $program_lines_iter.clone().into_iter();
             let ast = parser.parse_program(&tokens, &mut parse_lines, true).unwrap().unwrap();
+            let _ = parse_lines.count(); // force invalidation
+            
+            let mut program_lines = $program_lines_iter.clone().into_iter();
             
             parse_time += parse_start.elapsed().as_secs_f64();
             

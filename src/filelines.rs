@@ -45,9 +45,27 @@ impl IntoIterator for FileLines
     /// Panics if an existing iterator exists for this FileLines object.
     fn into_iter(self) -> Self::IntoIter
     {
+        // Borrow by cloning the seekable's shared pointer into the iterator object.
         let backend = Rc::clone(&self.backend);
+        // Null the seekable and move it into the iterator object. (The iterator object will put it back when it drops or finishes.)
         let lock = backend.take();
         Self::IntoIter { backend, lock }
+    }
+}
+
+impl FileLinesIterator
+{
+    fn invalidate(&mut self)
+    {
+        // Invalidate by placing the original seekable back into the 
+        let mut lock = self.lock.take();
+        if let Some(ref mut seekable) = lock
+        {
+            let _ = seekable.rewind();
+        }
+        self.backend.replace(lock);
+        // prevent re-invalidation
+        self.backend = Rc::new(RefCell::new(None));
     }
 }
 
@@ -55,8 +73,7 @@ impl Drop for FileLinesIterator
 {
     fn drop(&mut self)
     {
-        let lock = self.lock.take();
-        self.backend.replace(lock);
+        self.invalidate()
     }
 }
 
@@ -65,30 +82,39 @@ impl Iterator for FileLinesIterator
     type Item = String;
     fn next(&mut self) -> Option<String>
     {
-        let lock = self.lock.as_mut().unwrap();
-        let mut buf = [0u8; 1];
-        if let Ok(n) = lock.read(&mut buf)
+        if let Some(lock) = self.lock.as_mut()
         {
-            if n == 0
+            let mut buf = [0u8; 1];
+            if let Ok(n) = lock.read(&mut buf)
             {
-                return None
+                if n == 0
+                {
+                    self.invalidate();
+                    return None;
+                    //return Some("".to_string());
+                }
+                let mut bytes = vec!(buf[0]);
+                let mut n = lock.read(&mut buf);
+                while n.is_ok() && !matches!(n, Ok(0)) && buf[0] != b'\n'
+                {
+                    bytes.push(buf[0]);
+                    n = lock.read(&mut buf);
+                }
+                if let Some(b'\n') = bytes.last()
+                {
+                    bytes.pop();
+                }
+                if let Some(b'\r') = bytes.last()
+                {
+                    bytes.pop();
+                }
+                return String::from_utf8(bytes).ok();
             }
-            let mut bytes = vec!(buf[0]);
-            let mut n = lock.read(&mut buf);
-            while n.is_ok() && !matches!(n, Ok(0)) && buf[0] != b'\n'
+            else
             {
-                bytes.push(buf[0]);
-                n = lock.read(&mut buf);
+                self.invalidate();
+                None
             }
-            if let Some(b'\n') = bytes.last()
-            {
-                bytes.pop();
-            }
-            if let Some(b'\r') = bytes.last()
-            {
-                bytes.pop();
-            }
-            return String::from_utf8(bytes).ok();
         }
         else
         {
