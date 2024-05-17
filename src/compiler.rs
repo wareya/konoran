@@ -2897,7 +2897,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
             let parse_start = std::time::Instant::now();
             
             let mut token_lines = $program_lines_iter.clone().into_iter();
-            let tokens = parser.tokenize(&mut token_lines, true).unwrap();
+            let tokens = parser.tokenize(&mut token_lines, true).unwrap_or_else(|err| panic!("{}", err));
             let _ = token_lines.count(); // force invalidation
             
             let mut parse_lines = $program_lines_iter.clone().into_iter();

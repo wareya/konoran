@@ -229,8 +229,7 @@ fn main()
                         let out = f.call(argc, argv);
                         time_end!(out);
                     }
-                    Some((n, _)) => panic!("sdkgr `{}`", n),
-                    _ => panic!("fgkjgwriu"),
+                    _ => panic!("Failed to find function `{}` to run; maybe the file failed to parse?", name),
                 }
             }
             

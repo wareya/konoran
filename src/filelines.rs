@@ -7,7 +7,7 @@ impl<T> ReadSeek for T where T: std::io::Read + std::io::Seek {}
 
 /// Helper iterator for looping over the lines of a file. Unlike [std::io::BufRead::lines], can be cloned and rewound.
 ///
-/// The underlying file must be utf-8 and have either LF or CRLF newlines, otherwise it may fail to iterate.
+/// The underlying file must be utf-8 and have either LF or CRLF newlines, otherwise it may fail to iterate or return distorted Strings. (However, any returned Strings will be valid Strings, even if distorted.)
 ///
 /// The [FileLines::into_iter()] implementation panics if an existing iterator exists for this FileLines object.
 pub struct FileLines
@@ -111,7 +111,14 @@ impl Iterator for FileLinesIterator
                 {
                     bytes.pop();
                 }
-                return String::from_utf8(bytes).ok();
+                if let Ok(string) = String::from_utf8(bytes.clone())
+                {
+                    Some(string)
+                }
+                else
+                {
+                    Some(String::from_utf8_lossy(&bytes).to_string())
+                }
             }
             else
             {
