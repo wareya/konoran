@@ -2677,10 +2677,10 @@ pub struct ProcessOutput
 
 /// Compile a konoran program.
 ///
-/// Panics and prints an error message if the given modules are invalid.
-///
 /// For information about the Konoran language, see <https://github.com/wareya/konoran/>.
 /// 
+/// Panics and prints an error message if the given modules are invalid.
+///
 /// NOTE: Creates and leaks an [inkwell::context::Context](https://thedan64.github.io/inkwell/inkwell/context/struct.Context.html).
 ///
 /// Each leftmost entry in 'modules' is an iterater over the lines of a single module.
