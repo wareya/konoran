@@ -16,12 +16,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v1
         with:
-          version: "18"
+          version: "18.1"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
       - name: llvm-config
         run: llvm-config --version --bindir --libdir
       - name: Configure cache
