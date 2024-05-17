@@ -12,7 +12,7 @@ impl<T> ReadSeek for T where T: std::io::Read + std::io::Seek {}
 ///
 /// The underlying file must be utf-8 and have either LF or CRLF newlines, otherwise it may fail to iterate or return distorted Strings. (However, any returned Strings will be valid Strings, even if distorted.)
 ///
-/// The [FileLines::into_iter()] implementation panics if an existing iterator exists for this FileLines object.
+/// The [FileLines::into_iter()] implementation silently fails if an existing iterator exists for this FileLines object.
 pub struct FileLines
 {
     pub (crate) backend : Rc<RefCell<Option<Box<dyn ReadSeek>>>>,
@@ -48,7 +48,7 @@ impl IntoIterator for FileLines
 {
     type Item = String;
     type IntoIter = FileLinesIterator;
-    /// Panics if an existing iterator exists for this FileLines object.
+    /// Silently fails if an existing iterator exists for this FileLines object.
     fn into_iter(self) -> Self::IntoIter
     {
         // Borrow by cloning the seekable's shared pointer into the iterator object.
