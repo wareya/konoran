@@ -1,0 +1,44 @@
+name: Docs
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Use the determinate nix installer
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Setup pages
+        id: pages
+        uses: actions/configure-pages@v4
+      - name: Build docs
+        run: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#cargo nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c cargo doc --no-deps
+      - name: Add redirect
+        run: echo '<meta http-equiv="refresh" content="0;url=konoran/index.html">' > target/doc/index.html
+      - name: Remove lock file
+        run: rm target/doc/.lock
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+  deploy:
+    name: Deploy
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
