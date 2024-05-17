@@ -1,3 +1,6 @@
+//! Helper iterator for looping over the lines of a file. Unlike [std::io::BufRead::lines], can be cloned and rewound.
+//!
+//! Makes it easier to pass files to [crate::compiler::process_program].
 
 use std::rc::Rc;
 use std::cell::RefCell;

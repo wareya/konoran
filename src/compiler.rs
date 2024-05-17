@@ -1,3 +1,7 @@
+//! Things related to compiling and running a konoran program.
+//!
+//! You want [process_program].
+
 #![allow(clippy::let_unit_value)] // seim-generic debugging code
 #![allow(clippy::len_zero)] // subjective readability
 #![allow(clippy::comparison_to_empty)] // subjective readability

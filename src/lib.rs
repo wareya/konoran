@@ -36,3 +36,31 @@ mod inkwell_helpers;
 mod intrinsics_lists;
 pub mod filelines;
 pub mod compiler;
+
+/// Re-exported from inkwell for documentation browsing convenience, but please see the upstream docs!
+///
+/// <https://thedan64.github.io/inkwell/inkwell/>
+///
+pub mod inkwell
+{
+    /// <https://thedan64.github.io/inkwell/inkwell/context/struct.Context.html?search=Context>
+    ///
+    /// (Re-exported for convenience. Some links here are broken because inkwell's docs are external. Please use the upstream docs!)
+    ///
+    pub use inkwell::context::Context;
+    /// <https://thedan64.github.io/inkwell/inkwell/module/struct.Module.html?search=Module>
+    ///
+    /// (Re-exported for convenience. Some links here are broken because inkwell's docs are external. Please use the upstream docs!)
+    ///
+    pub use inkwell::module::Module;
+    /// <https://thedan64.github.io/inkwell/inkwell/targets/struct.TargetMachine.html?search=TargetMachine>
+    ///
+    /// (Re-exported for convenience. Some links here are broken because inkwell's docs are external. Please use the upstream docs!)
+    ///
+    pub use inkwell::targets::TargetMachine;
+    /// <https://thedan64.github.io/inkwell/inkwell/execution_engine/struct.ExecutionEngine.html?search=ExecutionEngine>
+    ///
+    /// (Re-exported for convenience. Some links here are broken because inkwell's docs are external. Please use the upstream docs!)
+    ///
+    pub use inkwell::execution_engine::ExecutionEngine;
+}
