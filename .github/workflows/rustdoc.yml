@@ -17,7 +17,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Arch
-        run: echo %PROCESSOR_ARCHITECTURE%
+        run: printenv PROCESSOR_ARCHITECTURE
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v1
         with:
