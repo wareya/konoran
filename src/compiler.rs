@@ -2675,8 +2675,9 @@ pub struct ProcessOutput
     pub visible_function_signatures : HashMap<String, (String, bool)>,
 }
 
-
 /// Compile a konoran program.
+///
+/// Panics and prints an error message if the given modules are invalid.
 ///
 /// For information about the Konoran language, see <https://github.com/wareya/konoran/>.
 /// 
@@ -2688,7 +2689,7 @@ pub struct ProcessOutput
 ///
 /// By default, a JIT executor is created. If this is not desired, the relevant settings must be set. In particular, the `asm_triple` and `objfile` settings disable the JIT.
 ///
-/// Example of loading multiple modules from disk lazily using the [crate::filelines::FileLines] object provided as a helper (but any object implementing both IntoIterator and Clone is fine):
+/// Example of loading multiple modules from disk lazily using the [crate::filelines::FileLines] object provided as a helper (but any object implementing both IntoIterator and Clone is fine. In fact, it's OK for only one resulting iterator to be valid at a time, as long as future clones create valid iterators once past iterators are fully consumed):
 ///
 /// ```rust
 ///     use std::fs::File;

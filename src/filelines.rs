@@ -13,20 +13,23 @@ impl<T> ReadSeek for T where T: std::io::Read + std::io::Seek {}
 pub struct FileLines
 {
     pub (crate) backend : Rc<RefCell<Option<Box<dyn ReadSeek>>>>,
+    position : u64,
 }
 /// Iterator of lines over a FileLines object.
 pub struct FileLinesIterator
 {
     pub (crate) backend : Rc<RefCell<Option<Box<dyn ReadSeek>>>>,
     lock : Option<Box<dyn ReadSeek>>,
+    startpos : u64,
 }
 
 impl FileLines
 {
     /// Creates a cloneable lines iterator.
-    pub fn from_seekable<T : std::io::Read + std::io::Seek + 'static>(f : T) -> Self
+    pub fn from_seekable<T : std::io::Read + std::io::Seek + 'static>(mut f : T) -> Self
     {
-        Self { backend : Rc::new(RefCell::new(Some(Box::new(f)))) }
+        let position = f.stream_position().unwrap();
+        Self { backend : Rc::new(RefCell::new(Some(Box::new(f)))), position }
     }
 }
 
@@ -34,7 +37,7 @@ impl Clone for FileLines
 {
     fn clone(&self) -> Self
     {
-        Self { backend : Rc::clone(&self.backend) }
+        Self { backend : Rc::clone(&self.backend), position : self.position }
     }
 }
 
@@ -49,7 +52,7 @@ impl IntoIterator for FileLines
         let backend = Rc::clone(&self.backend);
         // Null the seekable and move it into the iterator object. (The iterator object will put it back when it drops or finishes.)
         let lock = backend.take();
-        Self::IntoIter { backend, lock }
+        Self::IntoIter { backend, lock, startpos : self.position }
     }
 }
 
@@ -61,7 +64,7 @@ impl FileLinesIterator
         let mut lock = self.lock.take();
         if let Some(ref mut seekable) = lock
         {
-            let _ = seekable.rewind();
+            let _ = seekable.seek(std::io::SeekFrom::Start(self.startpos));
         }
         self.backend.replace(lock);
         // prevent re-invalidation
