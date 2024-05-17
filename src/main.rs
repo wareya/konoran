@@ -5,7 +5,7 @@ use konoran::compiler::*;
 use std::env;
 fn main()
 {
-    let mut modules = Vec::new();
+    let mut module_fnames = Vec::new();
     let mut args = Vec::new();
     let mut settings = HashMap::new();
     let mut mode = "";
@@ -14,7 +14,7 @@ fn main()
     {
         if mode == "-i" || (mode == "" && !arg.starts_with("-"))
         {
-            modules.push(arg);
+            module_fnames.push(arg);
             mode = "";
         }
         else if mode == "--"
@@ -61,10 +61,36 @@ fn main()
             }
         }
     }
-    if modules.len() == 0
+    if module_fnames.len() == 0
     {
         println!("Usage:");
-        println!("konoran <source_file> -- <arguments>");
+        println!("konoran <source_files> <options> -- <arguments>");
+        println!("");
+        println!("Options:");
+        println!("");
+        println!("-oat");
+        println!("--output-assembly-triple");
+        println!("    Specify a triple to output assembly for, e.g. x86_64-pc-windows");
+        println!("");
+        println!("-ft");
+        println!(" --force-triple");
+        println!("    Force a target triple, e.g. x86_64-pc-windows");
+        println!("");
+        println!("-cpu <fname>");
+        println!("--force-target-cpu <fname>");
+        println!("    Force a particular target CPU, e.g. athlon64, skylake, native");
+        println!("");
+        println!("-obj <fname>");
+        println!("--generate-obj <fname>");
+        println!("    Output an object file (e.g. main.o) for linking with an external toolchain.");
+        println!("");
+        println!("-sag");
+        println!("--simple-aggregates");
+        println!("    Uses a different strategy for compiling structs/arrays that usually results in worse machine code, except on certain niche architectures it results in better machine code instead.");
+        println!("");
+        println!("-O0 -O1 -O2 -O3 -Os -Oz -Od");
+        println!("    Specify an optimization level. O0 is the least optimized, O3 is the most. Os and Oz optimize for size. Od optimizes for developer throughput time and sits somewhere between O0 and O1 in terms of compile-time speed without being horribly slow at runtime like O0 is. (On math-heavy code, Od is usually faster than O1.) Note that the first character is a capital o, not a zero.");
+        
     }
     else
     {
@@ -78,24 +104,25 @@ fn main()
             io::BufReader::new(file).lines()
         }
         
-        let mut iter = modules.into_iter().map(|fname| (
+        let mut iter = module_fnames.into_iter().map(|fname|
+        (
             {
                 let fname = fname.clone();
                 read_lines(fname.clone()).map(move |x| x.unwrap_or_else(|_| panic!("IO error while reading input module {}", fname.clone())))
             },
             fname.clone()
         ));
-        let output = process_program(&mut iter, settings.clone());
+        let process_output = process_program(&mut iter, settings.clone());
         
-        let machine = output.machine;
-        let loaded_modules = output.modules;
+        let machine = process_output.machine;
+        let loaded_modules = process_output.modules;
         
         let skip_jit = settings.get("asm_triple").is_some() | settings.get("objfile").is_some();
         
         if !skip_jit
         {
-            let executor = output.executor;
-            let exports = output.visible_function_signatures;
+            let executor = process_output.executor;
+            let exports = process_output.visible_function_signatures;
             
             println!("running code...");
             

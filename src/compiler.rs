@@ -2671,29 +2671,58 @@ pub struct ProcessOutput
 
 
 /// Compile program.
+/// 
+/// NOTE: Creates and leaks an `inkwell::context::Context`.
 ///
 /// Each leftmost entry in 'modules' is an iterater over the lines of a single module.
 ///
 /// Each rightmost entry in 'modules' is string with a filename (optional; can all be blank).
 ///
-/// So, to pass in a single file:
+/// By default, a JIT executor is created. If this is not desired, the relevant settings must be set. In particular, the `asm_triple` and `objfile` settings disable the JIT.
+///
+/// Example of loading multiple modules from disk lazily:
 ///
 /// ```rust
-///     process_program(vec!((std::fs::read_to_string(fname).unwrap().lines(), fname)), HashMap::new());
+///    use std::fs::File;
+///    use std::io::{self, BufRead};
+///    use std::path::Path;
+
+///    fn read_lines<P : AsRef<Path> + ToString + Clone>(filename: P) -> io::Lines<io::BufReader<File>>
+///    {
+///        let file = File::open(filename.clone()).unwrap_or_else(|_| panic!("failed to open file {}", filename.to_string()));
+///        io::BufReader::new(file).lines()
+///    }
+///    
+///    let mut iter = module_fnames.into_iter().map(|fname|
+///    (
+///        {
+///            let fname = fname.clone();
+///            read_lines(fname.clone()).map(move |x| x.unwrap_or_else(|_| panic!("IO error while reading input module {}", fname.clone())))
+///        },
+///        fname.clone()
+///    ));
+///    let process_output = process_program(&mut iter, settings.clone());
 /// ```
 ///
-/// By default, a JIT executor is created. If this is not desired, the relevant settings must be set.
-/// 
 /// The settings hashmap supports the following settings:
 /// 
 /// - `asm_triple` = any llvm triple, e.g. `x86_64-pc-windows`. Disables JIT while forcing the generated modules to target a particular machine triple. Indicates that you intend to do ASM output with the returned modules.
 /// - `objfile` = Exact value ignored, but disables JIT without forcing the target machine triple. Indicates that you intend to do object file output with the returned modules. If applied alongside `asm_triple`, equivalent to only `asm_triple` being applied (i.e. the target machine will still be forced).
+/// - `triple` = Force a target triple, e.g. `x86_64-pc-windows`. Does not disable JIT.
 /// - `cpu` = any llvm-supported CPU name, e.g. `athlon64`, `skylake`, etc. Also supports `native` to indicate the host CPU. Does not disable JIT.
 /// - - Forces compilation to target a particular CPU. If unset and in JIT mode, the native configuration is used. If unset and not in JIT mode, the most conservative possible configuration for the target platform is used. If set to a CPU configuration that the host system doesn't support and left in JIT mode, the resulting executor may not be able to be run safely.
-/// 
-/// The `asm_triple` and `objfile` settings disable the JIT.
+/// - `simple_aggregates` = Exact value ignored. Makes the generated LLVM IR use (virtual) registers for structs/arrays instead of allocas and pointers.
+/// - `optlevel` = Accepted values are `"0"`, `"1"`, `"2"`, `"3"`, `"s"`, `"z"`, and `"d"`. Specifies optimization level. `0` is the least optimized, `3` is the most. `s` and `z` optimize for size. `d` optimizes for developer throughput time and sits somewhere between `0` and `1` in terms of compile-time speed without being horribly slow at runtime like `0` is. (On math-heavy code, `d` is usually faster than `1`.) Note that the first character is a capital o, not a zero.
 ///
-/// NOTE: Creates and leaks an `inkwell::context::Context`.
+/// In JIT mode, to run a function, you need to call something like:
+///
+/// ```rust
+/// let f = executor.get_function::<TYPE>(funcname).unwrap();
+/// /*let retval = */ f.call(/*...*/);
+/// ```
+///
+/// For more information, see the `inkwell` documentation.
+///
 pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterator<Item=String>, String)>, settings : HashMap<&'static str, String>) -> ProcessOutput
 {
     if VERBOSE
