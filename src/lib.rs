@@ -4,6 +4,8 @@
 //!
 //! For information about the Konoran language, see <https://github.com/wareya/konoran/>.
 //!
+//! See <https://github.com/wareya/konoran/tree/main/examples> for more examples.
+//!
 //! Here's a small example Konoran program:
 //! ```rust
 //! f32 func_gravity()
@@ -27,7 +29,6 @@
 //!     return (y) as f32;
 //! }
 //! ```
-//! See <https://github.com/wareya/konoran/tree/main/examples> for more examples.
 
 mod parser;
 mod stdlib;
