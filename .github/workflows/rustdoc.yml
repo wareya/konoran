@@ -18,15 +18,13 @@ jobs:
         uses: actions/checkout@v4
       - name: Use the determinate nix installer
         uses: DeterminateSystems/nix-installer-action@main
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
       - name: Setup pages
         id: pages
         uses: actions/configure-pages@v4
       - name: Clean docs folder
-        run: cargo clean --doc
+        run: nix shell nixpkgs#cargo -c cargo clean --doc
       - name: Build docs
         run: nix shell nixpkgs#cargo nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c cargo doc --no-deps
       - name: Add redirect
