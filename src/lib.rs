@@ -1,4 +1,4 @@
-//! A simple, JITable, ultra low-level language, designed as a compiler target.
+//! Konoran is a simple, JITable, ultra low-level language, designed as a compiler target.
 //!
 //! You want [compiler::process_program].
 //!
@@ -27,11 +27,11 @@
 //!     return (y) as f32;
 //! }
 //! ```
-
+//! See <https://github.com/wareya/konoran/tree/main/examples> for more examples.
 
 mod parser;
 mod stdlib;
 mod inkwell_helpers;
 mod intrinsics_lists;
+pub mod filelines;
 pub mod compiler;
-

@@ -6,8 +6,8 @@ use crate::parser;
 pub (crate) fn import_function<T>(types: &BTreeMap<String, Type>, parser : &mut parser::Parser, imports : &mut BTreeMap<String, (*const u8, FunctionSig)>, name : &str, _pointer : T, pointer_usize : usize, type_string : &str)
 {
     let type_lines = vec!(type_string.to_string());
-    let type_tokens = parser.tokenize(&type_lines, true).unwrap();
-    let type_ast = parser.parse_with_root_node_type(&type_tokens, &type_lines, true, "type").unwrap().unwrap();
+    let type_tokens = parser.tokenize(&mut type_lines.clone().into_iter(), true).unwrap();
+    let type_ast = parser.parse_with_root_node_type(&type_tokens, &mut type_lines.clone().into_iter(), true, "type").unwrap().unwrap();
     let type_ = parse_type(types, &type_ast).unwrap();
     if let TypeData::FuncPointer(funcsig) = type_.data
     {

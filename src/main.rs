@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use konoran::compiler::*;
+use konoran::filelines::*;
 
 use std::env;
 fn main()
@@ -109,23 +110,23 @@ fn main()
         let verbose = settings.contains_key("verbose");
         
         use std::fs::File;
-        use std::io::{self, BufRead};
         use std::path::Path;
-
-        fn read_lines<P : AsRef<Path> + ToString + Clone>(filename: P) -> io::Lines<io::BufReader<File>>
+        
+        fn read_lines<P : AsRef<Path> + ToString + Clone>(filename: P) -> FileLines
         {
             let file = File::open(filename.clone()).unwrap_or_else(|_| panic!("failed to open file {}", filename.to_string()));
-            io::BufReader::new(file).lines()
+            FileLines::from_seekable(file)
         }
         
         let mut iter = module_fnames.into_iter().map(|fname|
         (
             {
                 let fname = fname.clone();
-                read_lines(fname.clone()).map(move |x| x.unwrap_or_else(|_| panic!("IO error while reading input module {}", fname.clone())))
+                read_lines(fname.clone())
             },
             fname.clone()
         ));
+        
         let process_output = process_program(&mut iter, settings.clone());
         
         let machine = process_output.machine;
@@ -228,7 +229,8 @@ fn main()
                         let out = f.call(argc, argv);
                         time_end!(out);
                     }
-                    _ => panic!("sdkgr"),
+                    Some((n, _)) => panic!("sdkgr `{}`", n),
+                    _ => panic!("fgkjgwriu"),
                 }
             }
             

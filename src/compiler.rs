@@ -750,7 +750,7 @@ impl Program
 struct Environment<'a, 'b, 'c, 'e, 'g>
 {
     parser         : &'g mut parser::Parser,
-    source_text    : &'e Vec<String>,
+    source_text    : &'e mut dyn Iterator<Item=String>,
     context        : &'c inkwell::context::Context,
     module         : &'a inkwell::module::Module<'c>,
     stack          : Vec<(Type, inkwell::values::BasicValueEnum<'c>)>,
@@ -842,7 +842,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
         eprintln!("\x1b[91mError:\x1b[0m {}", format!($($t)*));
         eprintln!("at line {}, column {}", node.line, node.position);
         
-        let s = env.source_text[node.line-1].clone();
+        let s = env.source_text.nth(node.line-1).unwrap();
         let ix = s.char_indices().map(|(p, _)| p).collect::<Vec<_>>();
         let start = ix[node.position - 1];
         let end = (start + node.span).min(s.len());
@@ -984,8 +984,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     
     macro_rules! parse_type_string { ($string:expr) =>
     {{
-        let tokens = env.parser.tokenize(&[$string.clone()], true).unwrap();
-        let type_ast = env.parser.parse_with_root_node_type(&tokens, &[$string.clone()], true, "type").unwrap().unwrap();
+        let tokens = env.parser.tokenize(&mut vec!($string.clone()).into_iter(), true).unwrap();
+        let type_ast = env.parser.parse_with_root_node_type(&tokens, &mut vec!($string.clone()).into_iter(), true, "type").unwrap().unwrap();
         parse_type(&env.types, &type_ast)
     }} }
     
@@ -2655,21 +2655,32 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     }
 }
 
-/// Return data from process_program. Includes everything you need to JIT or output obj or asm data.
+/// Data returned from [process_program]. Includes everything you need to JIT or output obj or asm data.
 #[derive(Debug)]
 pub struct ProcessOutput
 {
+    /// LLVM Context. Leaked; cannot be destroyed. Safe to use.
+    /// 
+    /// <https://thedan64.github.io/inkwell/inkwell/context/struct.Context.html?search=Context>
     pub context : &'static inkwell::context::Context,
+    /// <https://thedan64.github.io/inkwell/inkwell/module/struct.Module.html?search=Module>
     pub modules : Vec<inkwell::module::Module<'static>>,
+    /// <https://thedan64.github.io/inkwell/inkwell/targets/struct.TargetMachine.html?search=TargetMachine>
     pub machine : TargetMachine,
+    /// <https://thedan64.github.io/inkwell/inkwell/execution_engine/struct.ExecutionEngine.html?search=ExecutionEngine>
     pub executor : Option<inkwell::execution_engine::ExecutionEngine<'static>>,
-    pub visible_function_signatures : HashMap<String, (String, bool)>, // bool: whether it's exported externally (true) or just linkable (false)
+    /// List of functions that are visible to the outside world, exposed by the konoran program. Default visibility functions have the bool set to "false". Explicitly exported functions have the bool set to "true". All other functions (private and import) are not included. The signature string is stable and will not change between rust versions or konoran versions.
+    /// 
+    /// Logically, `name : (signature, is_export)`
+    pub visible_function_signatures : HashMap<String, (String, bool)>,
 }
 
 
-/// Compile program.
+/// Compile a konoran program.
+///
+/// For information about the Konoran language, see <https://github.com/wareya/konoran/>.
 /// 
-/// NOTE: Creates and leaks an `inkwell::context::Context`.
+/// NOTE: Creates and leaks an [inkwell::context::Context](https://thedan64.github.io/inkwell/inkwell/context/struct.Context.html).
 ///
 /// Each leftmost entry in 'modules' is an iterater over the lines of a single module.
 ///
@@ -2677,29 +2688,39 @@ pub struct ProcessOutput
 ///
 /// By default, a JIT executor is created. If this is not desired, the relevant settings must be set. In particular, the `asm_triple` and `objfile` settings disable the JIT.
 ///
-/// Example of loading multiple modules from disk lazily:
+/// Example of loading multiple modules from disk lazily using the [crate::filelines::FileLines] object provided as a helper (but any object implementing both IntoIterator and Clone is fine):
 ///
 /// ```rust
-///    use std::fs::File;
-///    use std::io::{self, BufRead};
-///    use std::path::Path;
-
-///    fn read_lines<P : AsRef<Path> + ToString + Clone>(filename: P) -> io::Lines<io::BufReader<File>>
-///    {
-///        let file = File::open(filename.clone()).unwrap_or_else(|_| panic!("failed to open file {}", filename.to_string()));
-///        io::BufReader::new(file).lines()
-///    }
-///    
-///    let mut iter = module_fnames.into_iter().map(|fname|
-///    (
-///        {
-///            let fname = fname.clone();
-///            read_lines(fname.clone()).map(move |x| x.unwrap_or_else(|_| panic!("IO error while reading input module {}", fname.clone())))
-///        },
-///        fname.clone()
-///    ));
-///    let process_output = process_program(&mut iter, settings.clone());
+///     use std::fs::File;
+///     use std::path::Path;
+///     
+///     fn read_lines<P : AsRef<Path> + ToString + Clone>(filename: P) -> FileLines
+///     {
+///         let file = File::open(filename.clone()).unwrap_or_else(|_| panic!("failed to open file {}", filename.to_string()));
+///         FileLines::from_seekable(file)
+///     }
+///     
+///     let mut iter = module_fnames.into_iter().map(|fname|
+///     (
+///         {
+///             let fname = fname.clone();
+///             read_lines(fname.clone())
+///         },
+///         fname.clone()
+///     ));
+///     
+///     let process_output = process_program(&mut iter, settings.clone());
+///     
 /// ```
+///
+/// In JIT mode, to run a function, you need to call something like:
+///
+/// ```rust
+/// let executor = process_output.executor;
+/// let f = executor.get_function::<TYPE>(funcname).unwrap();
+/// /*let retval = */ f.call(/*...*/);
+/// ```
+/// You can use [ProcessOutput::visible_function_signatures] to verify that the function you're about to exist exists and has the right signature.
 ///
 /// The settings hashmap supports the following settings:
 /// 
@@ -2714,16 +2735,10 @@ pub struct ProcessOutput
 /// - `verbose` = Print more intrusive detail about the process during compilation.
 /// - `early_exit` = Exit processing right after modules are first compiled, before doing any verification or optimization. This is only useful for debugging.
 ///
-/// In JIT mode, to run a function, you need to call something like:
+/// For more information, see the `inkwell` documentation: <https://thedan64.github.io/inkwell/inkwell/>
 ///
-/// ```rust
-/// let f = executor.get_function::<TYPE>(funcname).unwrap();
-/// /*let retval = */ f.call(/*...*/);
-/// ```
-///
-/// For more information, see the `inkwell` documentation.
-///
-pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterator<Item=String>, String)>, settings : HashMap<&'static str, String>) -> ProcessOutput
+
+pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterator<Item=String> + Clone, String)>, settings : HashMap<&'static str, String>) -> ProcessOutput
 {
     let verbose = settings.contains_key("verbose");
     let semiverbose = settings.contains_key("semiverbose");
@@ -2877,12 +2892,14 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
             {
                 println!("parsing {}...", $fname);
             }
-            let program_lines : Vec<String> = $program_lines_iter.into_iter().map(|x| x.to_string()).collect();
+            let mut token_lines = $program_lines_iter.clone().into_iter();
+            let mut parse_lines = $program_lines_iter.clone().into_iter();
+            let mut program_lines = $program_lines_iter.clone().into_iter();
             
             let parse_start = std::time::Instant::now();
             
-            let tokens = parser.tokenize(&program_lines, true).unwrap();
-            let ast = parser.parse_program(&tokens, &program_lines, true).unwrap().unwrap();
+            let tokens = parser.tokenize(&mut token_lines, true).unwrap();
+            let ast = parser.parse_program(&tokens, &mut parse_lines, true).unwrap().unwrap();
             
             parse_time += parse_start.elapsed().as_secs_f64();
             
@@ -2936,8 +2953,8 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
             for (name, llvm_name, type_name, overloaded_args) in intrinsic_imports
             {
                 let type_lines = vec!(type_name.to_string());
-                let tokens = parser.tokenize(&type_lines, true).unwrap();
-                let type_ast = parser.parse_with_root_node_type(&tokens, &type_lines, true, "type").unwrap().unwrap();
+                let tokens = parser.tokenize(&mut type_lines.clone().into_iter(), true).unwrap();
+                let type_ast = parser.parse_with_root_node_type(&tokens, &mut type_lines.clone().into_iter(), true, "type").unwrap().unwrap();
                 let type_ = parse_type(&types, &type_ast).unwrap();
                 if let TypeData::FuncPointer(funcsig) = type_.data
                 {
@@ -3075,7 +3092,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                         
                         let stack = Vec::new();
                         let blocks = HashMap::new();
-                        let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![BTreeMap::new(), BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, options : env_options };
+                        let mut env = Environment { parser : &mut parser, source_text : &mut program_lines, module : &module, context : &context, stack, variables : vec![BTreeMap::new(), BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, options : env_options };
                         
                         compile(&mut env, &node, WantPointer::None);
                         let (type_val, val) = env.stack.pop().unwrap();
@@ -3154,7 +3171,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                     
                     let stack = Vec::new();
                     let blocks = HashMap::new();
-                    let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![BTreeMap::new(), BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, options : env_options };
+                    let mut env = Environment { parser : &mut parser, source_text : &mut program_lines, module : &module, context : &context, stack, variables : vec![BTreeMap::new(), BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : None, hoisted_return : None, options : env_options };
                     
                     compile(&mut env, &node, WantPointer::None);
                     let (type_val, val) = env.stack.pop().unwrap();
@@ -3268,7 +3285,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                 }
                 
                 let stack = Vec::new();
-                let mut env = Environment { parser : &mut parser, source_text : &program_lines, module : &module, context : &context, stack, variables : vec![arguments, BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, options : env_options };
+                let mut env = Environment { parser : &mut parser, source_text : &mut program_lines, module : &module, context : &context, stack, variables : vec![arguments, BTreeMap::new()], constants : constants.clone(), builder : &builder, func_decs : &func_decs, global_decs : &global_decs, intrinsic_decs : &intrinsic_decs, types : &types, backend_types : &mut backend_types, function_types : &mut function_types, func_val, blocks, entry_block, ptr_int_type, target_data, anon_globals : HashMap::new(), return_type : Some(function.return_type.clone()), hoisted_return, options : env_options };
                 
                 let body_block = context.append_basic_block(func_val, "body");
                 builder.position_at_end(body_block);
@@ -3302,10 +3319,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
     if verbose
     {
         println!("finished initial IR generation");
-    }
-    
-    if verbose
-    {
+        
         let comptime = start.elapsed().as_secs_f64();
         println!("compilation time: {}", comptime);
     }
@@ -3315,11 +3329,11 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
         return ProcessOutput { machine, context, executor, modules : loaded_modules, visible_function_signatures };
     }
     
-    let start = std::time::Instant::now();
     if verbose
     {
         println!("doing IR optimizations...");
     }
+    let start = std::time::Instant::now();
     for module in &loaded_modules
     {
         if let Err(err) = module.verify()

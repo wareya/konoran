@@ -258,7 +258,7 @@ impl Parser {
     }
     
     // FIXME: change it to not be line-based; seek to the next newline instead. necessary for things like strings containing newline literals, which should definitely be supported.
-    pub (crate) fn tokenize(&mut self, lines : &[String], silent: bool) -> Result<Vec<LexToken>, String>
+    pub (crate) fn tokenize(&mut self, lines : &mut dyn Iterator<Item=String>, silent: bool) -> Result<Vec<LexToken>, String>
     {
         let mut ret : Vec<_> = Vec::new();
         let mut linecount = 1;
@@ -303,7 +303,7 @@ impl Parser {
                     continue;
                 }
                 // check for whitespace before doing any tokens
-                if let Some(text) = self.internal_regexes.match_at("[ \r\n\t]+", line, offset)
+                if let Some(text) = self.internal_regexes.match_at("[ \r\n\t]+", &line, offset)
                 {
                     offset += text.len();
                     continue;
@@ -327,7 +327,7 @@ impl Parser {
                 let mut continue_the_while = false;
                 for rule in &self.regex_list
                 {
-                    if let Some(text) = self.internal_regexes.match_at(rule, line, offset)
+                    if let Some(text) = self.internal_regexes.match_at(rule, &line, offset)
                     {
                         // TODO: fix position everywhere to be codepoints instead of bytes
                         ret.push(LexToken{text : text.clone(), line : linecount, span : text.len(), position : offset+1});
@@ -360,7 +360,7 @@ impl Parser {
                         if segment == text.as_str()
                         {
                             // don't tokenize the beginnings of names as actual names
-                            if offset + text.len() + 1 > line.len() && self.internal_regexes.is_exact(r"[a-zA-Z0-9_]", &slice(line, (offset+text.len()) as i64, (offset+text.len()+1) as i64))
+                            if offset + text.len() + 1 > line.len() && self.internal_regexes.is_exact(r"[a-zA-Z0-9_]", &slice(&line, (offset+text.len()) as i64, (offset+text.len()+1) as i64))
                             {
                                 continue;
                             }
@@ -784,7 +784,7 @@ impl Parser {
         Ok(())
     }
     
-    pub fn parse_with_root_node_type(&self, tokens : &[LexToken], lines : &[String], silent: bool, root : &str) -> Result<Option<ASTNode>, String>
+    pub fn parse_with_root_node_type(&self, tokens : &[LexToken], lines : &mut dyn Iterator<Item=String>, silent: bool, root : &str) -> Result<Option<ASTNode>, String>
     {
         let start_time = Instant::now();
         
@@ -835,7 +835,7 @@ impl Parser {
                         {
                             position += 1;
                         }
-                        if let Some(line) = lines.get(linenum-1)
+                        if let Some(line) = lines.nth(linenum-1)
                         {
                             println!("context on line {}:\n{}\n{}^", linenum, line, " ".repeat(position-1));
                             println!("latest AST node: {:?}", latestnode);
@@ -914,7 +914,7 @@ impl Parser {
     /// - Arithmetic expressions have their associativity direction corrected (to be left-recursive; in the grammar, they're right-recursive, with LEFTBINEXPR tags)
     /// - Value expressions with a single child are simplified to just their child
     /// - Statements have their trailing semicolon stripped
-    pub fn parse_program(&self, tokens : &[LexToken], lines : &[String], silent: bool) -> Result<Option<ASTNode>, String>
+    pub fn parse_program(&self, tokens : &[LexToken], lines : &mut dyn Iterator<Item=String>, silent: bool) -> Result<Option<ASTNode>, String>
     {
         self.parse_with_root_node_type(tokens, lines, silent, "program")
     }
