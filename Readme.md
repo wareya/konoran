@@ -1,6 +1,6 @@
 # Konoran
 
-Want to use konoran's reference implementation as a library? Docs are here! https://wareya.github.io/konoran/konoran/index.html
+Want to use konoran's reference implementation as a library? Docs are here! <https://wareya.github.io/konoran/konoran>
 
   <img align="right" width="380" src="logo.png" style="float: right">
 
