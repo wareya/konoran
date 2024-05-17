@@ -19,7 +19,7 @@ jobs:
       - name: Arch
         run: printenv PROCESSOR_ARCHITECTURE
       - name: Install LLVM and Clang
-        uses: KyleMayes/install-llvm-action@v1
+        uses: KyleMayes/install-llvm-action@v2
         with:
           version: " 18.1 "
       - name: Setup Rust
