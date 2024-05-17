@@ -18,6 +18,12 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: "18.x"
+      - name: llvm-config
+        run: llvm-config --version --bindir --libdir
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
       - name: Setup pages
