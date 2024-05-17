@@ -87,43 +87,51 @@ impl Iterator for FileLinesIterator
     {
         if let Some(lock) = self.lock.as_mut()
         {
-            let mut buf = [0u8; 1];
-            if let Ok(n) = lock.read(&mut buf)
+            let mut bytes = vec!();
+            loop
             {
-                if n == 0
+                let mut buf = [0u8; 1];
+                match lock.read(&mut buf)
                 {
-                    self.invalidate();
-                    return None;
-                    //return Some("".to_string());
+                    Ok(0) =>
+                    {
+                        self.invalidate();
+                        if let Ok(string) = String::from_utf8(bytes.clone())
+                        {
+                            return Some(string);
+                        }
+                        else
+                        {
+                            return Some(String::from_utf8_lossy(&bytes).to_string());
+                        }
+                    }
+                    Ok(_) =>
+                    {
+                        bytes.push(buf[0]);
+                        if let Some(b'\n') = bytes.last()
+                        {
+                            bytes.pop();
+                            if let Some(b'\r') = bytes.last()
+                            {
+                                bytes.pop();
+                            }
+                            if let Ok(string) = String::from_utf8(bytes.clone())
+                            {
+                                return Some(string);
+                            }
+                            else
+                            {
+                                return Some(String::from_utf8_lossy(&bytes).to_string());
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) =>
+                    {
+                        self.invalidate();
+                        return None;
+                    }
                 }
-                let mut bytes = vec!(buf[0]);
-                let mut n = lock.read(&mut buf);
-                while n.is_ok() && !matches!(n, Ok(0)) && buf[0] != b'\n'
-                {
-                    bytes.push(buf[0]);
-                    n = lock.read(&mut buf);
-                }
-                if let Some(b'\n') = bytes.last()
-                {
-                    bytes.pop();
-                }
-                if let Some(b'\r') = bytes.last()
-                {
-                    bytes.pop();
-                }
-                if let Ok(string) = String::from_utf8(bytes.clone())
-                {
-                    Some(string)
-                }
-                else
-                {
-                    Some(String::from_utf8_lossy(&bytes).to_string())
-                }
-            }
-            else
-            {
-                self.invalidate();
-                None
             }
         }
         else

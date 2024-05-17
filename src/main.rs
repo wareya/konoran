@@ -111,11 +111,12 @@ fn main()
         
         use std::fs::File;
         use std::path::Path;
+        use std::io::BufReader;
         
         fn read_lines<P : AsRef<Path> + ToString + Clone>(filename: P) -> FileLines
         {
             let file = File::open(filename.clone()).unwrap_or_else(|_| panic!("failed to open file {}", filename.to_string()));
-            FileLines::from_seekable(file)
+            FileLines::from_seekable(BufReader::new(file))
         }
         
         let mut iter = module_fnames.into_iter().map(|fname|

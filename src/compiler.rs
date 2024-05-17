@@ -2692,26 +2692,26 @@ pub struct ProcessOutput
 /// Example of loading multiple modules from disk lazily using the [crate::filelines::FileLines] object provided as a helper (but any object implementing both IntoIterator and Clone is fine. In fact, it's OK for only one resulting iterator to be valid at a time, as long as future clones create valid iterators once past iterators are fully consumed):
 ///
 /// ```rust
-///     use std::fs::File;
-///     use std::path::Path;
-///     
-///     fn read_lines<P : AsRef<Path> + ToString + Clone>(filename: P) -> FileLines
-///     {
-///         let file = File::open(filename.clone()).unwrap_or_else(|_| panic!("failed to open file {}", filename.to_string()));
-///         FileLines::from_seekable(file)
-///     }
-///     
-///     let mut iter = module_fnames.into_iter().map(|fname|
-///     (
-///         {
-///             let fname = fname.clone();
-///             read_lines(fname.clone())
-///         },
-///         fname.clone()
-///     ));
-///     
-///     let process_output = process_program(&mut iter, settings.clone());
-///     
+///    use std::fs::File;
+///    use std::path::Path;
+///    use std::io::BufReader;
+///    
+///    fn read_lines<P : AsRef<Path> + ToString + Clone>(filename: P) -> FileLines
+///    {
+///        let file = File::open(filename.clone()).unwrap_or_else(|_| panic!("failed to open file {}", filename.to_string()));
+///        FileLines::from_seekable(BufReader::new(file))
+///    }
+///    
+///    let mut iter = module_fnames.into_iter().map(|fname|
+///    (
+///        {
+///            let fname = fname.clone();
+///            read_lines(fname.clone())
+///        },
+///        fname.clone()
+///    ));
+///    
+///    let process_output = process_program(&mut iter, settings.clone());
 /// ```
 ///
 /// In JIT mode, to run a function, you need to call something like:
