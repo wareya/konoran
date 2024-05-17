@@ -70,9 +70,13 @@ Konoran also aims to minimize the about of UB that it exposes, but this is fraug
 
 Konoran's reference implementation uses a declarative grammar (i.e. specified in a text file, not hardcoded) with a custom PEG-like dynamic parser generator. So, the grammar is fully defined and has no ambiguities. The entire parser is less than 1000 lines long, including comments, empty lines, and lines with only punctuation.
 
+## Documentation
+
+Available at <https://wareya.github.io/konoran/konoran>.
+
 ## TODO
 
-- Write documentation (WIP: [Design.md](Design.md))
+- Flesh out design document (WIP: [Design.md](Design.md))
 - Write a spec (WIP: [Spec.md](Spec.md))
 
 # Building info
