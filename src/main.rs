@@ -68,7 +68,24 @@ fn main()
     }
     else
     {
-        let output = process_program(modules, settings.clone());
+        use std::fs::File;
+        use std::io::{self, BufRead};
+        use std::path::Path;
+
+        fn read_lines<P : AsRef<Path> + ToString + Clone>(filename: P) -> io::Lines<io::BufReader<File>>
+        {
+            let file = File::open(filename.clone()).unwrap_or_else(|_| panic!("failed to open file {}", filename.to_string()));
+            io::BufReader::new(file).lines()
+        }
+        
+        let mut iter = modules.into_iter().map(|fname| (
+            {
+                let fname = fname.clone();
+                read_lines(fname.clone()).map(move |x| x.unwrap_or_else(|_| panic!("IO error while reading input module {}", fname.clone())))
+            },
+            fname.clone()
+        ));
+        let output = process_program(&mut iter, settings.clone());
         
         let machine = output.machine;
         let loaded_modules = output.modules;
@@ -100,9 +117,9 @@ fn main()
                 }
             }} }
             
-                let start = std::time::Instant::now();
+            let start = std::time::Instant::now();
             executor.run_static_constructors();
-                println!("time to get func: {}", start.elapsed().as_secs_f64());
+            println!("time to get func: {}", start.elapsed().as_secs_f64());
             
             unsafe
             {

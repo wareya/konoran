@@ -2670,8 +2670,31 @@ pub struct ProcessOutput
 }
 
 
-// NOTE: Creates and leaks an `inkwell::context::Context`.
-pub fn process_program(modules : Vec<String>, settings : HashMap<&'static str, String>) -> ProcessOutput
+/// Compile program.
+///
+/// Each leftmost entry in 'modules' is an iterater over the lines of a single module.
+///
+/// Each rightmost entry in 'modules' is string with a filename (optional; can all be blank).
+///
+/// So, to pass in a single file:
+///
+/// ```rust
+///     process_program(vec!((std::fs::read_to_string(fname).unwrap().lines(), fname)), HashMap::new());
+/// ```
+///
+/// By default, a JIT executor is created. If this is not desired, the relevant settings must be set.
+/// 
+/// The settings hashmap supports the following settings:
+/// 
+/// - `asm_triple` = any llvm triple, e.g. `x86_64-pc-windows`. Disables JIT while forcing the generated modules to target a particular machine triple. Indicates that you intend to do ASM output with the returned modules.
+/// - `objfile` = Exact value ignored, but disables JIT without forcing the target machine triple. Indicates that you intend to do object file output with the returned modules. If applied alongside `asm_triple`, equivalent to only `asm_triple` being applied (i.e. the target machine will still be forced).
+/// - `cpu` = any llvm-supported CPU name, e.g. `athlon64`, `skylake`, etc. Also supports `native` to indicate the host CPU. Does not disable JIT.
+/// - - Forces compilation to target a particular CPU. If unset and in JIT mode, the native configuration is used. If unset and not in JIT mode, the most conservative possible configuration for the target platform is used. If set to a CPU configuration that the host system doesn't support and left in JIT mode, the resulting executor may not be able to be run safely.
+/// 
+/// The `asm_triple` and `objfile` settings disable the JIT.
+///
+/// NOTE: Creates and leaks an `inkwell::context::Context`.
+pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterator<Item=String>, String)>, settings : HashMap<&'static str, String>) -> ProcessOutput
 {
     if VERBOSE
     {
@@ -2817,15 +2840,13 @@ pub fn process_program(modules : Vec<String>, settings : HashMap<&'static str, S
     
     macro_rules! load_module
     {
-        ($fname:expr) =>
+        ($program_lines_iter:expr, $fname:expr) =>
         {{
-            use std::fs;
             if VERBOSE
             {
-                println!("loading {}...", $fname);
+                println!("parsing {}...", $fname);
             }
-            let program_text = fs::read_to_string($fname).unwrap();
-            let program_lines : Vec<String> = program_text.lines().map(|x| x.to_string()).collect();
+            let program_lines : Vec<String> = $program_lines_iter.into_iter().map(|x| x.to_string()).collect();
             
             let parse_start = std::time::Instant::now();
             
@@ -3248,9 +3269,9 @@ pub fn process_program(modules : Vec<String>, settings : HashMap<&'static str, S
     }
     
     let mut loaded_modules = Vec::new();
-    for arg in &modules
+    for (iter, name) in &mut modules
     {
-        loaded_modules.push(load_module!(arg));
+        loaded_modules.push(load_module!(iter, name));
     }
     
     if VERBOSE
