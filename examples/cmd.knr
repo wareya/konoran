@@ -1,0 +1,31 @@
+// core types: u8, i8, u16, i16, u32, i32, u64, i64, f32, f64
+// pointer types: ptr(type), funcptr(returntype, (arg1type, arg2type, ...))
+// composite types: structs, array(type, len)
+
+export_extern i32 main(i32 argc, ptr(ptr(u8)) argv)
+{
+    u64 n = 50000000u64;
+    
+    if (argc <= 1i32)
+        goto run;
+    
+    n = 0u64;
+    
+    ptr(u8) c = *(argv + sizeof ptr(u8));
+    
+    loop_head:
+        if (*c == 0u8)
+            goto run;
+        
+        n = n * 10u64;
+        n = n + (*c - '0') as u64;
+        
+        c = c + 1u64;
+        goto loop_head;
+    
+    run:
+    
+    print_float((n) as f64);
+    
+    return 0i32;
+}

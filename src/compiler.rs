@@ -2655,11 +2655,23 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     }
 }
 
-const VERBOSE : bool = false;
+pub const VERBOSE : bool = false;
 const PRINT_COMP_TIME : bool = true;
 const DEBUG_FIRST_MODULE : bool = true;
 
-pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings : HashMap<&'static str, String>)
+#[derive(Debug)]
+pub struct ProcessOutput
+{
+    pub context : &'static inkwell::context::Context,
+    pub modules : Vec<inkwell::module::Module<'static>>,
+    pub machine : TargetMachine,
+    pub executor : Option<inkwell::execution_engine::ExecutionEngine<'static>>,
+    pub visible_function_signatures : HashMap<String, (String, bool)>, // bool: whether it's exported externally (true) or just linkable (false)
+}
+
+
+// NOTE: Creates and leaks an `inkwell::context::Context`.
+pub fn process_program(modules : Vec<String>, settings : HashMap<&'static str, String>) -> ProcessOutput
 {
     if VERBOSE
     {
@@ -2671,13 +2683,14 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
     let true_start = std::time::Instant::now();
     
     let start = std::time::Instant::now();
-    let context = inkwell::context::Context::create();
+    let context : &'static inkwell::context::Context = Box::leak(Box::new(inkwell::context::Context::create()));
     
     let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
-    if VERBOSE
-    {
-        println!("pointer type... {:?}", inkwell::AddressSpace::default());
-    }
+    
+    // only holds frontend types, and only for primitives and structs, not pointers or arrays, those are constructed dynamically
+    let mut types = BTreeMap::new();
+    // holds backend types for everything, including pointers and arrays
+    let mut backend_types = BTreeMap::new();
     
     let type_table = [
         ("void".to_string(), Type { name : "void".to_string(), data : TypeData::Void }, context.void_type().into()),
@@ -2698,22 +2711,15 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
         ("f32".to_string(), Type { name : "f32".to_string(), data : TypeData::Primitive }, context.f32_type().into()),
         ("f64".to_string(), Type { name : "f64".to_string(), data : TypeData::Primitive }, context.f64_type().into()),
     ];
-    
-    // only holds frontend types, and only for primitives and structs, not pointers or arrays, those are constructed dynamically
-    let mut types = BTreeMap::new();
-    // holds backend types for everything, including pointers and arrays
-    let mut backend_types = BTreeMap::new();
     for (a, b, c) in type_table.iter()
     {
         types.insert(a.clone(), b.clone());
         backend_types.insert(a.clone(), *c);
     }
+    
     backend_types.insert("ptr".to_string(), ptr_type.into());
     // backend types for functions
     let mut function_types = BTreeMap::new();
-    
-    let ir_grammar = include_str!("parser/irgrammar.txt");
-    let mut parser = parser::Parser::new_from_grammar(ir_grammar).unwrap();
     
     let opt_level = match optlevel_string.as_str()
     {
@@ -2723,8 +2729,6 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
         "3" => inkwell::OptimizationLevel::Aggressive,
         _ => inkwell::OptimizationLevel::Default,
     };
-    
-    //let opt_small = matches!(optlevel_string.as_str(), "s" | "z");
     
     let mut imports : BTreeMap<String, (*const u8, FunctionSig)> = BTreeMap::new();
     
@@ -2737,15 +2741,12 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
     
     let env_options = &env_options;
     
+    let mut parser = parser::Parser::new_from_grammar(include_str!("parser/irgrammar.txt")).unwrap();
+    
     //if !skip_jit
     {
         // import the "standard library"
         import_stdlib(&types, &mut parser, &mut imports);
-    }
-    
-    if VERBOSE
-    {
-        println!("startup done! time: {}", start.elapsed().as_secs_f64());
     }
     
     let mut executor = None;
@@ -2797,25 +2798,22 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
         {
             inkwell::targets::Target::initialize_all(&config);
         }
-        let triple = if let Some(triple_string) = settings.get("triple")
-        {
-            TargetTriple::create(triple_string)
-        }
-        else
-        {
-            TargetMachine::get_default_triple()
-        };
+        let triple = if let Some(triple_string) = settings.get("triple") { TargetTriple::create(triple_string) } else { TargetMachine::get_default_triple() };
         let target = Target::from_triple(&triple).unwrap();
         let machine = target.create_target_machine(&triple, &cpu, &features, opt_level, RelocMode::Default, CodeModel::Default).unwrap();
         _target_data = Some(machine.get_target_data());
         (triple, _target_data.as_ref().unwrap(), machine)
     };
-    if VERBOSE
-    {
-        println!("using: '{}' '{}' {:?}", cpu, features, triple);
-    }
     
     let mut first_module = true;
+    
+    if VERBOSE
+    {
+        println!("startup done! time: {}", start.elapsed().as_secs_f64());
+        println!("using platform: '{}' '{}' {:?}", cpu, features, triple);
+    }
+    
+    let mut visible_function_signatures = HashMap::new();
     
     macro_rules! load_module
     {
@@ -2938,6 +2936,16 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                 let func_val = module.add_function(&f_name, func_type, Some(linkage));
                 func_val.as_global_value().set_dll_storage_class(storage_class);
                 func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
+                
+                let exported = match *visibility
+                {
+                    Visibility::Export => true,
+                    Visibility::Local => false,
+                    _ => continue,
+                };
+                    
+                let type_string = funcsig.to_string_rusttype();
+                visible_function_signatures.insert(f_name.clone(), (type_string, exported));
             }
             for (f_name, (funcsig, visibility)) in &program.func_imports
             {
@@ -3002,7 +3010,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                     if let Some(node) = g_init
                     {
                         let f_name = format!("__init_global_{}_asdf1g0q", g_name);
-                        let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
+                        let funcsig = FunctionSig { return_type : types.get("void").unwrap().clone(), args : Vec::new() };
                         let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
                         
@@ -3081,7 +3089,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                     inkwell::types::BasicTypeEnum::try_from(backend_type).unwrap_or_else(|()| panic!("internal error: tried to make global constexpr with unsized type"));
                     
                     let f_name = format!("__init_const_{}_asdf1g0q", g_name);
-                    let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
+                    let funcsig = FunctionSig { return_type : types.get("void").unwrap().clone(), args : Vec::new() };
                     let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                     let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
                     
@@ -3112,7 +3120,7 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
             if global_decs.len() > 0
             {
                 let f_name = format!("__init_allglobal_asdf3f6g");
-                let funcsig = FunctionSig { return_type : type_table[0].1.clone(), args : Vec::new() };
+                let funcsig = FunctionSig { return_type : types.get("void").unwrap().clone(), args : Vec::new() };
                 let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                 let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
                 
@@ -3185,16 +3193,20 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
                 
                 // collect labels (blocks)
                 let mut blocks = HashMap::new();
-                function.body.visit(&mut |node : &ASTNode|
                 {
-                    if node.is_parent() && node.text == "label"
+                    let mut blocks_ref = &mut blocks;
+                    let _context = &context;
+                    function.body.visit(&mut move |node : &ASTNode|
                     {
-                        let name = &node.child(0).unwrap().child(0).unwrap().text;
-                        assert!(!blocks.contains_key(name), "error: redeclared block {}", name);
-                        blocks.insert(name.clone(), context.append_basic_block(func_val, name));
-                    }
-                    false
-                });
+                        if node.is_parent() && node.text == "label"
+                        {
+                            let name = &node.child(0).unwrap().child(0).unwrap().text;
+                            assert!(!blocks_ref.contains_key(name), "error: redeclared block {}", name);
+                            blocks_ref.insert(name.clone(), _context.append_basic_block(func_val, name));
+                        }
+                        false
+                    });
+                }
                 
                 let mut hoisted_return = None;
                 if function.return_type.is_composite() && !env_options.contains_key("value_aggregates")
@@ -3315,87 +3327,5 @@ pub (crate) fn run_program(modules : Vec<String>, _args : Vec<String>, settings 
         println!("parse time (included in comp time): {}ms", (parse_time) * 1000.0);
         println!("compilation time without parsing: {}ms", (comptime - parse_time) * 1000.0);
     }
-    
-    if !skip_jit
-    {
-        println!("running code...");
-        
-        let executor = executor.unwrap();
-        
-        macro_rules! get_func { ($name:expr, $T:ty) =>
-        {{
-            let dec = func_decs.get(&$name.to_string());
-            if dec.is_none()
-            {
-                panic!("error: no `{}` function", $name);
-            }
-            let dec = dec.unwrap();
-            let type_string = dec.1.to_string_rusttype();
-            
-            let want_type_string = std::any::type_name::<$T>(); // FIXME: not guaranteed to be stable across rust versions
-            assert!(want_type_string == type_string, "types do not match:\n{}\n{}\n", want_type_string, type_string);
-            assert!(want_type_string.starts_with("unsafe "), "function pointer type must be unsafe");
-            
-            executor.get_function::<$T>(&$name).unwrap()
-        }} }
-        
-            let start = std::time::Instant::now();
-        executor.run_static_constructors();
-            println!("time to get func: {}", start.elapsed().as_secs_f64());
-        
-        unsafe
-        {
-            // check for errors
-            use core::ffi::c_char;
-            let mut msg : *mut c_char = 0 as *mut c_char;
-            let val = llvm_sys::execution_engine::LLVMExecutionEngineGetErrMsg(executor.as_mut_ptr(), &mut msg as *mut *mut c_char);
-            if val != 0
-            {
-                if !msg.is_null()
-                {
-                    panic!("linker error:\n{:?}", core::ffi::CStr::from_ptr(msg).to_string_lossy());
-                }
-                panic!("unknown linker error");
-            }
-            
-            // run main
-            // TODO: pass arguments if supported by underlying function
-            let name = "main";
-            let f = get_func!(name, unsafe extern "C" fn());
-            
-            let start = std::time::Instant::now();
-            
-            if VERBOSE
-            {
-                println!("running {}...", name);
-            }
-            
-            let out = f.call();
-            
-            if VERBOSE
-            {
-                println!("{}() = {:?}", name, out);
-                println!("time: {}", start.elapsed().as_secs_f64());
-            }
-        }
-        
-        executor.run_static_destructors();
-    }
-
-    if skip_jit
-    {
-        use inkwell::targets::*;
-        if let Some(fname) = settings.get("objfile")
-        {
-            machine.write_to_file(&loaded_modules[0], FileType::Object, fname.as_ref()).unwrap();
-        }
-        else
-        {
-            machine.write_to_file(&loaded_modules[0], FileType::Assembly, "out.asm".as_ref()).unwrap();
-        }
-    }
-    if VERBOSE
-    {
-        println!("Finished gracefully.");
-    }
+    ProcessOutput { machine, context, executor, modules : loaded_modules, visible_function_signatures }
 }
