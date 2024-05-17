@@ -16,8 +16,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Arch (Windows)
-        if: matrix.os == 'windows-latest'
+      - name: Arch
         run: echo %PROCESSOR_ARCHITECTURE%
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v1
