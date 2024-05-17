@@ -2,6 +2,8 @@
 
 Work-in-progress living spec for Konoran, a low-level language designed as a compiler target, with a complexity between C and assembly.
 
+This spec is *very* early; right now, the design philosophy document ([Design.md](Design.md)] is more detailed!
+
 ## Programs
 
 Konoran programs consist of a number of modules linked together, possibly dynamically, and possibly with non-Konoran modules. The specific semantics of linking are entirely implementation-defined.
