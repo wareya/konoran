@@ -20,8 +20,6 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@main
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: llvm-config
-        run: llvm-config --version --bindir --libdir
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
       - name: Setup pages
