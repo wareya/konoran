@@ -21,7 +21,7 @@ jobs:
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v1
         with:
-          version: "18.x"
+          version: "18.0"
       - name: llvm-config
         run: llvm-config --version --bindir --libdir
       - name: Configure cache
