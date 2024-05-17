@@ -2655,10 +2655,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
     }
 }
 
-pub const VERBOSE : bool = false;
-const PRINT_COMP_TIME : bool = true;
-const DEBUG_FIRST_MODULE : bool = true;
-
+/// Return data from process_program. Includes everything you need to JIT or output obj or asm data.
 #[derive(Debug)]
 pub struct ProcessOutput
 {
@@ -2713,6 +2710,9 @@ pub struct ProcessOutput
 /// - - Forces compilation to target a particular CPU. If unset and in JIT mode, the native configuration is used. If unset and not in JIT mode, the most conservative possible configuration for the target platform is used. If set to a CPU configuration that the host system doesn't support and left in JIT mode, the resulting executor may not be able to be run safely.
 /// - `simple_aggregates` = Exact value ignored. Makes the generated LLVM IR use (virtual) registers for structs/arrays instead of allocas and pointers.
 /// - `optlevel` = Accepted values are `"0"`, `"1"`, `"2"`, `"3"`, `"s"`, `"z"`, and `"d"`. Specifies optimization level. `0` is the least optimized, `3` is the most. `s` and `z` optimize for size. `d` optimizes for developer throughput time and sits somewhere between `0` and `1` in terms of compile-time speed without being horribly slow at runtime like `0` is. (On math-heavy code, `d` is usually faster than `1`.) Note that the first character is a capital o, not a zero.
+/// - `semiverbose` = Print basic process time-taking info after compliation.
+/// - `verbose` = Print more intrusive detail about the process during compilation.
+/// - `early_exit` = Exit processing right after modules are first compiled, before doing any verification or optimization. This is only useful for debugging.
 ///
 /// In JIT mode, to run a function, you need to call something like:
 ///
@@ -2725,7 +2725,9 @@ pub struct ProcessOutput
 ///
 pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterator<Item=String>, String)>, settings : HashMap<&'static str, String>) -> ProcessOutput
 {
-    if VERBOSE
+    let verbose = settings.contains_key("verbose");
+    let semiverbose = settings.contains_key("semiverbose");
+    if verbose
     {
         println!("startup...");
     }
@@ -2859,7 +2861,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
     
     let mut first_module = true;
     
-    if VERBOSE
+    if verbose
     {
         println!("startup done! time: {}", start.elapsed().as_secs_f64());
         println!("using platform: '{}' '{}' {:?}", cpu, features, triple);
@@ -2871,7 +2873,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
     {
         ($program_lines_iter:expr, $fname:expr) =>
         {{
-            if VERBOSE
+            if verbose
             {
                 println!("parsing {}...", $fname);
             }
@@ -2885,7 +2887,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
             parse_time += parse_start.elapsed().as_secs_f64();
             
             let start = std::time::Instant::now();
-            if VERBOSE
+            if verbose
             {
                 println!("compiling {}...", $fname);
             }
@@ -2952,7 +2954,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                 }
             }
             
-            if VERBOSE
+            if verbose
             {
                 println!("adding global mappings...");
             }
@@ -3277,18 +3279,12 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                 builder.build_unconditional_branch(body_block).unwrap();
             }
             
-            if VERBOSE
+            if verbose
             {
                 println!("individual module compile time: {}", start.elapsed().as_secs_f64());
             }
             
-            if let Err(err) = module.verify()
-            {
-                module.print_to_file("out_unopt.ll").unwrap();
-                panic!("Internal compiler error:\n{}", err.to_string());
-            }
-            
-            if VERBOSE
+            if verbose
             {
                 println!("module verified");
             }
@@ -3303,29 +3299,34 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
         loaded_modules.push(load_module!(iter, name));
     }
     
-    if VERBOSE
+    if verbose
     {
         println!("finished initial IR generation");
     }
     
-    if DEBUG_FIRST_MODULE
-    {
-        loaded_modules[0].print_to_file("out_unopt.ll").unwrap();
-    }
-    
-    if VERBOSE
+    if verbose
     {
         let comptime = start.elapsed().as_secs_f64();
         println!("compilation time: {}", comptime);
     }
     
+    if settings.contains_key("early_exit")
+    {
+        return ProcessOutput { machine, context, executor, modules : loaded_modules, visible_function_signatures };
+    }
+    
     let start = std::time::Instant::now();
-    if VERBOSE
+    if verbose
     {
         println!("doing IR optimizations...");
     }
     for module in &loaded_modules
     {
+        if let Err(err) = module.verify()
+        {
+            panic!("Internal compiler error:\n{}", err.to_string());
+        }
+        
         let pass_options = PassBuilderOptions::create();
         pass_options.set_verify_each(true);
         match optlevel_string.as_str()
@@ -3360,17 +3361,12 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
         module.run_passes(&passes, &machine, pass_options).unwrap();
     }
     
-    if VERBOSE
+    if verbose
     {
         println!("done doing IR optimizations. time: {}", start.elapsed().as_secs_f64());
     }
     
-    if DEBUG_FIRST_MODULE
-    {
-        loaded_modules[0].print_to_file("out.ll").unwrap();
-    }
-    
-    if VERBOSE || PRINT_COMP_TIME
+    if verbose || semiverbose
     {
         let comptime = true_start.elapsed().as_secs_f64();
         println!("full compilation time: {}ms", (comptime) * 1000.0);

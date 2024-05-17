@@ -57,6 +57,9 @@ fn main()
                 "-ft"  | "--force-triple" => mode = "-ft",
                 "-obj" | "--generate-obj" => mode = "-obj",
                 "-sag"  | "--simple-aggregates" => { settings.insert("simple_aggregates", arg); }
+                "--timeinfo" => { settings.insert("semiverbose", arg); }
+                "--verbose" => { settings.insert("verbose", arg); }
+                "--no-opt-no-verify" => { settings.insert("early_exit", arg); }
                 _ => panic!("unknown argument `{}`", arg),
             }
         }
@@ -90,10 +93,21 @@ fn main()
         println!("");
         println!("-O0 -O1 -O2 -O3 -Os -Oz -Od");
         println!("    Specify an optimization level. O0 is the least optimized, O3 is the most. Os and Oz optimize for size. Od optimizes for developer throughput time and sits somewhere between O0 and O1 in terms of compile-time speed without being horribly slow at runtime like O0 is. (On math-heavy code, Od is usually faster than O1.) Note that the first character is a capital o, not a zero.");
+        println!("");
+        println!("--verbose");
+        println!("    Print verbose mid-compilation output.");
+        println!("");
+        println!("--timeinfo");
+        println!("    Print output compilation timing info after compilation.");
+        println!("");
+        println!("--no-opt-no-verify");
+        println!("    Do not verify or optimize LLVM IR before finishing compilation. Only useful for debugging.");
         
     }
     else
     {
+        let verbose = settings.contains_key("verbose");
+        
         use std::fs::File;
         use std::io::{self, BufRead};
         use std::path::Path;
@@ -170,14 +184,14 @@ fn main()
                 macro_rules! time_start { () =>
                 {{ 
                     start = std::time::Instant::now();
-                    if VERBOSE
+                    if verbose
                     {
                         println!("running {}...", name);
                     }
                 }} }
                 macro_rules! time_end { ($out:expr) =>
                 {{ 
-                    if VERBOSE
+                    if verbose
                     {
                         println!("{}() = {:?}", name, $out);
                         println!("time: {}", start.elapsed().as_secs_f64());
@@ -232,8 +246,9 @@ fn main()
             {
                 machine.write_to_file(&loaded_modules[0], FileType::Assembly, "out.asm".as_ref()).unwrap();
             }
+            // TODO: module.print_to_file("out_unopt.ll").unwrap();
         }
-        if VERBOSE
+        if verbose
         {
             println!("Finished gracefully.");
         }
