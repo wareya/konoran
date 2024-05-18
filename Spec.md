@@ -719,6 +719,8 @@ Implementations are allowed to specify unaligned memory accesses as UB, but this
 
 ## 10 - Non-features
 
+Konoran is intended as a compiler target, and as such expects the "programmer" to provide a lot of its own runtime functionality.
+
 ### 10.1 - Memory management
 
 Konoran does not include memory management tools; however, at runtime, konoran needs to be able to allocate new memory for function-local variables. A konoran compiler will probably put this memory on the stack, while an interpreter will probably put it on the heap.
