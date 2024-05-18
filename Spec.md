@@ -49,7 +49,7 @@ head:
 
 ## 1 - Parsing
 
-Konoran's reference implementation uses a PEG-like recursive descent parser generator (a declarative, dynamic one) to parse the program. Implementations must use a parser that accepts and rejects the same programs and produces an equivalent syntax tree.
+Konoran's reference implementation uses a PEG-like recursive descent parser generator (a declarative, dynamic one) to parse the program. Implementations must use a parser that accepts and rejects the same programs and produces an equivalent syntax tree (or one that compiles to logically identical code).
 
 ### 1.1 - Tokenization
 
