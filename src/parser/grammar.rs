@@ -18,12 +18,6 @@ pub (crate) struct GrammarForm {
     pub (crate) tokens : Vec<GrammarToken>,
 }
 
-#[allow(dead_code)]
-pub (crate) fn default_grammar() -> &'static str
-{
-    include_str!("defaultgrammar.txt")
-}
-
 fn minierr(mystr : &str) -> String
 {
     mystr.to_string()

@@ -67,6 +67,13 @@ export_extern void main()
     ptr(u8) fudge = (("sdaoagweogsdaoagweog" & 0xFFFFFFFFFFFFFFF0u64) + 0x10u64);
     print_fmt("%s\n", decay_to_ptr [fudge]);
     
+    
+    array(u8, 7) my_array = constexpr "skgue\n"array;
+    ptr(array(u8, 7)) my_array_ptr = &"skgue\n"array;
+    ptr(u8) my_ptr = "skgue\n";
+    
+    //ptr(ptr(u8)) my_addr_of_ptr = &"skgue\n"; // invalid; cannot get the address of an evaluated pointer value
+    
     //print_fmt("An invalid print that's going to crash: %f\n", (&[(95138u64) bit_as ptr(u8)]) as ptr(ptr(u8)));
     
     return;

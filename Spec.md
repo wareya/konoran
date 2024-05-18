@@ -133,11 +133,34 @@ The exact semantics of linking are implementation-defined.
 
 ### 3.5 - Module C ABI compliance when linking
 
-Functions with non-private visibility are imported and exported according to the platform's C ABI, unless array or struct values pass in or out of the function. Functions that have array or struct values pass through them are not guaranteed for conform to the platform's C ABI, and may have a different implementation-defined representation. Pointers to arrays/structs are fine and must be passed according to the platform's C ABI.
+Functions with non-private visibility are imported and exported according to the platform's C ABI, unless struct/array values (not struct/array pointers) pass in or out of the function.
+
+#### 3.5.1 - Aggregate values on the ABI boundary
+
+Functions that have array or struct values pass through them are not guaranteed for conform to the platform's C ABI, and may have different implementation-defined rules for what parts of the aggregate are passed in which registers or where on the stack or in memory in what situations.
+
+Pointers to arrays/structs are fine and must be passed according to the platform's C ABI.
 
 ## 4 - Functions
 
 Functions have return types, names, argument lists, and bodies. A function's signature consists of its return type and the list of its argument types. Function bodies consist of a series of local variable declarations/definitions, statements, labels, and branching statements (if statements and gotos), in any order.
+
+Functions are defined like follows:
+
+```rs
+<returntype> name ( type1 arg1, type2 arg2, ... )
+{
+    // list of statements that must always either return or enter into an infinite loop
+}
+```
+
+Functions are imported from other modules like follows:
+
+```rs
+[using|import_extern] <returntype> func_name ( type1 arg1, type2 arg2, ... );
+```
+
+The exact syntax is specified in the grammar.
 
 ### 4.1 - Function control flow
 
@@ -250,11 +273,98 @@ Type punning is allowed and legal.
 
 Casting pointers to `u64` (or, on 32-bit architectures, `u32`) and back is allowed, and is allowed to either retain or destroy provenance information, but must be considered a correctly-derived pointer to the pointed-at object if the optimizer does provenance/alias analysis.
 
-#### 5.5 - Misaligned structs
+### 5.5 - Misaligned structs
 
 The konoran implementation is allowed, but not encouraged, to produce an error if structs have misaligned members for the target platform.
 
-### 6 - Volatile memory access
+### 5.6 - Numeric literals
+
+Numeric literals are tokenized and interpreted using regexes, and must be terminated by a suffix that indicates their type.
+
+#### 5.6.1 - Integer literals
+
+For integers, the following regexes are used:
+
+```regex
+[\-]?[0-9]+(i|u)(8|16|32|64)
+[\-]?0x[0-9A-Fa-f]+(i|u)(8|16|32|64)
+```
+
+If the non-`0x` regex finds a match, the number is interpreted as an integer of the given type written in decimal. If the given value exceeds the capacity of the type, the compiler must throw an error. Importantly, `-128i8` must immediately be interpreted as a maximally negative `i8`, not as an `i8` with an overflown value that is then negated with a unary operator; the `-` is part of the regex for a reason.
+
+#### 5.6.1 - Integer literals
+
+For floats, the following regexes are used:
+
+```regex
+[0-9]+\.[0-9]+([eE]([+-])?[0-9]+)?f(32|64)
+[0-9]+\.([eE]([+-])?[0-9]+)?f(32|64)
+\.[0-9]+([eE]([+-])?[0-9]+)?f(32|64)
+```
+
+After removing the type suffix, the float literal must be parsed the same way that a correct C compiler would parse it, with the same rules for what `e` and `E` mean, etc.
+
+Values that overflow past what can be stored in the given float type result in (positive/negative) infinity, not an undefined or unspecified value.
+
+### 5.7 - Array literals
+
+Array literals are a list of values separate by a comma with an optional comma at the end, sandwiched between `[` and `]`. They immediately evaluate to the correct type of array with exactly the right length. The values do not need to be literals. The values must all be of the same type.
+
+```rs
+array(u8, 2) myarray = [0u8, 14u8];
+//array(u8, 5) myarray2 = [0u8, 14u8]; // invalid; wrong length
+```
+
+### 5.8 - Struct literals
+
+Struct literals have a prefix of the name of their struct type, followed by a list of member values sandwiched between `{` and `}`. The values do not need to be literals. The values must have the correct types.
+
+```rs
+struct Vec2
+{
+    f32 x;
+    f32 y;
+}
+// ...
+Vec2 my_vec2 = Vec2 { 124.016f32, 815.1538f32 };
+//Vec2 my_vec2_2 = Vec2 { 115u32, 815u32 }; // invalid; values have wrong type
+```
+
+### 5.9 - Char literals
+
+Konoran has char (pronounced 'care', as in 'character') literals that compile down to a u8 or u32 literal. This must be done at compile time and be exactly equivalent to using a normal integer literal. Char literals support escape sequences, specifically `\n`, `\r`, `\t`, `\'`, and `\\`. Char literals do not support numeric escape sequences.
+
+```rs
+'0' // 0x30u8
+'0'u32 // 0x00000030u32
+'\r' // 0x0Du8
+'\n' // 0x0Au8
+'\t' // 0x09u8
+'\'' // 0x27u8
+'\\' // 0x5Cu8
+//'\0' // not supported, use 0u8
+```
+
+### 5.10 - String literals
+
+Konoran has utf-8 string literals. They compile down either to an array literal or to a pointer to const data, depending on which syntax is used. String literals support basic escape sequences, specifically `\n`, `\r`, `\t`, `\"`, and `\\`. String literals do not support numeric escape sequences.
+
+```rs
+array(u8, 7) my_array = constexpr "skgue\n"array;
+ptr(array(u8, 7)) my_array_ptr = &"skgue\n"array;
+ptr(u8) my_ptr = "skgue\n";
+//ptr(ptr(u8)) my_addr_of_ptr = &"skgue\n"; // invalid; cannot get the address of an evaluated pointer value
+```
+
+It's also possible to use string literals that lack a null terminator, as follows:
+
+```rs
+array(u8, 6) my_array = constexpr "skgue\n"array_nonull;
+ptr(array(u8, 6)) my_array_ptr = &"skgue\n"array_nonull;
+ptr(u8) my_ptr = "skgue\n"nonull; // dangerous!!!
+```
+
+## 6 - Volatile memory access
 
 There is no `volatile` variable modifier. However, pointer values can be marked as having volatile access semantics using the `@` operator. So, to use an mmio register, you might use something like the following code:
 
@@ -270,17 +380,17 @@ Given the above context, the following would NOT perform a volatile operation:
 
 This more closely reflects how compiler backends tend to work than a `volatile` variable modifier. As such, konoran chose this approach to exposing volatile memory operations, rather than a variable modifier.
 
-#### 6.1 - Volatile memory access rules
+### 6.1 - Volatile memory access rules
 
 Volatile memory acceses must be treated as though they have (non-UB-producing) side effects. In particular, optimizations must not change volatile memory accesses in order, number, or address. Implementations are allowed to specify arbitrary side-effects for volatile memory accesses. Volatile memory accesses are not typically assumed to modify variables or memory that they do not point at, but implementations are allowed to specify situations where they do. For example, an implementation might specify that doing a volatile read of a status register can cause an interrupt handler to run; normally, the implementation's optimizer is allowed to assume that this interrupt handler doesn't modify any variables or memory that the current non-interrupt code is working on, but the implementation is allowed to specify that it does, and prevent its own optimizer from assuming that those variables or memory are unchanged during the interrupt. If the implementation does not specify such a situation, then it is assumed that volatile memory accesses do not alter unrelated variables/memory, and the optimizer is free to use that assumption.
 
 Having a value magically change between consecutive *volatile* accesses is allowed, i.e. the compiler cannot change the order or number of volatile operations or what addresses they operate on. In particular, volatile writes to even a correctly-derived pointer cannot be optimized away (even if the variable the pointer points at is never used again), and volatile reads from even a correctly-derived pointer must assume that the value may have magically changed since the last time it was accessed (even if it has not been accessed).
 
-### 7 - Casts
+## 7 - Casts
 
 Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are defined over the following type pairs and have the given behaviors. Note that it is not possible to change both the signedness and size of an integer in a single cast operation.
 
-#### 7.1 - Value casts
+### 7.1 - Value casts
 
 ```
 (val) as <val type>
@@ -304,12 +414,12 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
 (float_val) as <integer type>
     Converts an floating-point number to an integer type. If the value is outside of the integer range, either the minimum or maximum integer value is given, whichever is closer.
 ```
-#### 7.2 - Unsafe value casts
+### 7.2 - Unsafe value casts
 ```
 (float_val) unsafe_as <integer type>
     Converts an floating-point number to an integer type. If the value is outside of the integer range, the result is undefined.
 ```
-#### 7.3 - Bitcasts
+### 7.3 - Bitcasts
 ```
 (val) bit_as <val type>
     Does nothing. Returns original value.
@@ -336,15 +446,15 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
     (See: https://www.ralfj.de/blog/2022/04/11/provenance-exposed.html )
     (See: http://nhaehnle.blogspot.com/2021/06/can-memcpy-be-implemented-in-llvm-ir.html )
 ```
-#### 7.4 - Unsupported casts
+### 7.4 - Unsupported casts
 
 Only the above casts are defined and other casts should produce an error. In particular, `unsafe_as` cannot cast to the same type.
 
-### 8 - Operators
+## 8 - Operators
 
 Konoran has both binary/infix and unary/prefix operators. Some expressions are not defined as operators. The grammar defines which expressions use operators and which do not.
 
-#### 8.1 - Operator precedence
+### 8.1 - Operator precedence
 
 Operator precedence is defined by konoran's declarative grammar. The grammar is written right-associatively, but has metadata that marks certain nodes as being left-associative; when the parse tree is converted to an AST, these nodes need to be rotated to be left-associative. As a helper, here's a short description of konoran's operator predecence, but remember that the actual definition is in the declarative grammar:
 
@@ -360,13 +470,13 @@ and  or   &&   ||
 
 Operators on a given line have the same precedence and are evaluated left-to-right, i.e. `x + y + z` is evaluated as `(x + y) + z`.
 
-##### 8.1.1 - Precedence design note
+#### 8.1.1 - Precedence design note
 
 Note that `&&` and `||` have the same precedence. While `&&` can be interpreted as multiplication and `||` can be interpreted as addition, by that line of reasoning, `!=` should be interpreted as addition in that case as well, but giving them all the same precedence would be awful, so konoran abandoned that entire line of reasoning. As primarily a compiler target language, specificational clarity was prioritized over similarity to C; people need to look up C's precedence for these operators all the time, and konoran decided that was unnecessary wasted effort and decided to define them as having the same precedence. As such, `x && y || z` and `x || y & z` are both parsed left to right, as `(x && y) || z` and `(x || y) & z`.
 
 Likewise, note that `>=` etc. have the same precedence as `==` etc.
 
-#### 8.2 - Operator design choices and non-issues
+### 8.2 - Operator design choices and non-issues
 
 Postfix operators do not exist.
 
@@ -378,11 +488,11 @@ Assignments cannot occur in an expression context (only a statement context) and
 
 In-place assignments like `+=` do not exist, only simple assignments with `=`.
 
-#### 8.3 - Infix/binary operators
+### 8.3 - Infix/binary operators
 
 Infix/binary operators are typically only defined for left and right hand sides of the same type, with very few exceptions. The exceptions will be noted.
 
-##### 8.3.1 - General numeric infix operators
+#### 8.3.1 - General numeric infix operators
 
 For numbers:
 ```
@@ -399,7 +509,7 @@ The math operators result in the same type. The equality operators result in a u
 
 For integers, operators are defined trivially. (Integers are always two's complement, and integer division truncates the remainder.) For floats, they're defined according to IEEE 754.
 
-##### 8.3.1.1 - Integer-specific unsafe numeric infix operator variants
+#### 8.3.1.1 - Integer-specific unsafe numeric infix operator variants
 
 Integer division/remainder by zero does not result in undefined behavior. Division by zero results in either zero (for integers) or positive/negative infinity (for floats), and remainder by zero results in zero (for integers) or NaN (for floats). For faster, unsafe integer division/remainder, the following operators are also provided; for them, a right-hand value of zero gives an undefined result:
 
@@ -410,7 +520,7 @@ rem_unsafe    unsafe remainder (not modulo)
 
 These operators are not provided for floats because they're not necessary; floating point division/remainder under IEEE 754 is always well-defined.
 
-##### 8.3.2 - Integer-specific infix operators
+#### 8.3.2 - Integer-specific infix operators
 
 For integers, the following additional operators are defined:
 
@@ -440,7 +550,7 @@ shl_unsafe    unsafe bitshift right
 shr_unsafe    unsafe bitshift left
 ```
 
-##### 8.3.3 - Pointer infix operators
+#### 8.3.3 - Pointer infix operators
 
 Pointers are a special case; they have infix operators, but the right-side must be a pointer-sized unsigned integer. These operators are NOT supported for function pointers. In general, the only things you can do with a function pointer are call it or cast it to a pointer-sized unsigned int. (However, this does mean that performing these operations on an integer derived from a function pointer is instantly UB; rather, it's implementation-defined.)
 
@@ -509,7 +619,7 @@ u16 myint = *((myptr) bit_as ptr(u16));
 
 The target platform may specify access alignment rules for pointers, e.g. accessing a `u16` through a pointer with an odd-numbered integer value might be illegal.
 
-##### 8.4.2 - Floating-point prefix operators
+#### 8.4.2 - Floating-point prefix operators
 
 The following prefix operators are supported for floats, and return a new value of the same type:
 
@@ -520,7 +630,7 @@ The following prefix operators are supported for floats, and return a new value 
 
 Negating a float is trivially defined for all non-NaN floats as inverting the float's sign. For NaN floats, it is implementation-defined.
 
-##### 8.4.3 - Integer prefix operators
+#### 8.4.3 - Integer prefix operators
 
 The following prefix operators are supported for ints, and return a new value of the same type, except for `!`:
 
@@ -533,7 +643,9 @@ The following prefix operators are supported for ints, and return a new value of
 
 In particular, notice that `!`/`not` is not defined for floats. You must use `(float == 0.0<floattype>)` instead.
 
-The above operators are trivially defined.
+`-` does not result in UB when used with maximally negative signed integers; it results in the same value being given back. In other words, `-(-128i8)` evaluates to `-128i8`.
+
+The other above operators are trivially defined.
 
 ##### 8.4.3 - Pointer prefix operators
 
@@ -559,7 +671,7 @@ This must also be supported when indexing into arrays, e.g.
 (*my_ptr_to_array_u16)[1i64] = 162u16;
 ```
 
-##### 8.4.4 - Array prefix operators
+#### 8.4.4 - Array prefix operators
 
 For arrays, the following prefix operator is defined:
 

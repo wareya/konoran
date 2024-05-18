@@ -150,18 +150,8 @@ impl Default for Parser {
     }
 }
 impl Parser {
-    /// Constructs a new parser with the default grammar.
-    #[allow(dead_code)]
-    pub fn new_from_default() -> Result<Parser, String>
-    {
-        let mut parser = Parser::default();
-        parser.init(grammar::default_grammar())?;
-        Ok(parser)
-    }
     /// Constructs a new parser with a custom grammar.
-    ///
-    /// Only useful if you're eliminating parts of the grammar to restrict the language, or you're going to manually transform custom aspects of the AST into supported AST structures before compilation,
-    pub fn new_from_grammar(grammar : &str) -> Result<Parser, String>
+    pub (crate) fn new_from_grammar(grammar : &str) -> Result<Parser, String>
     {
         let mut parser = Parser::default();
         parser.init(grammar)?;

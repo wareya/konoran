@@ -1102,7 +1102,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     compile(env, node.child(2).unwrap(), WantPointer::None);
                     let (type_val, val) = unwrap_or_panic!(env.stack.pop());
                     
-                    assert_error!(type_val == type_var, "declaration type mismatch, {:?} vs {:?}, line {}", type_val, type_var, node.line);
+                    assert_error!(type_val == type_var, "declaration type mismatch, {} (value) vs {} (variable), line {}", type_val.to_string(), type_var.to_string(), node.line);
                     
                     store_or_memcpy!(type_var, slot, type_val, val, false);
                     
@@ -1768,7 +1768,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         c = match char_iter.next()
                         {
                             Some('\\') => '\\',
-                            Some('\'') => '\'',
+                            Some('\"') => '\"',
                             Some('n') => '\n',
                             Some('r') => '\r',
                             Some('t') => '\t',
@@ -1786,23 +1786,22 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 let vals = bytes.iter().map(|x| u8_type.const_int(*x as u64, false).into()).collect::<Vec<_>>();
                 let array_val = basic_const_array(u8_type.into(), &vals);
-                let type_ = u8_type_frontend.to_ptr(false);
-                // FIXME make sure every case of this works in both normal and simple aggregates mode
                 if suffix.starts_with("array")
                 {
+                    let array_type = u8_type_frontend.to_array(bytes.len());
                     if want_pointer != WantPointer::None
                     {
                         let global = make_anonymous_const_global!(array_val);
-                        env.stack.push((type_.clone(), global.as_pointer_value().into()));
+                        env.stack.push((array_type.to_ptr(false), global.as_pointer_value().into()));
                     }
                     else
                     {
-                        let array_type = u8_type_frontend.to_array(bytes.len());
                         env.stack.push((array_type.clone(), array_val.into()));
                     }
                 }
                 else
                 {
+                    let type_ = u8_type_frontend.to_ptr(false);
                     assert_error!(want_pointer == WantPointer::None, "tried to get pointer of pointer-to-string literal");
                     let global = make_anonymous_const_global!(array_val);
                     env.stack.push((type_.clone(), global.as_pointer_value().into()));
