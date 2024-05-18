@@ -89,7 +89,7 @@ Konoran modules consist of a series of:
 
 These can come in any order, including interleaved order, and there are no pre-declarations for things that are defined in the current module. The implementation must run a pre-pass over the module to collect definitions and imports.
 
-### 3.2 Module global variable and constant semantics
+### 3.2 - Module global variable and constant semantics
 
 Global variable definitions can contain arbitrary expressions and are evaluated from top to bottom on program initialization. It's strongly encouraged that advanced implementations fold logically constant initializers for global variables down into static data, but this is not mandatory. Global constant initializers *must* be folded down into static data. Global variables do not require initializers (note that without them, their initial state is undefined), but global constants do.
 
