@@ -29,7 +29,7 @@ void main()
     ptr(i32) conjured_ptr = ((&dummy2) bit_as u64) bit_as ptr(i32);
     conjured_ptr = conjured_ptr + 4u64;
     *conjured_ptr = 9245i32;
-    // Casting to int and back destroyed provenance information, so this works.
+    // Casting to int and back destroys provenance information, so this works and creates a genuinely "conjured" pointer.
     
     f64 out_b = (*conjured_ptr) as f64;
     f64 out_a = (dummy) as f64; // this can be reordered to earlier in the function; in fact, its value can be assumed to be 42
