@@ -82,6 +82,10 @@ void main()
     //print_float(gkue2); // invalid code
     print_float(gkue3);
     
+    //print_float(('𠂌') as f64); // invalid code
+    print_float(('ÿ') as f64);
+    print_float(('𠂌'u32) as f64);
+    
     return;
 }
 

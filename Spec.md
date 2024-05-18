@@ -49,6 +49,8 @@ head:
 
 ## 1 - Parsing
 
+Konoran program text files are utf-8 **without a BOM**. Line endings are `\n` or `\r\n` and are allowed to be mixed. Konoran's grammar is whitespace-agnostic and doesn't care what indentation you use (or don't).
+
 Konoran's reference implementation uses a PEG-like recursive descent parser generator (a declarative, dynamic one) to parse the program. Implementations must use a parser that accepts and rejects the same programs and produces an equivalent syntax tree (or one that compiles to logically identical code).
 
 Konoran's grammar is specified declaratively:
@@ -391,11 +393,15 @@ Vec2 my_vec2 = Vec2 { 124.016f32, 815.1538f32 };
 
 ### 5.9 - Char literals
 
-Konoran has char (pronounced 'care', as in 'character') literals that compile down to a u8 or u32 literal. This must be done at compile time and be exactly equivalent to using a normal integer literal. Char literals support escape sequences, specifically `\n`, `\r`, `\t`, `\'`, and `\\`. Char literals do not support numeric escape sequences.
+Konoran has char (pronounced 'care', as in 'character') literals that compile down to a u8 or u32 literal. u8 literals are valid for any unicode character with codepoint numbered 0xFF (i.e. U+00FF, 'ÿ') or less. u32 literals are valid for any unicode codepoint. This must be done at compile time and be exactly equivalent to using a normal integer literal. Char literals support escape sequences, specifically `\n`, `\r`, `\t`, `\'`, and `\\`. Char literals do not support numeric escape sequences.
 
 ```rs
 '0' // 0x30u8
+'ÿ' // 0xFFu8
+//'𠂌' // not supported
 '0'u32 // 0x00000030u32
+'あ'u32 // 0x00003042u32
+'𠂌'u32 // 0x0002008Cu32
 '\r' // 0x0Du8
 '\n' // 0x0Au8
 '\t' // 0x09u8
@@ -406,7 +412,7 @@ Konoran has char (pronounced 'care', as in 'character') literals that compile do
 
 ### 5.10 - String literals
 
-Konoran has utf-8 string literals. They compile down either to an array literal or to a pointer to const data, depending on which syntax is used. String literals support basic escape sequences, specifically `\n`, `\r`, `\t`, `\"`, and `\\`. String literals do not support numeric escape sequences.
+Konoran has utf-8 string literals. They compile down either to an array literal or to a pointer to const data, depending on which syntax is used. String literals support basic escape sequences, specifically `\n`, `\r`, `\t`, `\"`, and `\\`. String literals do not support numeric escape sequences. The string data as accessed by the konoran program is utf-8.
 
 ```rs
 array(u8, 7) my_array = constexpr "skgue\n"array;
@@ -551,6 +557,8 @@ In-place assignments like `+=` do not exist, only simple assignments with `=`.
 
 Infix/binary operators are typically only defined for left and right hand sides of the same type, with very few exceptions. The exceptions will be noted.
 
+When evaluating an infix operator, the operands are evaluated left-first, right-second.
+
 #### 8.3.1 - General numeric infix operators
 
 For numbers:
@@ -597,6 +605,8 @@ and, &&   boolean 'and'
 The bitwise and bitshift operators result in the same type. The boolean operators result in a u8 containing either 0 (false) or 1 (true).
 
 The right-side value of a bitshift (`<<` or `>>`) must be an unsigned integer of the same size as the type of the left-side integer. In other words, `62i32 >> 2u32` is legal, while `62i32 >> 2i32` and `62i32 >> 2u8` are not.
+
+The `and`/`or`/`&&`/`||` operators do NOT short-circuit.
 
 The left bitshift operator shifts in zeroes. The right bitshift operator shifts in the sign bit if the left-side value is signed, and zeroes otherwise. The other operators are trivially defined.
 
@@ -790,25 +800,29 @@ Implementations are allowed to specify unaligned memory accesses as UB, but this
 
 Konoran is intended as a compiler target, and as such expects the "programmer" to provide a lot of its own runtime functionality.
 
-### 10.1 - Memory management
+### 10.1 - (No) memory management
 
 Konoran does not include memory management tools; however, at runtime, konoran needs to be able to allocate new memory for function-local variables. A konoran compiler will probably put this memory on the stack, while an interpreter will probably put it on the heap.
 
 Konoran implementations are encouraged to provide, or allow linking against, malloc/realloc/free-like functions, but the exact function signature or behavior of such functions is not specified here.
 
-### 10.2 - Error handling
+### 10.2 - (No) error handling
 
 Konoran does not include any error handling tools. Konoran programmers are encouraged to return error codes through 'out' pointers, i.e. pointers to error metadata provided by the caller in a function argument.
 
-### 10.3 - Standard library
+### 10.3 - (No) standard library
 
 Konoran's reference implementation includes a basic set of output-printing functions in JIT mode, for testing purpose. However, this is not a true standard library, and konoran does not provide a true standard library. Any standard library must be specified by and provided by the implementation if it is desired.
 
-### 10.4 - Threading
+### 10.4 - (No) threading primitives
 
 Konoran doesn't include anything related to threads, e.g. synchronization primitives, fences, etc. The implementation must specify and provide these things if they are desired.
 
-### 10.5 - String handling
+### 10.5 - (No) string handling
 
 Konoran supports utf-8 string literals, but they compile down to arrays or pointers over the `u8` type, not a unique string type. There is no string-handling library.
+
+### 10.6 - (No) strict aliasing analysis
+
+Konoran **specifically does not have strict type-based aliasing rules** and implementations are explicitly disallowed to perform type-based pointer aliasing analysis. Aside from pointer provenance concerns, the "underlying bytes" beyond a pointer are not considered to have a type except for during the moment that they are accessed.
 
