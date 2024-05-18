@@ -4,6 +4,46 @@ Work-in-progress living spec for Konoran, a low-level language designed as a com
 
 This spec is *very* early; right now, the design philosophy document ([Design.md](Design.md)) is more detailed about some things.
 
+As an intuition aid, here's an example konoran program:
+
+```rs
+// a very simple gravity simulation
+void main()
+{
+    f64 yvel = 0.0f64;
+    f64 y = 0.0f64;
+    f64 gravity = 9.8f64;
+    f64 delta = 0.001f64; // timestep
+    // need to use half the gravity for timestep-invariant calculation
+    gravity = gravity * 0.5f64;
+    // konoran's only control flow mechanisms are if, if-else, if-goto, and goto
+    u64 i = 0u64;
+head:
+    if (i < 500000000u64)
+    {
+        // timestep-invariant single-body gravity calculation
+        yvel = yvel + delta*gravity;
+        y = y + yvel*delta;
+        yvel = yvel + delta*gravity;
+        
+        i = i + 1u64;
+        goto head;
+    }
+    // an if-goto version would look like:
+//  if (i < 500000000u64)
+//      goto head;
+    // print final y coordinate
+    print_float(y);
+    // type pun first 4 bytes of f64 ad a u32, then print it
+    print_float((*((&y) as ptr(u32))) as f64);
+    // again, but with a shrunken value
+    y = y * (0.1f64);
+    print_float((*((&y) as ptr(u32))) as f64);
+    // terminating functions must explicitly return even if the return type is void
+    return;
+}
+```
+
 ## Parsing
 
 Konoran's reference implementation uses a PEG-like recursive descent parser generator (a declarative, dynamic one) to parse the program. Implementations must use a parser that accepts and rejects the same programs and produces an equivalent syntax tree.
