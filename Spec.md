@@ -174,6 +174,8 @@ Functions are imported from other modules like follows:
 
 The exact syntax is specified in the grammar.
 
+The `void` type only exists for the sake of functions that return no value; variables and pointers cannot have the type `void`.
+
 ### 4.1 - Function control flow
 
 Branches can point "upwards", not just downwards. Branches can only point to labels within the current function; they cannot point to the insides of other functions. Function bodies must return or enter an infinite loop in all control paths, but are allowed to have redundant returns that create dead code. In other words, falling through to the end of the function without a return is illegal code and must produce an error. The return value must be of the same type as is declared in the function's signature. `void` functions return no value, but must still explicitly return.
@@ -213,6 +215,18 @@ Attempting to conjure a pointer to a local variable that is not currently in-sco
 ### 4.4 - Functions do not have static variables
 
 Unlike C, konoran does not have static function variables. Global variables must be used instead.
+
+### 4.5 - Function calls
+
+Functions are called with a syntax similar to C, e.g.
+
+```rs
+print_float(8243.9f64);
+```
+
+Function arguments are fully evaluated one at a time, from left to right.
+
+Function calls evaluate to a value of whatever type the function returns. If the function returns `void`, it evaluates to no value and cannot be used in expressions (because there's nothing an expression or statement can do with another expression of type `void`, inevitably leading to an error).
 
 ## 5 - Types
 
@@ -320,7 +334,7 @@ Values that overflow past what can be stored in the given float type result in (
 
 ### 5.7 - Array literals
 
-Array literals are a list of values separate by a comma with an optional comma at the end, sandwiched between `[` and `]`. They immediately evaluate to the correct type of array with exactly the right length. The values do not need to be literals. The values must all be of the same type.
+Array literals are a list of values separate by a comma with an optional comma at the end, sandwiched between `[` and `]`. They immediately evaluate to the correct type of array with exactly the right length. The values do not need to be literals. The values must all be of the same type. The values are fully evaluated one at a time, from left to right.
 
 ```rs
 array(u8, 2) myarray = [0u8, 14u8];
@@ -329,7 +343,7 @@ array(u8, 2) myarray = [0u8, 14u8];
 
 ### 5.8 - Struct literals
 
-Struct literals have a prefix of the name of their struct type, followed by a list of member values sandwiched between `{` and `}`. The values do not need to be literals. The values must have the correct types.
+Struct literals have a prefix of the name of their struct type, followed by a list of member values sandwiched between `{` and `}`. The values do not need to be literals. The values must have the correct types. The values are fully evaluated one at a time, from left to right.
 
 ```rs
 struct Vec2

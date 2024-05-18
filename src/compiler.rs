@@ -872,6 +872,19 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
         x.unwrap()
     }} }
     
+    macro_rules! unwrap_or_panic_stack { ($($t:tt)*) =>
+    {{
+        let x = ($($t)*);
+        if x.is_some()
+        {
+            x.unwrap()
+        }
+        else
+        {
+            panic_error!("tried to access non-existent value on compilation stack; are you trying to use a `void` expression?");
+        }
+    }} }
+    
     macro_rules! build_memcpy { ($dst:expr, $src:expr, $len:expr, $volatile:expr) => { build_memcpy_raw(env.builder, env.module, $dst, $src, $len, $volatile) } }
     
     macro_rules! emit_alloca { ($type:expr, $name:expr) =>
@@ -1059,7 +1072,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 for child in node.get_children().unwrap()
                 {
                     compile(env, child, WantPointer::None);
-                    let (type_, val) = env.stack.pop().unwrap();
+                    let (type_, val) = unwrap_or_panic_stack!(env.stack.pop());
                     returns.push((type_, val));
                 }
                 if let Some((type_val, val)) = returns.first()
@@ -1100,7 +1113,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 {
                     // compile initializer and assign into variable, then register variable
                     compile(env, node.child(2).unwrap(), WantPointer::None);
-                    let (type_val, val) = unwrap_or_panic!(env.stack.pop());
+                    assert_error!(!env.stack.is_empty(), "tried to assign a non-value to a variable (are you using an expression of type `void`?)");
+                    let (type_val, val) = unwrap_or_panic_stack!(env.stack.pop());
                     
                     assert_error!(type_val == type_var, "declaration type mismatch, {} (value) vs {} (variable), line {}", type_val.to_string(), type_var.to_string(), node.line);
                     
@@ -1121,7 +1135,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 assert_error!(!env.constants.contains_key(name), "error: tried to redeclare constant {}", name);
                 
                 compile(env, node.child(2).unwrap(), want_pointer);
-                let (type_val, val) = unwrap_or_panic!(env.stack.pop());
+                let (type_val, val) = unwrap_or_panic_stack!(env.stack.pop());
                 
                 assert_error!(type_val == type_var, "constexpr type mismatch, {:?} vs {:?}, line {}", type_val, type_var, node.line);
                 assert_error!(val_is_const(true, val), "{}",
@@ -1135,8 +1149,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 compile(env, node.child(0).unwrap(), WantPointer::None);
                 compile(env, node.child(2).unwrap(), WantPointer::None);
                 
-                let (type_val, val) = env.stack.pop().unwrap();
-                let (type_left_incomplete, left_addr) = env.stack.pop().unwrap();
+                let (type_val, val) = unwrap_or_panic_stack!(env.stack.pop());
+                let (type_left_incomplete, left_addr) = unwrap_or_panic_stack!(env.stack.pop());
                 
                 assert_error!(type_left_incomplete.is_virtual_pointer(), "tried to assign to fully evaluated expression (not a variable or virtual pointer) {:?}", type_left_incomplete);
                 let (type_left, volatile) = unwrap_or_panic!(type_left_incomplete.deref_vptr());
@@ -1216,8 +1230,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
                 compile(env, node.child(1).unwrap(), WantPointer::None);
                 
-                let (offset_type, offset_val) = env.stack.pop().unwrap();
-                let (base_type, base_addr) = env.stack.pop().unwrap();
+                let (offset_type, offset_val) = unwrap_or_panic_stack!(env.stack.pop());
+                let (base_type, base_addr) = unwrap_or_panic_stack!(env.stack.pop());
                 let (base_type, volatile) = unwrap_or_panic!(base_type.deref_vptr());
                 
                 assert_error!(offset_type.name == "i64", "error: can't offset into arrays except with type i64 (used type `{}`)", offset_type.name);
@@ -1234,7 +1248,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "indirection_head" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::Virtual);
-                let (struct_type, struct_addr) = env.stack.pop().unwrap();
+                let (struct_type, struct_addr) = unwrap_or_panic_stack!(env.stack.pop());
                 let (mut struct_type, volatile) = unwrap_or_panic!(struct_type.deref_vptr());
                 check_struct_incomplete(env, &mut struct_type);
                 let backend_type = get_backend_type_sized(env.backend_types, env.types, &struct_type);
@@ -1261,7 +1275,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "funcargs_head" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
-                let (type_, funcaddr) = env.stack.pop().unwrap();
+                let (type_, funcaddr) = unwrap_or_panic_stack!(env.stack.pop());
                 match type_.data
                 {
                     TypeData::FuncPointer(funcsig) =>
@@ -1275,14 +1289,14 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         let stack_len_end = env.stack.len();
                         
                         let num_args = node.child(1).unwrap().child_count().unwrap();
-                        assert_error!(num_args == stack_len_end - stack_len_start, "");
+                        assert_error!(num_args == stack_len_end - stack_len_start, "incorrect number of arguments to function; are you using a `void`-typed expression?");
                         assert_error!(num_args == funcsig.args.len(), "incorrect number of arguments to function");
                         
                         let mut args = Vec::new();
                         let mut arg_types = Vec::new();
                         for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                         {
-                            let (type_, mut val) = env.stack.pop().unwrap();
+                            let (type_, mut val) = unwrap_or_panic_stack!(env.stack.pop());
                             assert_error!(type_ == *arg_type, "mismatched types for parameter {} in call to function {:?} on line {}: expected `{}`, got `{}`",
                                 i+1, funcaddr, node.line, arg_type.to_string(), type_.to_string());
                             if val.is_pointer_value() && val.into_pointer_value().get_type().get_address_space() != inkwell::AddressSpace::default()
@@ -1371,7 +1385,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let mut forced_mask = None;
                 if has_mask && funcsig.args.len() + 1 == stack_len_end - stack_len_start
                 {
-                    let (type_, mut val) = env.stack.pop().unwrap();
+                    let (type_, mut val) = unwrap_or_panic_stack!(env.stack.pop());
                     assert_error!(type_ == *u64_type_frontend, "mask argument of vector intrinsic must be u64");
                     
                     let mut vec_mask = i1_type.vec_type(vec_len).get_poison();
@@ -1391,7 +1405,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let mut arg_vals = Vec::new();
                 for arg_type in funcsig.args.iter().rev()
                 {
-                    let (type_, val) = env.stack.pop().unwrap();
+                    let (type_, val) = unwrap_or_panic_stack!(env.stack.pop());
                     if arg_type.is_array()
                     {
                         assert_error!(type_.inner_type() == arg_type.inner_type() && type_.array_len() <= arg_type.array_len(),
@@ -1486,7 +1500,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let mut args : Vec<BasicMetadataValueEnum> = Vec::new();
                 for (i, arg_type) in funcsig.args.iter().rev().enumerate()
                 {
-                    let (type_, val) = env.stack.pop().unwrap();
+                    let (type_, val) = unwrap_or_panic_stack!(env.stack.pop());
                     assert_error!(type_ == *arg_type, "mismatched types for parameter {} in call to intrinsic {:?}: expected `{}`, got `{}`",
                         i+1, funcaddr, arg_type.to_string(), type_.to_string());
                     args.push(val.into());
@@ -1532,7 +1546,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "freeze" =>
             {
                 compile(env, node.child(0).unwrap(), want_pointer);
-                let (type_, val) = env.stack.pop().unwrap();
+                let (type_, val) = unwrap_or_panic_stack!(env.stack.pop());
                 let res = build_freeze(env.builder, val);
                 env.stack.push((type_, res));
             }
@@ -1550,7 +1564,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let mut is_const = true;
                 for _ in 0..array_length
                 {
-                    let (type_, mut val) = env.stack.pop().unwrap();
+                    let (type_, mut val) = unwrap_or_panic_stack!(env.stack.pop());
                     if element_type.is_none()
                     {
                         element_type = Some(type_.clone());
@@ -1635,7 +1649,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let mut vals = Vec::new();
                 for _ in 0..member_count
                 {
-                    let (type_, mut val) = env.stack.pop().unwrap();
+                    let (type_, mut val) = unwrap_or_panic_stack!(env.stack.pop());
                     is_const = val_is_const(is_const, val);
                     if val_is_const(true, val) && type_.is_composite() && val.is_pointer_value()
                     {
@@ -1873,7 +1887,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 if op.as_str() == "&"
                 {
                     compile(env, node.child(1).unwrap(), WantPointer::Real);
-                    let (type_, val) = env.stack.pop().unwrap();
+                    let (type_, val) = unwrap_or_panic_stack!(env.stack.pop());
                     assert_error!(type_.is_pointer(), "error: tried to get address of non-variable");
                     env.stack.push((type_, val));
                 }
@@ -1887,7 +1901,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     {
                         compile(env, node.child(1).unwrap(), WantPointer::None);
                     }
-                    let (mut type_, val) = env.stack.pop().unwrap();
+                    let (mut type_, val) = unwrap_or_panic_stack!(env.stack.pop());
                     match type_.name.as_str()
                     {
                         "ptr" if op.as_str() != "decay_to_ptr" =>
@@ -1993,7 +2007,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "ifgoto" | "ifcondition" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
-                let (type_, val) = env.stack.pop().unwrap();
+                let (type_, val) = unwrap_or_panic_stack!(env.stack.pop());
                 let backend_type = get_backend_type(env.backend_types, env.types, &type_);
                 let comp_val =  if let (Ok(int_type), Ok(int_val)) = (inkwell::types::IntType::try_from(backend_type), inkwell::values::IntValue::try_from(val))
                 {
@@ -2073,7 +2087,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "bitcast" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
-                let (left_type, left_val) = env.stack.pop().unwrap();
+                let (left_type, left_val) = unwrap_or_panic_stack!(env.stack.pop());
                 
                 let right_type = parse_type(env.types, node.child(1).unwrap()).unwrap();
                 let right_basic_type = get_backend_type_sized(env.backend_types, env.types, &right_type);
@@ -2146,7 +2160,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "unsafe_cast" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
-                let (left_type, left_val) = env.stack.pop().unwrap();
+                let (left_type, left_val) = unwrap_or_panic_stack!(env.stack.pop());
                 let _left_basic_type : BasicTypeEnum = get_backend_type(env.backend_types, env.types, &left_type).try_into().unwrap();
                 
                 let right_type = parse_type(env.types, node.child(1).unwrap()).unwrap();
@@ -2189,7 +2203,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "cast" =>
             {
                 compile(env, node.child(0).unwrap(), WantPointer::None);
-                let (left_type, left_val) = env.stack.pop().unwrap();
+                let (left_type, left_val) = unwrap_or_panic_stack!(env.stack.pop());
                 let left_basic_type : BasicTypeEnum = get_backend_type(env.backend_types, env.types, &left_type).try_into().unwrap();
                 
                 let right_type = parse_type(env.types, node.child(1).unwrap()).unwrap();
@@ -2387,19 +2401,19 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let ((type_a, val_a), (type_b, val_b), (type_c, val_c)) = if node.child_count().unwrap() == 3
                 {
                     compile(env, node.child(0).unwrap(), WantPointer::None);
-                    let a = env.stack.pop().unwrap();
+                    let a = unwrap_or_panic_stack!(env.stack.pop());
                     compile(env, node.child(1).unwrap(), WantPointer::None);
-                    let b = env.stack.pop().unwrap();
+                    let b = unwrap_or_panic_stack!(env.stack.pop());
                     compile(env, node.child(2).unwrap(), WantPointer::None);
-                    let c = env.stack.pop().unwrap();
+                    let c = unwrap_or_panic_stack!(env.stack.pop());
                     (a, b, c)
                 }
                 else
                 {
                     compile(env, node.child(0).unwrap(), WantPointer::None);
-                    let a = env.stack.pop().unwrap();
+                    let a = unwrap_or_panic_stack!(env.stack.pop());
                     compile(env, node.child(1).unwrap(), WantPointer::None);
-                    let c = env.stack.pop().unwrap();
+                    let c = unwrap_or_panic_stack!(env.stack.pop());
                     (a.clone(), a, c)
                 };
                 
@@ -2434,8 +2448,8 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                     compile(env, node.child(0).unwrap(), WantPointer::None);
                     compile(env, node.child(2).unwrap(), WantPointer::None);
                     let op = &node.child(1).unwrap().child(0).unwrap().text;
-                    let (mut right_type, right_val)  = env.stack.pop().unwrap();
-                    let (    left_type , left_val )  = env.stack.pop().unwrap();
+                    let (mut right_type, right_val)  = unwrap_or_panic_stack!(env.stack.pop());
+                    let (    left_type , left_val )  = unwrap_or_panic_stack!(env.stack.pop());
                     
                     // allow shifting signed by unsigned, and not signed by signed
                     if (op == ">>" || op == "<<" || op == "shl_unsafe" || op == "shr_unsafe") && left_type.is_int_signed()

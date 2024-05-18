@@ -17,6 +17,11 @@ u64 beepboop = (constexpr (main) bit_as u64) + 8523u64;
 
 ptr(u8) fgigei = constexpr "bk4ui34i\n";
 
+
+void voidfunc()
+{
+    return;
+}
     
 export_extern void main()
 {
@@ -75,6 +80,12 @@ export_extern void main()
     //ptr(ptr(u8)) my_addr_of_ptr = &"skgue\n"; // invalid; cannot get the address of an evaluated pointer value
     
     //print_fmt("An invalid print that's going to crash: %f\n", (&[(95138u64) bit_as ptr(u8)]) as ptr(ptr(u8)));
+    
+    voidfunc();
+    
+    //u32 x = voidfunc(); // error
+    //voidfunc(voidfunc()); // error
+    //u32 x = 19u32 + voidfunc(); // error
     
     return;
 }
