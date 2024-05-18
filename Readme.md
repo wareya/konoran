@@ -44,17 +44,17 @@ Differences from assembly:
 3) Real type system, including structs, arrays, etc
 4) Calling convention is abstracted away
 5) Explicit functions, not a pile of machine code with labels
+6) (Limited) structured control flow (if/if-else)
 
 Differences from C:
 
-1) No structured control flow, only `goto ...;` and `if (...) goto ...;`
-2) No preprocessor, includes, macros, etc
-3) Strict static typing only, no weak typing, must manually cast between types even if a lossless conversion exists
-4) Functions can call each other in any order with no pre-declaration; a function signature collection pass is run before compilation
-5) Struct types are in the same situation as functions, pre-declarations are not needed
-6) No pre-declarations at all anywhere; the only non-defining declarations are imports from other modules
-7) No expression type analysis pass; functions can be compiled with recursive descent (on the AST) without looking ahead
-8) No "platform-defined" type sizes; f32, f64, i8, i16, etc. encode their exact bit count precisely, and there's no generic "int" type.
+1) No preprocessor, includes, macros, etc
+2) Strong static typing only, no weak typing, must manually cast between types even if a lossless conversion exists
+3) Functions can call each other in any order with no pre-declaration; a function signature collection pass is run before compilation
+4) Struct types are in the same situation as functions, pre-declarations are not needed
+5) No pre-declarations at all anywhere; the only non-defining declarations are imports from other modules
+6) No expression type analysis pass; functions can be compiled with recursive descent (on the AST) without looking ahead
+7) No "platform-defined" type sizes; f32, f64, i8, i16, etc. encode their exact bit count precisely, and there's no generic "int" type.
 
 Some things that are probably subject to change:
 
