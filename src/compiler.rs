@@ -2718,7 +2718,7 @@ pub struct ProcessOutput
 /// let f = executor.get_function::<TYPE>(funcname).unwrap();
 /// /*let retval = */ f.call(/*...*/);
 /// ```
-/// You can use [ProcessOutput::visible_function_signatures] to verify that the function you're about to exist exists and has the right signature.
+/// You can use [ProcessOutput::visible_function_signatures] to verify that the function you're about to call exists and has the right signature.
 ///
 /// The settings hashmap supports the following settings:
 /// 

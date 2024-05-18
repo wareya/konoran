@@ -77,56 +77,26 @@ Konoran has the following intrinsic numeric types:
 
 `u8, i8, u16, i16, u32, i32, u64, i64, f32, f64`
 
-These are unsigned and signed integers (two's complement), and IEEE binary floating point numbers.
+u8 has a bit width of 8 and a byte width of 1, u16 has a bit width of 16 and a byte width of 2, etc. The float types (starting with `f`) are IEEE-compliant binary floats.
 
-Konoran has the following pointer types:
+Konoran also has pointer, function pointers, structs, and arrays:
 
 ```
 ptr(type)
 funcptr(returntype, (arg1type, arg2type, ...))
-```
-
-Pointers can be casted back and forth with `u64` (or whatever the target's pointer-sized int type is) using the `bit_as` operator (e.g. `(my_ptr) bit_as u64`). With regards to the values stored in this u64 after casting, the in-memory "size" of a u8 must be 1, of a u16 must be 2, etc.
-
-Konoran has the following composite types:
-
-```
 struct <name> { type1 var1, type2 var2, ... }
 array(type, len)
 ```
 
-Struct types consist of a series of members (also called variables, properties, etc) declared one at a time, with no specified value. Struct values consist of a series of values with the appropriate type for the struct being constructed, and are prefixed with the name of the struct (e.g. `Vec2 { 1.0f32, 0.5f32 }`).
+Unlike C, structs do not have invisible alignment padding and must be aligned explicitly, using properties named `_`, which will be elided initializers etc. and can be assumed to have an undefined/poison value.
 
-Structs have a fixed, known size, and their members are not reordered. Structs do not have any invisible padding; even if `u32`s need to be aligned to 4 bytes on the target platform, a struct that goes `struct ... { u8 a; u32 b; }` will have the `b` property start at the second byte of the struct, and the struct will be 5 bytes long. Alignment must be done manually. To make this easier, structs can have multiple members with the name `_`, none of which are accessible, and are assumed to have an unknown (possibly undefined/poison) value if accessed with pointer arithmetic. It should be noted that padding around floats should ideally be of a float type, and same for non-floats. For example:
+Composite types (structs/arrays) are passed by value, not reference, when they're moved around.
 
-```
-struct asdf
-{
-    f32 a;
-    f32 _; // padding
-    u64 b;
-}
-struct asdf2
-{
-    i32 a;
-    u32 _; // padding
-    u64 b;
-}
-```
-
-Composite types (structs/arrays) are passed by value when calling functions with them as arguments, or returning them from functions.
-
-The konoran implementation is allowed, but not encouraged, to produce an error if structs have misaligned members for the target platform.
+The byte width of pointers and function pointers is implementation-defined.
 
 ## Functions
 
-Functions have return types, names, argument lists, and bodies. A function's signature consists of its return type and the list of its argument types. Function bodies consist of a series of local variable declarations/definitions, statements, labels, and branching statements (if statements and gotos), in any order. Branches can point "upwards", not just downwards. Branches can only point to labels within the current function; they cannot point to the insides of other functions. Function bodies must return or enter an infinite loop in all control paths, but are allowed to have redundant returns that create dead code. In other words, falling through to the end of the function without a return is illegal code and must produce an error. The return value must be of the same type as is declared in the function's signature. `void` functions return no value, but must still explicitly return.
-
-Variable declarations (but not their definitions/assignments if they have one) are hoisted to the top of the function, but this is possibly subject to change. (This indirectly means that jumps are incapable of leaving the stack in an invalid state. If variable declarations ever stop being hoisted, branches will be forbidden from jumping to a point in the function that has a differently shaped or typed stack.) Variable declarations in functions (and their arguments) only last for the body of the function and do not affect other functions. Function-specific variable declarations are allowed to "shadow" global variables and functions; doing so must not produce an error or warning.
-
-Variables are mutable and can be rewritten. Const variables do not exist, but this is possibly subject to change. Compilers are free to detect and mark const variables as const and optimize them away, as long as they're never explicitly accessed.
-
-When a function begins, its arguments are treated as normal variables, with their values pre-filled. They cannot be redefined in that function's body.
+Functions in konoran work similarly to how they work in C: invoking them creates a new function state context, their arguments/variables cannot modify the arguments/variables of other instances of that function (i.e. functions are re-entrant), etc. Unlike C, konoran does not have static function variables.
 
 ## Generally undefined behaviors
 
@@ -135,26 +105,7 @@ The following program behaviors are generally undefined and the compiler is allo
 1) Accessing a variable without using its name or a correctly-derived pointer to it
 2) Calling a function without using its name or a correctly-derived pointer to it
 
-Point 1 means that other code using that variable is allowed to assume that it doesn't suddenly change for no reason, even if an incorrectly-derived pointer value might be pointing to it. For example:
-
-```rust
-u32 x = 0;
-ptr(u32) maybe_x = (randi()) as ptr(u32);
-*maybe_x = 16u32;
-print_float((x) as f64);
-```
-
-The above program contains undefined behavior if `randi()` is capable of producing a value matching the address of the `x` variable. As such, a compiler optimizing this code is allowed to assume that the value passed to `print_float()` remains `0.0f64`, even if `*maybe_x` is written to in the meantime, because even if `maybe_x` points to `x`, it was not correctly derived.
-
-Importantly, point 1 does not make it instant UB to access/modify data via conjured pointers. The optimizer is merely allowed to assume that accesses via conjured pointers do not modify named variables. Arbitrary memory and heap memory are assumed to be disjoint from "variables".
-
-Point 2 means that the optimizer can remove functions that are never referenced even if code might accidentally construct the value of a function pointer that would point at that function if it hadn't been removed. The same is true of point 1 and variables. However, this does not apply to `export_extern`'d global variables or functions.
-
-The implementation is allowed to define new UB in situations where threads, OS access, or language extensions are involved. For example, it's OK for an implementation to define it to be UB to read and write to a single variable or memory location from two threads without using a synchronization primitive or memory fence, even if those accesses are direct or use correctly-derived pointers.
-
-Implementations are allowed to specify things as being defined even if they're specified as UB here. For example, implementations are allowed to specify that it's not UB for a variable's value to magically change when a memory fence or thread synchronization operation is somehow performed.
-
-Implementations are allowed to specify unaligned memory accesses as UB, but this is discouraged and it's strongly recommended that they specify them as implementation-defined instead.
+These points are fleshed out and explained in more detail in the spec.
 
 ## Unwanted UB / UB oversights
 
@@ -172,11 +123,9 @@ Integer division by zero with the `/` operator (or integer remainder calculation
 
 Accessing arbitrary memory locations via conjured pointers is allowed. The result is implementation-defined rather than undefined.
 
-Accessing variables via a pointer to a different type is allowed; for example, accessing a `f32` via a `ptr(u16)` pointing at the first or third byte of the `f32` is allowed.
+Accessing variables via a pointer to a different type is allowed, as long as out-of-object memory is not accessed.
 
-Having a value magically change between consecutive *volatile* accesses is allowed, i.e. the compiler cannot change the order or number of volatile operations or what addresses they operate on. In particular, volatile writes to even a correctly-derived pointer cannot be optimized away (even if the variable the pointer points at is never used again), and volatile reads from even a correctly-derived pointer must assume that the value may have magically changed since the last time it was accessed (even if it has not been accessed).
-
-Volatile memory acceses must be treated as though they have (non-UB-producing) side effects. In particular, optimizations must not change volatile memory accesses in order, number, or address. Implementations are allowed to specify arbitrary side-effects for volatile memory accesses. Volatile memory accesses are not typically assumed to modify variables or memory that they do not point at, but implementations are allowed to specify situations where they do. For example, an implementation might specify that doing a volatile read of a status register can cause an interrupt handler to run; normally, the implementation's optimizer is allowed to assume that this interrupt handler doesn't modify any variables or memory that the current non-interrupt code is working on, but the implementation is allowed to specify that it does, and prevent its own optimizer from assuming that those variables or memory are unchanged during the interrupt. If the implementation does not specify such a situation, then it is assumed that volatile memory accesses do not alter unrelated variables/memory, and the optimizer is free to use that assumption.
+Having a value magically change between consecutive *volatile* accesses is allowed; see the spec for more details.
 
 ## Casting
 

@@ -80,6 +80,23 @@ void main()
     print_float(fekf);
     fekf = 5913.14530f64;
     print_float(fekf);
+    
+    print_float(1.0e+1000f64);
+    print_float(1.0e+100f64);
+    print_float(((1.0e+100f64) as f32) as f64);
+    
+    print_float(1.0e+100f64 % 0.0f64);
+    print_float(0.0f64 % 0.0f64);
+    print_float((1052u64 % 0u64) as f64);
+    print_float((1052u64 / 0u64) as f64);
+    
+    print_float((0.1f32 + 0.2f32 + 0.000010f32) as f64);
+    print_float(((0.1f32 + 0.2f32) + 0.000010f32) as f64);
+    print_float((0.1f32 + (0.2f32 + 0.000010f32)) as f64);
 
+    ptr(array(u8, 2)) myptr = &[0u8, 14u8];
+    u16 myint = *((myptr) bit_as ptr(u16));
+    print_float((myint) as f64);
+    
     return;
 }
