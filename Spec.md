@@ -228,7 +228,7 @@ Ternary conditionals are defined with wrapping parens as part of their syntax an
 
 Assignments cannot occur in an expression context (only a statement context) and as such are not part of the precedence table.
 
-In-place assignments like `+=` do not exist, only simply assignments with `=`.
+In-place assignments like `+=` do not exist, only simple assignments with `=`.
 
 #### Infix/binary operators
 
