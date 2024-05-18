@@ -7,12 +7,13 @@ i32 test1(i8 arg)
 }
 
 i32 test1 = 91453i32;
-i32 test1 = 91453i32;
 
 i32 test2(i8 arg)
 {
+    i32 test1 = 91453i32;
     if (arg)
     {
+        i32 test1 = 91453i32;
         return 9245i32;
     }
     return 0i32;

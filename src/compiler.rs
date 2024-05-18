@@ -3132,6 +3132,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                             global.set_dll_storage_class(storage_class);
                             env.builder.build_return(None).unwrap();
                             
+                            assert!(!global_decs.contains_key(g_name), "error: redeclared global {}", g_name);
                             global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
                         }
                         else
@@ -3143,6 +3144,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                             env.builder.build_store(global.as_pointer_value().into(), val).unwrap();
                             env.builder.build_return(None).unwrap();
                             
+                            assert!(!global_decs.contains_key(g_name), "error: redeclared global {}", g_name);
                             global_decs.insert(g_name.clone(), (g_type.clone(), global, Some(func_val)));
                         }
                         
@@ -3158,6 +3160,8 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                         }
                         global.set_linkage(linkage);
                         global.set_dll_storage_class(storage_class);
+                        
+                        assert!(!global_decs.contains_key(g_name), "error: redeclared global {}", g_name);
                         global_decs.insert(g_name.clone(), (g_type.clone(), global, None));
                     }
                 }
@@ -3186,8 +3190,10 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                     let (type_val, val) = env.stack.pop().unwrap();
                     assert!(type_val == *g_type);
                     
-                    assert!(val_is_const(true, val), "error: tried to make global constexpr with non-constexpr expression");
+                    assert!(val_is_const(true, val), "error: tried to make global constant with non-constexpr expression");
                     env.builder.build_return(None).unwrap();
+                    
+                    assert!(!constants.contains_key(g_name), "error: redeclared global constant {}", g_name);
                     constants.insert(g_name.clone(), (g_type.clone(), val));
                     
                     builder.position_at_end(entry_block);
