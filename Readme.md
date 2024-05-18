@@ -44,7 +44,7 @@ Differences from assembly:
 3) Real type system, including structs, arrays, etc
 4) Calling convention is abstracted away
 5) Explicit functions, not a pile of machine code with labels
-6) (Limited) structured control flow (if/if-else)
+6) (Limited) structured control flow (if/if-else) (but goto is also supported within a single function)
 
 Differences from C:
 
