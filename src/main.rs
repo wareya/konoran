@@ -119,14 +119,7 @@ fn main()
             FileLines::from_seekable(BufReader::new(file))
         }
         
-        let mut iter = module_fnames.into_iter().map(|fname|
-        (
-            {
-                let fname = fname.clone();
-                read_lines(fname.clone())
-            },
-            fname.clone()
-        ));
+        let mut iter = module_fnames.into_iter().map(|fname| (read_lines(fname.clone()), fname ));
         
         let process_output = process_program(&mut iter, settings.clone());
         
