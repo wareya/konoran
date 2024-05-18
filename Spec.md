@@ -91,9 +91,23 @@ These can come in any order, including interleaved order, and there are no pre-d
 
 ### 3.2 - Module global variable and constant semantics
 
-Global variable definitions can contain arbitrary expressions and are evaluated from top to bottom on program initialization. It's strongly encouraged that advanced implementations fold logically constant initializers for global variables down into static data, but this is not mandatory. Global constant initializers *must* be folded down into static data. Global variables do not require initializers (note that without them, their initial state is undefined), but global constants do.
+Global variable definitions can contain arbitrary expressions and are evaluated from top to bottom on program initialization. It's strongly encouraged that advanced implementations fold logically constant initializers for global variables down into static data even if the variables are not marked as constant, but this is not mandatory. Global variables do not require initializers, but note that without them, their initial state is undefined.
 
 Global variables are mutable and can be modified and rewritten.
+
+#### 3.2.1 - Global constants
+
+Global variables marked with the `constexpr` keyword are not variables; they are global constants.
+
+Global constants must have initializers, and those initializers must be folded down to specific values at compile time. Global constants must be stored in static data if the compiler supports static data. Otherwise, they may be loaded into memory during initialization, but must be loaded before any other initializers are run.
+
+Global variables and constants are visible to the bodies of all functions defined in the current module, including functions defined above them.
+
+Global constant initializers *must* be folded down into known values at compile time, and *require* initializers.
+
+Global constants may not be modified and the compiler is allowed to assume that they never change from what is computed during at compile time. The initializers of global constants can see and refer to the values of earlier global constants that were defined above them in the module file.
+
+Global constants are not visible to other modules.
 
 ### 3.3 - Module component redeclaration rules
 
@@ -113,6 +127,8 @@ Functions and global variables (not global constants) can have the following vis
 
 The exact semantics of `export_extern` and `import_extern` are implementation-defined, except that they must be the same as or supersets of the default or `using` visibility respectively.
 
+Global constants are always logically private.
+
 The exact semantics of linking are implementation-defined.
 
 ### 3.5 - Module C ABI compliance when linking
@@ -130,6 +146,14 @@ Branches can point "upwards", not just downwards. Branches can only point to lab
 ### 4.2 - Function variable mutability
 
 Variables are mutable and can be rewritten. Constexpr variables exist; they must be defined upon declaration and cannot be modified/rewritten. Variables and const variables follow the same logical access rules and cannot shadow each other in the same scope. Compilers are free to detect and mark const variables as const and optimize them away, as long as they're never explicitly accessed, or fold/inline them, even if their address is taken and modified. Writing to a const variable via a pointer is undefined behavior.
+
+### 4.2.1 - Local constants
+
+Variables marked with the `constexpr` keyword are not variables; they are local constants. Local constants follow the same rules as global constants (e.g. their initializer must be known at compile time, they cannot be modified, etc), except they are only visible to the function that defines them.
+
+Local constants do not follow block scope rules; they are visible anywhere in the function that is below them, even if that place is outside of the scope in which the local constant was defined. Visible local constants have a defined value determined by their initializer even if the flow of execution never passed through the statement defining the local constant.
+
+Local constants are only visible "from below".
 
 ### 4.3 - Function stack consistency
 
@@ -545,6 +569,14 @@ decay_to_ptr    convert array of elements to pointer to first element
 
 It performs pointer decay, the same type that C performs for arrays at function boundaries. An `array(u8, 4)` will turn into a `ptr(u8)` pointing at the first element of the array. This is logically equivalent to using `&` on array and casting the resulting pointer to `ptr(inner_type)`.
 
+### 8.5 - Constant expressions
+
+Konoran has a `constexpr` pseudo-operator that looks like e.g. `constexpr (16u64)` or `constexpr (85u8 + 14u8)`.
+
+Expressions inside of the `constexpr` operator must be guaranteed to be const-foldable down to a specific literal value at compile time, with no runtime computation of the inside result. However, if the implementation has separate "optimizations" and "no optimizations" modes, the "no optimizations" mode is allowed to not perform constant folding. If there are no such separate modes, the implementation must perform constant folding.
+
+If a `constexpr` expression is being assigned to a `constexpr` variable, then it must be folded down during compilation, even if the implementation has a "no optimizations" mode and is configured to use it. Then, if the implementation supports static memory, this value must be stored in static memory, not loaded into memory piecemeal at runtime.
+
 ## 9 - Generally undefined behaviors
 
 The following program behaviors are generally undefined and the compiler is allowed to assume that they never happen for the sake of optimization:
@@ -572,3 +604,30 @@ The implementation is allowed to define new UB in situations where threads, OS a
 Implementations are allowed to specify things as being defined even if they're specified as UB here. For example, implementations are allowed to specify that it's not UB for a variable's value to magically change when a memory fence or thread synchronization operation is somehow performed.
 
 Implementations are allowed to specify unaligned memory accesses as UB, but this is discouraged and it's strongly recommended that they specify them as implementation-defined instead.
+
+## 10 - Memory management
+
+Konoran does not include memory management tools; however, at runtime, konoran needs to be able to allocate new memory for function-local variables. A konoran compiler will probably put this memory on the stack, while an interpreter will probably put it on the heap.
+
+Konoran implementations are encouraged to provide, or allow linking against, malloc/realloc/free-like functions, but the exact function signature or behavior of such functions is not specified here.
+
+## 11 - Error handling
+
+Konoran does not include any error handling tools. Konoran programmers are encouraged to return error codes through 'out' pointers, i.e. pointers to error metadata provided by the caller in a function argument.
+
+## 12 - Standard library
+
+Konoran's reference implementation includes a basic set of output-printing functions in JIT mode, for testing purpose. However, this is not a true standard library, and konoran does not provide a true standard library. Any standard library must be specified by and provided by the implementation if it is desired.
+
+## 13 - Threading
+
+Konoran doesn't include anything related to threads, e.g. synchronization primitives, fences, etc. The implementation must specify and provide these things if they are desired.
+
+## 14 - Strings
+
+Konoran supports utf-8 string literals, but they compile down to arrays or pointers over the `u8` type, not a unique string type. There is no string-handling library.
+
+
+
+
+

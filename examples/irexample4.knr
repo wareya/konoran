@@ -71,5 +71,18 @@ void main()
     
     print_float((*asdie) as f64);
     
+    //print_float(gkue); // invalid code
+    
+    {
+        constexpr f64 gkue = 19843.81f64;
+        f64 gkue2 = 5481.581f64;
+    }
+    
+    print_float(gkue);
+    //print_float(gkue2); // invalid code
+    print_float(gkue3);
+    
     return;
 }
+
+constexpr f64 gkue3 = 91439.10f64;
