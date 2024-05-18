@@ -218,6 +218,8 @@ Operators on a given line have the same precedence and are evaluated left-to-rig
 
 Note that `&&` and `||` have the same precedence. While `&&` can be interpreted as multiplication and `||` can be interpreted as addition, by that line of reasoning, `!=` should be interpreted as addition in that case as well, but giving them all the same precedence would be awful, so konoran abandoned that entire line of reasoning. As primarily a compiler target language, specificational clarity was prioritized over similarity to C; people need to look up C's precedence for these operators all the time, and konoran decided that was unnecessary wasted effort and decided to define them as having the same precedence. As such, `x && y || z` and `x || y & z` are both parsed left to right, as `(x && y) || z` and `(x || y) & z`.
 
+Likewise, note that `>=` etc. have the same precedence as `==` etc.
+
 Postfix operators do not exist.
 
 Parens are used to force evaluation ordering and are not part of the precedence table because they have no evaluation ordering ambiguity.
