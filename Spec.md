@@ -100,7 +100,7 @@ In the declarative grammar, grammar point references within a grammar form take 
 - `...X` e.g. `$expr$...X` allows the grammar point to occur one or more times, but each repetition must be separated by the single character X (e.g. `$expr$...,` matches a list of `expr` matches separated by commas, like `1.0f64, 0u8`)
 - `+..($another_point$)` e.g. `$rhunexpr_right$+..($funcargs$)` allows the grammar point to occur one or more times, but the final instance of it must be a single particular grammar point inside, or else the matching rule fails to match.
 
-#### 1.3.3 'remaining matches optional' operator
+#### 1.3.3 - 'remaining matches optional' operator
 
 Assuming the matching rules to the left of the `>>?` operator match, the remaining matching rules in the given grammar form are optional and are only included if they successfully match. If they do not successfully match they are all discarded and the grammar form is considered to have parsed successfully as only the prior matching rules.
 
