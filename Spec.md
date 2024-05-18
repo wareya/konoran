@@ -292,7 +292,7 @@ For integers, the following regexes are used:
 
 If the non-`0x` regex finds a match, the number is interpreted as an integer of the given type written in decimal. If the given value exceeds the capacity of the type, the compiler must throw an error. Importantly, `-128i8` must immediately be interpreted as a maximally negative `i8`, not as an `i8` with an overflown value that is then negated with a unary operator; the `-` is part of the regex for a reason.
 
-#### 5.6.1 - Integer literals
+#### 5.6.2 - Floating-point literals
 
 For floats, the following regexes are used:
 
