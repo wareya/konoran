@@ -717,29 +717,27 @@ Implementations are allowed to specify things as being defined even if they're s
 
 Implementations are allowed to specify unaligned memory accesses as UB, but this is discouraged and it's strongly recommended that they specify them as implementation-defined instead.
 
-## 10 - Memory management
+## 10 - Non-features
+
+### 10.1 - Memory management
 
 Konoran does not include memory management tools; however, at runtime, konoran needs to be able to allocate new memory for function-local variables. A konoran compiler will probably put this memory on the stack, while an interpreter will probably put it on the heap.
 
 Konoran implementations are encouraged to provide, or allow linking against, malloc/realloc/free-like functions, but the exact function signature or behavior of such functions is not specified here.
 
-## 11 - Error handling
+### 10.2 - Error handling
 
 Konoran does not include any error handling tools. Konoran programmers are encouraged to return error codes through 'out' pointers, i.e. pointers to error metadata provided by the caller in a function argument.
 
-## 12 - Standard library
+### 10.3 - Standard library
 
 Konoran's reference implementation includes a basic set of output-printing functions in JIT mode, for testing purpose. However, this is not a true standard library, and konoran does not provide a true standard library. Any standard library must be specified by and provided by the implementation if it is desired.
 
-## 13 - Threading
+### 10.4 - Threading
 
 Konoran doesn't include anything related to threads, e.g. synchronization primitives, fences, etc. The implementation must specify and provide these things if they are desired.
 
-## 14 - Strings
+### 10.5 - String handling
 
 Konoran supports utf-8 string literals, but they compile down to arrays or pointers over the `u8` type, not a unique string type. There is no string-handling library.
-
-
-
-
 
