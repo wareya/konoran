@@ -51,6 +51,18 @@ head:
 
 Konoran's reference implementation uses a PEG-like recursive descent parser generator (a declarative, dynamic one) to parse the program. Implementations must use a parser that accepts and rejects the same programs and produces an equivalent syntax tree (or one that compiles to logically identical code).
 
+Konoran's grammar is specified declaratively:
+
+https://github.com/wareya/konoran/blob/main/src/parser/irgrammar.txt
+
+The declarative grammar is parsed line-by-line; how to parse each line of the declarative grammar is specified as code:
+
+https://github.com/wareya/konoran/blob/main/src/parser/grammar.rs
+
+The reference parser (and lexer/tokenizer) works directly with the declarative grammar (i.e. is a parser generator) and can be read here:
+
+https://github.com/wareya/konoran/blob/main/src/parser/mod.rs
+
 ### 1.1 - Tokenization
 
 Token patterns are derived from the grammar (some of which are regexes, and some of which are literals) and matched against the source text in top-to-bottom order (for regexes) or in order of decreasing length (for literals/symbols; with length ties broken by top-to-bottom order) to derive a token stream. Regexes are matched first. Whitespace is used as an explicit token boundary and is stripped. Tokens cannot span lines. C-style, C++-style, and Bash-style (`#`) comments are supported, and are matched for before tokens. Then the token stream is fed to the parser.
