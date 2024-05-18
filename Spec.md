@@ -321,6 +321,12 @@ ptr(array(u8, 2)) myptr = &myvar;
 
 So, if the address of a struct/array *value* is taken, it must be given an automatic storage location and pinned there until the function exits (or some other logically equivalent implementation-defined behavior). This is not true of any other value type and other values cannot have their address taken, only variables containing them.
 
+In particular, non-constexpr temporary aggregates pointed to by valid pointers can be modified; building off the above array pointer example, the following code is allowed:
+
+```rs
+    (*myptr)[1i64] = 1u8;
+```
+
 Pointers derived as above only need to remain valid as long as the code that derives them is actually using them. So, an optimizer can eliminate the storage for a variable or an automatic storage slot if it knows that it's no longer referred to and that all pointers correctly derived from it are dead.
 
 Accessing variables via a pointer to a different type is allowed; for example, accessing a `f32` via a `ptr(u16)` pointing at the first or third byte of the `f32` is allowed. For example, building off the above array pointer example, the following code is allowed:
@@ -348,6 +354,38 @@ The following prefix operators are supported for ints, and return a new value of
 ~    bitwise inversion (flip all bits)
 !, not    boolean "not" (results in a u8; equivalent to `(val == <zero>)`)
 ```
+
+In particular, notice that `!`/`not` is not defined for floats. You must use `(float == 0.0<floattype>)` instead.
+
+The above operators are trivially defined.
+
+The following prefix operators are supported for data pointers:
+
+```
+*    dereference (evaluate to inner type)
+@    make volatile
+!    boolean "not" (results in a u8; 1u8 if the pointer is null, 0u8 if the pointer is not null)
+```
+
+The `*` operator is not only used when loading a value from a pointer in expressions, but also when assigning to the value pointed to by a pointer, e.g.
+
+```rs
+*my_ptr_to_u16 = 162u16;
+```
+
+This must also be supported when indexing into arrays, e.g.
+
+```rs
+(*my_ptr_to_array_u16)[1i64] = 162u16;
+```
+
+For arrays, the following prefix operator is defined:
+
+```rs
+decay_to_ptr    convert array of elements to pointer to first element
+```
+
+It performs pointer decay, the same type that C performs for arrays at function boundaries. An `array(u8, 4)` will turn into a `ptr(u8)` pointing at the first element of the array. This is logically equivalent to using & on array and casting the resulting pointer to `ptr(inner_type)`.
 
 ## Generally undefined behaviors
 

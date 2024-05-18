@@ -1124,7 +1124,9 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let (type_val, val) = unwrap_or_panic!(env.stack.pop());
                 
                 assert_error!(type_val == type_var, "constexpr type mismatch, {:?} vs {:?}, line {}", type_val, type_var, node.line);
-                assert_error!(val_is_const(true, val), "error: constexpr contains non-constant parts");
+                assert_error!(val_is_const(true, val), "{}",
+                    if want_pointer != WantPointer::Real { "error: constexpr contains non-constant parts" } else { "error: tried to get address of constexpr expression" }
+                );
                 
                 env.constants.insert(name.clone(), (type_var, val));
             }
@@ -1522,7 +1524,10 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
             "constexpr" =>
             {
                 compile(env, node.child(0).unwrap(), want_pointer);
-                assert_error!(val_is_const(true, env.stack.last().unwrap().1), "error: constexpr contains non-constant parts; {:?}", env.stack.last());
+                assert_error!(val_is_const(true, env.stack.last().unwrap().1), "{}; {:?}",
+                    if want_pointer != WantPointer::Real { "error: constexpr contains non-constant parts" } else { "error: tried to get address of constexpr expression" },
+                    env.stack.last()
+                );
             }
             "freeze" =>
             {
@@ -1570,7 +1575,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 let array_type = element_type.to_array(array_length);
                 let array_backend_type = get_backend_type_sized(env.backend_types, env.types, &array_type);
                 
-                if !is_const
+                if !is_const || want_pointer == WantPointer::Real
                 {
                     let slot = emit_alloca!(array_backend_type, "__array_literal");
                     
@@ -1650,7 +1655,7 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 
                 let backend_type = get_backend_type_sized(env.backend_types, env.types, &struct_type);
                 
-                if !is_const
+                if !is_const || want_pointer == WantPointer::Real
                 {
                     let slot = emit_alloca!(backend_type, "__struct_literal");
                     for (index, (type_, val)) in vals.into_iter().enumerate()
@@ -1875,11 +1880,18 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                 }
                 else
                 {
-                    compile(env, node.child(1).unwrap(), WantPointer::None);
+                    if op.as_str() == "decay_to_ptr"
+                    {
+                        compile(env, node.child(1).unwrap(), WantPointer::Real);
+                    }
+                    else
+                    {
+                        compile(env, node.child(1).unwrap(), WantPointer::None);
+                    }
                     let (mut type_, val) = env.stack.pop().unwrap();
                     match type_.name.as_str()
                     {
-                        "ptr" =>
+                        "ptr" if op.as_str() != "decay_to_ptr" =>
                         {
                             match (op.as_str(), want_pointer)
                             {
@@ -1951,17 +1963,16 @@ fn compile(env : &mut Environment, node : &ASTNode, want_pointer : WantPointer)
                         }
                         _ =>
                         {
-                            assert_error!(type_.is_array() && op.as_str() == "decay_to_ptr", "error: type `{}` is not supported by unary operator {}", type_.to_string(), op);
-                            if !env.options.contains_key("value_aggregates")
+                            if op.as_str() == "decay_to_ptr"
                             {
+                                assert_error!(type_.is_pointer(), "internal error: decay_to_ptr argument is not a pointer");
+                                let (type_, _) = unwrap_or_panic!(type_.deref_ptr());
+                                assert_error!(type_.is_array(), "error: can't use pointer decay on type `{}`", type_.to_string());
                                 env.stack.push((type_.array_as_ptr().unwrap(), val));
                             }
                             else
                             {
-                                let backend_type = get_backend_type_sized(env.backend_types, env.types, &type_);
-                                let slot = emit_alloca!(backend_type, "__temp_decay_");
-                                env.builder.build_store(slot, val).unwrap();
-                                env.stack.push((type_.array_as_ptr().unwrap(), slot.into()));
+                                panic_error!("error: can't use unary operator `{}` on type `{}`", op, type_.name)
                             }
                         }
                     }

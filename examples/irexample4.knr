@@ -60,7 +60,16 @@ void main()
     print_vec2(Vec2 { 2.2f32, 5.5f32 });
     
     print_float(((constexpr Vec2 { 3.141f32, 5.5f32 }).x) as f64);
+    print_float(((constexpr [3.141f32])[0i64]) as f64);
     print_float(((constexpr [Vec2 { 3.141f32, 5.5f32 }])[0i64].x) as f64);
+    
+    ptr(u8) asdie = decay_to_ptr [42u8];
+    
+    print_float((*asdie) as f64);
+    
+    *asdie = 69u8;
+    
+    print_float((*asdie) as f64);
     
     return;
 }

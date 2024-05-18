@@ -94,8 +94,15 @@ void main()
     print_float(((0.1f32 + 0.2f32) + 0.000010f32) as f64);
     print_float((0.1f32 + (0.2f32 + 0.000010f32)) as f64);
 
+    // ptr(array(u8, 2)) myptr = &constexpr[0u8, 14u8]; // illegal
     ptr(array(u8, 2)) myptr = &[0u8, 14u8];
+    
     u16 myint = *((myptr) bit_as ptr(u16));
+    print_float((myint) as f64);
+    
+    (*myptr)[1i64] = 1u8; // non-constexpr temporary aggregates pointed to by valid pointers can be modified!
+    
+    myint = *((myptr) bit_as ptr(u16));
     print_float((myint) as f64);
     
     return;
