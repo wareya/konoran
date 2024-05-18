@@ -11,6 +11,7 @@ Konoran can be **100% fully learned**, including strange edge cases, by an exper
 Konoran is not a pipe dream; it already exists and has a working, fast, complete implementation.
 
 Design philosophy document (WIP): [Design.md](Design.md)
+
 Specification (WIP): [Spec.md](Spec.md)
 
 Example of some konoran code:
