@@ -23,6 +23,7 @@ head:
     // an if-goto version would look like:
 //  if (i < 500000000u64)
 //      goto head;
+    // if statements other than just "goto" need curly braces around the body, even if it's a single line, as do else statements
     // print final y coordinate
     print_float(y);
     // type pun first 4 bytes of f64 ad a u32, then print it
