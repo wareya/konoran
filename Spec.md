@@ -36,7 +36,7 @@ Konoran modules consist of a series of:
 
 These can come in any order, including interleaved order, and there are no pre-declarations for things that are defined in the current module. The implementation must run a pre-pass over the module to collect definitions and imports. Global variable definitions can contain arbitrary expressions and are evaluated from top to bottom on program initialization. It's strongly encouraged that advanced implementations fold logically constant initializers for global variables down into static data, but this is not mandatory. Global constant initializers *must* be folded down into static data. Global variables do not require initializers (note that without them, their initial state is undefined), but global constants do.
 
-Within a single module, two structs cannot have the same name, two functions cannot have the same name, and two constants or global variable cannot have the same name.
+Within a single module, two structs cannot have the same name, two functions cannot have the same name, and two global constants or global variables cannot have the same name.
 
 Structs are not exposed to other modules. If two modules want to use the same struct they need to redefine it.
 
