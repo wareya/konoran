@@ -1,5 +1,7 @@
 # Konoran Spec
 
+## 0 - Preface
+
 Work-in-progress living spec for Konoran, a low-level language designed as a compiler target, with a complexity between C and assembly.
 
 This spec is *very* early; right now, the design philosophy document ([Design.md](Design.md)) is more detailed about some things.
@@ -45,27 +47,37 @@ head:
 }
 ```
 
-## Parsing
+## 1 - Parsing
 
 Konoran's reference implementation uses a PEG-like recursive descent parser generator (a declarative, dynamic one) to parse the program. Implementations must use a parser that accepts and rejects the same programs and produces an equivalent syntax tree.
 
+### 1.1 - Tokenization
+
 Token patterns are derived from the grammar (some of which are regexes, and some of which are literals) and matched against the source text in top-to-bottom order (for regexes) or in order of decreasing length (for literals/symbols; with length ties broken by top-to-bottom order) to derive a token stream. Regexes are matched first. Whitespace is used as an explicit token boundary and is stripped. Tokens cannot span lines. C-style, C++-style, and Bash-style (`#`) comments are supported, and are matched for before tokens. Then the token stream is fed to the parser.
+
+### 1.2 - Reserved keywords (lack thereof)
 
 Struct/function/constant/variable names ("struct/symbol names") are allowed to be the same as syntax keywords as long as the resulting declaration/definition is not syntactically ambiguous. The konoran grammar is designed in a way that doesn't need to know any specific struct/symbol names to be able to detect when such a name (rather than a keyword) is being used. If a usage would be visually ambiguous, the grammar determines which interpretation is chosen, regardless of whether or not a conflicting struct/symbol name has been defined.
 
-## Programs
+## 2 - Programs
 
 Konoran programs consist of a number of modules linked together, possibly dynamically, and possibly with non-Konoran modules. The specific semantics of linking are entirely implementation-defined.
 
 Standalone konoran programs usually export a `main` function that can be executed by an OS.
 
-Konoran programs have statically-initalized data. Sometimes this data can only be initialized by running code. In such cases, that initialization code must be run before any function in the Konoran program is called, and it must be run exactly once. This initialization code might call out to non-Konoran code, and the environment must tolerate this.
+### 2.1 - Static initialization
+
+Konoran programs have statically-initalized data. Sometimes this data can only be initialized by running code. In such cases, that initialization code must be run before any function in the Konoran program is called, and it must be run exactly once. This initialization code might call out to non-Konoran code, and the environment must tolerate this. Static initialization code is run from top to bottom.
+
+### 2.2 - Static initialization linking order
 
 The above-described initialization code comes from each individual module. When linking multiple modules together into a single program, the exact order in which each module's initialization code is run is implementation-defined; however, implementations are strongly encouraged to allow the user to control it. For example, if you link a user's modules called `main` and `mathlib` together with the command `link main.o mathlib.o`, the implementation could specify that the initializers from `main.o` should run before those from `mathlib.o` because it was listed first in the linking command; such behavior would comply with this encouragement.
 
-## Modules
+## 3 - Modules
 
 Konoran modules do not have a preprocessor, do not "include" or "use" specific other modules, are not logically namespaced, and can be compiled independently of one another in any order before linking.
+
+### 3.1 - Module contents
 
 Konoran modules consist of a series of:
 
@@ -75,9 +87,19 @@ Konoran modules consist of a series of:
 - Function definitions
 - Function imports
 
-These can come in any order, including interleaved order, and there are no pre-declarations for things that are defined in the current module. The implementation must run a pre-pass over the module to collect definitions and imports. Global variable definitions can contain arbitrary expressions and are evaluated from top to bottom on program initialization. It's strongly encouraged that advanced implementations fold logically constant initializers for global variables down into static data, but this is not mandatory. Global constant initializers *must* be folded down into static data. Global variables do not require initializers (note that without them, their initial state is undefined), but global constants do.
+These can come in any order, including interleaved order, and there are no pre-declarations for things that are defined in the current module. The implementation must run a pre-pass over the module to collect definitions and imports.
+
+### 3.2 Module global variable and constant semantics
+
+Global variable definitions can contain arbitrary expressions and are evaluated from top to bottom on program initialization. It's strongly encouraged that advanced implementations fold logically constant initializers for global variables down into static data, but this is not mandatory. Global constant initializers *must* be folded down into static data. Global variables do not require initializers (note that without them, their initial state is undefined), but global constants do.
+
+Global variables are mutable and can be modified and rewritten.
+
+### 3.3 - Module component redeclaration rules
 
 Within a single module, two structs cannot have the same name, two functions cannot have the same name, and two global constants or global variables cannot have the same name.
+
+### 3.4 - Module component visibility rules
 
 Structs are not exposed to other modules. If two modules want to use the same struct they need to redefine it.
 
@@ -93,25 +115,51 @@ The exact semantics of `export_extern` and `import_extern` are implementation-de
 
 The exact semantics of linking are implementation-defined.
 
+### 3.5 - Module C ABI compliance when linking
+
 Functions with non-private visibility are imported and exported according to the platform's C ABI, unless array or struct values pass in or out of the function. Functions that have array or struct values pass through them are not guaranteed for conform to the platform's C ABI, and may have a different implementation-defined representation. Pointers to arrays/structs are fine and must be passed according to the platform's C ABI.
 
-## Functions
+## 4 - Functions
 
-Functions have return types, names, argument lists, and bodies. A function's signature consists of its return type and the list of its argument types. Function bodies consist of a series of local variable declarations/definitions, statements, labels, and branching statements (if statements and gotos), in any order. Branches can point "upwards", not just downwards. Branches can only point to labels within the current function; they cannot point to the insides of other functions. Function bodies must return or enter an infinite loop in all control paths, but are allowed to have redundant returns that create dead code. In other words, falling through to the end of the function without a return is illegal code and must produce an error. The return value must be of the same type as is declared in the function's signature. `void` functions return no value, but must still explicitly return.
+Functions have return types, names, argument lists, and bodies. A function's signature consists of its return type and the list of its argument types. Function bodies consist of a series of local variable declarations/definitions, statements, labels, and branching statements (if statements and gotos), in any order.
+
+### 4.1 - Function composition
+
+Branches can point "upwards", not just downwards. Branches can only point to labels within the current function; they cannot point to the insides of other functions. Function bodies must return or enter an infinite loop in all control paths, but are allowed to have redundant returns that create dead code. In other words, falling through to the end of the function without a return is illegal code and must produce an error. The return value must be of the same type as is declared in the function's signature. `void` functions return no value, but must still explicitly return.
+
+### 4.2 - Function variable mutability
 
 Variables are mutable and can be rewritten. Constexpr variables exist; they must be defined upon declaration and cannot be modified/rewritten. Variables and const variables follow the same logical access rules and cannot shadow each other in the same scope. Compilers are free to detect and mark const variables as const and optimize them away, as long as they're never explicitly accessed, or fold/inline them, even if their address is taken and modified. Writing to a const variable via a pointer is undefined behavior.
 
+### 4.3 - Function stack consistency
+
 Jumps, including goto, are incapable of leaving the stack in an invalid state. Variable declarations in functions (and their arguments) only last for the body of the function and do not affect other functions. Function-specific variable declarations are allowed to "shadow" global variables and functions; doing so must not produce an error or warning.
+
+### 4.3.1 - Function variable behavior with regards to scopes
 
 When a function begins, its arguments are treated as normal variables, with their values pre-filled, in a "zeroth" scope. The function body begins the "first" scope, and can declare local variables that shadow its arguments. Other block scopes (defined in the grammar as `$statementlist$`) open new scopes, which can shadow variables created in outer scopes. Importantly, scopes do not logically grow or shrink the stack, so `goto`ing into them past variable declarations is not instant UB; shadowing and scoping are purely a name lookup concern, and the function must logically behave as though all variable declarations were invisibly hoisted to the top of the function (except for name lookup and shadowing). The implementation is highly encouraged to perform disjoint stack slot reuse optimizations to reduce how much stack space a given function uses up with variables declared in disjoint block scopes.
 
-To clarify, if a variable is declared in an inner scope, it becomes inaccessible once that scope ends, and the optimizer is allowed to make this assumption. However, `goto`ing over a declaration is not UB, as any code that can see the variable's name is allowed to legally access it; variable declarations are not runtime stack manipulation instructions.
+### 4.3.2 - Function stack variable behavior
 
-Performing pointer arithmetic to conjure a pointer to a local variable that is not currently in-scope is UB because conjuring pointers to variables is UB, and the optimizer is allowed to assume that a konoran program does not do this.
+If a variable is declared in an inner scope, and its pointer is not leaked into an outer scope, it becomes inaccessible once that scope ends, and the optimizer is allowed to make this assumption. However, variables must 'exist' as long as a correctly-derived pointer to them is held within the same function. If their address was taken, their stack slot cannot be eliminated until no correctly-derived pointer is capable of referring to it, or until existing or the function returns.
+
+`goto`ing over a declaration is not UB, as any code that can see the variable's name is allowed to legally access it; variable declarations are not runtime stack manipulation instructions.
+
+Attempting to derive a pointer to one local variable from a pointer to another local variable is UB and the optimizer is allowed to assume that a konoran program does not do this.
+
+### 4.3.2 - Function stack variable pointer leakage
+
+Attempting to conjure a pointer to a local variable that is not currently in-scope is UB because conjuring pointers to variables is UB, and the optimizer is allowed to assume that a konoran program does not do this.
+
+### 4.4 - Functions do not have static variables
 
 Unlike C, konoran does not have static function variables. Global variables must be used instead.
 
-## Types
+## 5 - Types
+
+Konoran is strongly typed and has primitive/intrinsic numeric types, struct types, array types, and pointer types (including function pointers).
+
+### 5.1 - Numeric types
 
 Konoran has the following primitive/intrinsic numeric types:
 
@@ -120,6 +168,8 @@ u8, i8, u16, i16, u32, i32, u64, i64, f32, f64
 ```
 
 These are unsigned and signed integers (two's complement) and IEEE-compliant binary floating point numbers. u8 has a bit width of 8 and a byte width of 1, u16 has a bit width of 16 and a byte width of 2, etc.
+
+### 5.2 - Pointer types
 
 Konoran has the following pointer types:
 
@@ -130,12 +180,16 @@ funcptr(returntype, (arg1type, arg2type, ...))
 
 Pointers can be casted back and forth with `u64` (or whatever the target's pointer-sized int type is) using the `bit_as` operator (e.g. `(my_ptr) bit_as u64`). With regards to the values stored in this u64 after casting, the in-memory "size" of a u8 must be 1, of a u16 must be 2, etc.
 
+### 5.3 - Composite types
+
 Konoran has the following composite types:
 
 ```rs
 struct <name> { type1 var1, type2 var2, ... }
 array(type, len)
 ```
+
+#### 5.3.1 - Struct type semantics
 
 Struct types consist of a series of members (also called variables, properties, etc) declared one at a time, with no specified value. Struct values consist of a series of values with the appropriate type for the struct being constructed, and are prefixed with the name of the struct (e.g. `Vec2 { 1.0f32, 0.5f32 }`).
 
@@ -156,15 +210,27 @@ struct asdf2
 }
 ```
 
+#### 5.3.2 - Composite type passing/copying
+
 Composite types (structs/arrays) are passed by value when calling functions with them as arguments, or returning them from functions.
+
+#### 5.3.3 - Array semantics
 
 Array types have a size of the size of their inner type multiplied by their length. Structs have a size of the sum of the sizes of their inner types.
 
-Type punning is allowed and legal. Casting pointers to `u64` (or, on 32-bit architectures, `u32`) and back is allowed, and is allowed to either retain or destroy provenance information.
+#### 5.4 - Type punning
+
+Type punning is allowed and legal.
+
+#### 5.4.1 - Pointer casting
+
+Casting pointers to `u64` (or, on 32-bit architectures, `u32`) and back is allowed, and is allowed to either retain or destroy provenance information, but must be considered a correctly-derived pointer to the pointed-at object if the optimizer does provenance/alias analysis.
+
+#### 5.5 - Misaligned structs
 
 The konoran implementation is allowed, but not encouraged, to produce an error if structs have misaligned members for the target platform.
 
-### Volatile memory access
+### 6 - Volatile memory access
 
 There is no `volatile` variable modifier. However, pointer values can be marked as having volatile access semantics using the `@` operator. So, to use an mmio register, you might use something like the following code:
 
@@ -180,11 +246,17 @@ Given the above context, the following would NOT perform a volatile operation:
 
 This more closely reflects how compiler backends tend to work than a `volatile` variable modifier. As such, konoran chose this approach to exposing volatile memory operations, rather than a variable modifier.
 
+#### 6.1 - Volatile memory access rules
+
 Volatile memory acceses must be treated as though they have (non-UB-producing) side effects. In particular, optimizations must not change volatile memory accesses in order, number, or address. Implementations are allowed to specify arbitrary side-effects for volatile memory accesses. Volatile memory accesses are not typically assumed to modify variables or memory that they do not point at, but implementations are allowed to specify situations where they do. For example, an implementation might specify that doing a volatile read of a status register can cause an interrupt handler to run; normally, the implementation's optimizer is allowed to assume that this interrupt handler doesn't modify any variables or memory that the current non-interrupt code is working on, but the implementation is allowed to specify that it does, and prevent its own optimizer from assuming that those variables or memory are unchanged during the interrupt. If the implementation does not specify such a situation, then it is assumed that volatile memory accesses do not alter unrelated variables/memory, and the optimizer is free to use that assumption.
 
-### Casts
+Having a value magically change between consecutive *volatile* accesses is allowed, i.e. the compiler cannot change the order or number of volatile operations or what addresses they operate on. In particular, volatile writes to even a correctly-derived pointer cannot be optimized away (even if the variable the pointer points at is never used again), and volatile reads from even a correctly-derived pointer must assume that the value may have magically changed since the last time it was accessed (even if it has not been accessed).
+
+### 7 - Casts
 
 Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are defined over the following type pairs and have the given behaviors. Note that it is not possible to change both the signedness and size of an integer in a single cast operation.
+
+#### 7.1 - Value casts
 
 ```
 (val) as <val type>
@@ -208,10 +280,12 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
 (float_val) as <integer type>
     Converts an floating-point number to an integer type. If the value is outside of the integer range, either the minimum or maximum integer value is given, whichever is closer.
 ```
+#### 7.2 - Unsafe value casts
 ```
 (float_val) unsafe_as <integer type>
     Converts an floating-point number to an integer type. If the value is outside of the integer range, the result is undefined.
 ```
+#### 7.3 - Bitcasts
 ```
 (val) bit_as <val type>
     Does nothing. Returns original value.
@@ -238,10 +312,15 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
     (See: https://www.ralfj.de/blog/2022/04/11/provenance-exposed.html )
     (See: http://nhaehnle.blogspot.com/2021/06/can-memcpy-be-implemented-in-llvm-ir.html )
 ```
+#### 7.4 - Unsupported casts
 
 Only the above casts are defined and other casts should produce an error. In particular, `unsafe_as` cannot cast to the same type.
 
-### Operators
+### 8 - Operators
+
+Konoran has both binary/infix and unary/prefix operators. Some expressions are not defined as operators. The grammar defines which expressions use operators and which do not.
+
+#### 8.1 - Operator precedence
 
 Operator precedence is defined by konoran's declarative grammar. The grammar is written right-associatively, but has metadata that marks certain nodes as being left-associative; when the parse tree is converted to an AST, these nodes need to be rotated to be left-associative. As a helper, here's a short description of konoran's operator predecence, but remember that the actual definition is in the declarative grammar:
 
@@ -257,9 +336,13 @@ and  or   &&   ||
 
 Operators on a given line have the same precedence and are evaluated left-to-right, i.e. `x + y + z` is evaluated as `(x + y) + z`.
 
+##### 8.1.1 - Precedence design note
+
 Note that `&&` and `||` have the same precedence. While `&&` can be interpreted as multiplication and `||` can be interpreted as addition, by that line of reasoning, `!=` should be interpreted as addition in that case as well, but giving them all the same precedence would be awful, so konoran abandoned that entire line of reasoning. As primarily a compiler target language, specificational clarity was prioritized over similarity to C; people need to look up C's precedence for these operators all the time, and konoran decided that was unnecessary wasted effort and decided to define them as having the same precedence. As such, `x && y || z` and `x || y & z` are both parsed left to right, as `(x && y) || z` and `(x || y) & z`.
 
 Likewise, note that `>=` etc. have the same precedence as `==` etc.
+
+#### 8.2 - Operator design choices and non-issues
 
 Postfix operators do not exist.
 
@@ -271,9 +354,11 @@ Assignments cannot occur in an expression context (only a statement context) and
 
 In-place assignments like `+=` do not exist, only simple assignments with `=`.
 
-#### Infix/binary operators
+#### 8.3 - Infix/binary operators
 
 Infix/binary operators are typically only defined for left and right hand sides of the same type, with very few exceptions. The exceptions will be noted.
+
+##### 8.3.1 - General numeric infix operators
 
 For numbers:
 ```
@@ -290,12 +375,18 @@ The math operators result in the same type. The equality operators result in a u
 
 For integers, operators are defined trivially. (Integers are always two's complement, and integer division truncates the remainder.) For floats, they're defined according to IEEE 754.
 
+##### 8.3.1.1 - Integer-specific unsafe numeric infix operator variants
+
 Integer division/remainder by zero does not result in undefined behavior. Division by zero results in either zero (for integers) or positive/negative infinity (for floats), and remainder by zero results in zero (for integers) or NaN (for floats). For faster, unsafe integer division/remainder, the following operators are also provided; for them, a right-hand value of zero gives an undefined result:
+
 ```
 div_unsafe    unsafe division
 rem_unsafe    unsafe remainder (not modulo)
 ```
+
 These operators are not provided for floats because they're not necessary; floating point division/remainder under IEEE 754 is always well-defined.
+
+##### 8.3.2 - Integer-specific infix operators
 
 For integers, the following additional operators are defined:
 
@@ -316,12 +407,16 @@ The right-side value of a bitshift (`<<` or `>>`) must be an unsigned integer of
 
 The left bitshift operator shifts in zeroes. The right bitshift operator shifts in the sign bit if the left-side value is signed, and zeroes otherwise. The other operators are trivially defined.
 
+##### 8.3.2.1 - Unsafe bitshift operator variants
+
 The bitshift operators are safe and do not result in UB even if the right-hand value is equal to or greater than the number of bits in the input value; in such cases, they result in a maximally-shifted value. For faster, unsafe bitshifting, the following operators are also provided; for them, overflowed bitshifting gives an undefined result:
 
 ```
 shl_unsafe    unsafe bitshift right
 shr_unsafe    unsafe bitshift left
 ```
+
+##### 8.3.3 - Pointer infix operators
 
 Pointers are a special case; they have infix operators, but the right-side must be a pointer-sized unsigned integer. These operators are NOT supported for function pointers. In general, the only things you can do with a function pointer are call it or cast it to a pointer-sized unsigned int. (However, this does mean that performing these operations on an integer derived from a function pointer is instantly UB; rather, it's implementation-defined.)
 
@@ -335,11 +430,17 @@ The following operators are supported for pointers:
 
 The right-side value must be a pointer-sized unsigned integer.
 
+##### 8.3.3.1 - Pointer infix operator semantics
+
 These operations operate on the bitwise representation of the pointer, as though it were an integer. They are equivalent to casting to a u64 and back, with the exception that if the compiler supports provenance/aliasing analysis, these operations MUST retain any relevant provenance/aliasing information. (In other words, adding 50 to a pointer, then subtracting 50 from it, must result in an equivalently-usable pointer value to what you started with, even if the compiler does provenance/aliasing analysis.) The resulting pointer always has a defined value; however, accessing it might cause undefined behavior, depending on how the underlying platform defines such operations.
 
-Having a value magically change between consecutive *volatile* accesses is allowed, i.e. the compiler cannot change the order or number of volatile operations or what addresses they operate on. In particular, volatile writes to even a correctly-derived pointer cannot be optimized away (even if the variable the pointer points at is never used again), and volatile reads from even a correctly-derived pointer must assume that the value may have magically changed since the last time it was accessed (even if it has not been accessed).
+In particular, the `+` and `-` operators do not work like they do in C; they operate on byte-sized pointer logic, not word-sized pointer logic, so, for example, adding `1` to an already-aligned `ptr(u64)` will result in an unaligned pointer pointing one byte after the start of the `u64`.
 
-#### Prefix/unary operators
+#### 8.4 - Prefix/unary operators
+
+Konoran has prefix/unary operators for certain types, and for any type in certain situations.
+
+##### 8.4.1 - Pointer-to / Address-of operator
 
 The following prefix operator is supported for any variable, and also for aggregate (struct/array) values:
 
@@ -348,6 +449,8 @@ The following prefix operator is supported for any variable, and also for aggreg
 ```
 
 This operation produces a pointer (`ptr(type)`) pointing at the variable's value or the aggregate struct/array's value. If the address of a variable or struct/array value is taken, then that address must be valid for the entire duration of the function. Using such an address after the function has returned is undefined behavior.
+
+##### 8.4.1.1 - Pointer-to clarification for aggregate values
 
 "Aggregate (struct/array) values" does not refer to variables containing structs/arrays. Those would be trivial to take the address of even if this language was not used. Rather, this language means that the following code is valid:
 
@@ -372,6 +475,8 @@ In particular, non-constexpr temporary aggregates pointed to by valid pointers c
 
 Pointers derived as above only need to remain valid as long as the code that derives them is actually using them. So, an optimizer can eliminate the storage for a variable or an automatic storage slot if it knows that it's no longer referred to and that all pointers correctly derived from it are dead.
 
+##### 8.4.1.2 - Type punning with correctly-derived pointers
+
 Accessing variables via a pointer to a different type is allowed; for example, accessing a `f32` via a `ptr(u16)` pointing at the first or third byte of the `f32` is allowed. For example, building off the above array pointer example, the following code is allowed:
 
 ```rs
@@ -379,6 +484,8 @@ u16 myint = *((myptr) bit_as ptr(u16));
 ```
 
 The target platform may specify access alignment rules for pointers, e.g. accessing a `u16` through a pointer with an odd-numbered integer value might be illegal.
+
+##### 8.4.2 - Floating-point prefix operators
 
 The following prefix operators are supported for floats, and return a new value of the same type:
 
@@ -388,6 +495,8 @@ The following prefix operators are supported for floats, and return a new value 
 ```
 
 Negating a float is trivially defined for all non-NaN floats as inverting the float's sign. For NaN floats, it is implementation-defined.
+
+##### 8.4.3 - Integer prefix operators
 
 The following prefix operators are supported for ints, and return a new value of the same type, except for `!`:
 
@@ -402,6 +511,8 @@ In particular, notice that `!`/`not` is not defined for floats. You must use `(f
 
 The above operators are trivially defined.
 
+##### 8.4.3 - Pointer prefix operators
+
 The following prefix operators are supported for data pointers:
 
 ```
@@ -409,6 +520,8 @@ The following prefix operators are supported for data pointers:
 @    make volatile
 !    boolean "not" (results in a u8; 1u8 if the pointer is null, 0u8 if the pointer is not null)
 ```
+
+##### 8.4.3.1 - Dereference operator semantics
 
 The `*` operator is not only used when loading a value from a pointer in expressions, but also when assigning to the value pointed to by a pointer, e.g.
 
@@ -422,15 +535,17 @@ This must also be supported when indexing into arrays, e.g.
 (*my_ptr_to_array_u16)[1i64] = 162u16;
 ```
 
+##### 8.4.4 - Array prefix operators
+
 For arrays, the following prefix operator is defined:
 
 ```rs
 decay_to_ptr    convert array of elements to pointer to first element
 ```
 
-It performs pointer decay, the same type that C performs for arrays at function boundaries. An `array(u8, 4)` will turn into a `ptr(u8)` pointing at the first element of the array. This is logically equivalent to using & on array and casting the resulting pointer to `ptr(inner_type)`.
+It performs pointer decay, the same type that C performs for arrays at function boundaries. An `array(u8, 4)` will turn into a `ptr(u8)` pointing at the first element of the array. This is logically equivalent to using `&` on array and casting the resulting pointer to `ptr(inner_type)`.
 
-## Generally undefined behaviors
+## 9 - Generally undefined behaviors
 
 The following program behaviors are generally undefined and the compiler is allowed to assume that they never happen for the sake of optimization:
 
