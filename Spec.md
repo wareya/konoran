@@ -200,7 +200,7 @@ When a function begins, its arguments are treated as normal variables, with thei
 
 ### 4.3.2 - Function stack variable behavior
 
-If a variable is declared in an inner scope, and its pointer is not leaked into an outer scope, it becomes inaccessible once that scope ends, and the optimizer is allowed to make this assumption. However, variables must 'exist' as long as a correctly-derived pointer to them is held within the same function. If their address was taken, their stack slot cannot be eliminated until no correctly-derived pointer is capable of referring to it, or until existing or the function returns.
+If a variable is declared in an inner scope, and its pointer is not leaked into an outer scope, it becomes inaccessible once that scope ends, and the optimizer is allowed to make this assumption. However, variables must 'exist' as long as a correctly-derived pointer to them is held within the same function. If their address was taken, their stack slot cannot be eliminated until no correctly-derived pointer is capable of referring to it, or the function returns or enters an infinite loop that cannot see it.
 
 `goto`ing over a declaration is not UB, as any code that can see the variable's name is allowed to legally access it; variable declarations are not runtime stack manipulation instructions.
 
