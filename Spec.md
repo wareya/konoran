@@ -71,6 +71,39 @@ Token patterns are derived from the grammar (some of which are regexes, and some
 
 Struct/function/constant/variable names ("struct/symbol names") are allowed to be the same as syntax keywords as long as the resulting declaration/definition is not syntactically ambiguous. The konoran grammar is designed in a way that doesn't need to know any specific struct/symbol names to be able to detect when such a name (rather than a keyword) is being used. If a usage would be visually ambiguous, the grammar determines which interpretation is chosen, regardless of whether or not a conflicting struct/symbol name has been defined.
 
+### 1.3 - Understanding the declarative grammar
+
+The declarative grammar is a list of "grammar points" (e.g. `type`), each of which have a list of "grammar forms" that they can take (e.g. `$ptr_type$`, `$funcptr_type$`, etc), each of which consist of a list of matching rules.
+
+When attempting to match a grammar point to the token stream and find a successful parse, each grammar form is attempted from first to last, and the first successful form is taken (causing the subsequent forms of the point to not be attempted). Each form is a list of matching rules, which can be a literal symbol (e.g. `(`, a grammar point reference (e.g. `$ptr_type$`), a grammar point reference with a modifier (e.g. `$unusedcomma$?` or `$expr$...,`), or a "remaining matches optional" operator (`>>?`).
+
+Each "matching rule" within a grammar point is separated from the next by exactly a single space. Grammar forms are separated from the next grammar point using a single blank line. A grammar form matches the token stream if all of its matching rules finds a match in the token stream, contiguously with no gaps or overlaps, excluding any matching rules after a "remaining matches optional" operator.
+
+#### 1.3.1 - Grammar point modifiers
+
+Grammar points can have metadata terms after them that control how the AST produced after parsing looks:
+
+- `HIDELITERALS` strips root-level literal symbols from this grammar point
+- `EMBED` causes the contents of the point to be hoisted in-place into the parent node in the AST (allowed to be arbitrarily many nodes)
+- `SIMPLIFY` causes the node to be replaced by its child (must have exactly one child)
+- `HIDDEN` causes the node to be entirely thrown away after parsing (not used in konoran's grammar, but supported by its parser generator)
+- `TOKEN` causes any regexes found within the grammar form (surrounded by `%`, e.g. `%[0-9]+%`) to be registered as token matchers with the tokenizer; they will be tried 'in order' during tokenization
+- `LEFTBINEXPR` causes the grammar form to be interpreted as a right-recursive binary infix expression that needs to be rotated and reprocessed so that it's left-recursive instead; recursive descent parsers can't parse left-recursive grammar rules, and this is a standard workaround
+
+#### 1.3.2 - Grammar form modifiers
+
+In the declarative grammar, grammar point references within a grammar form take the form `$point_name$` with an optional modifier attached at the end. The supported modifiers are:
+
+- `?` e.g. `$expr$?` makes matching the grammar point optional; if failed, the current token location will be tried with the next matching rule in the grammar form, without generating a failure
+- `*` e.g. `$expr$*` allows the grammar point to occur zero or more times
+- `+` e.g. `$expr$+` allows the grammar point to occur one or more times
+- `...X` e.g. `$expr$...X` allows the grammar point to occur one or more times, but each repetition must be separated by the single character X (e.g. `$expr$...,` matches a list of `expr` matches separated by commas, like `1.0f64, 0u8`)
+- `+..($another_point$)` e.g. `$rhunexpr_right$+..($funcargs$)` allows the grammar point to occur one or more times, but the final instance of it must be a single particular grammar point inside, or else the matching rule fails to match.
+
+#### 1.3.3 'remaining matches optional' operator
+
+Assuming the matching rules to the left of the `>>?` operator match, the remaining matching rules in the given grammar form are optional and are only included if they successfully match. If they do not successfully match they are all discarded and the grammar form is considered to have parsed successfully as only the prior matching rules.
+
 ## 2 - Programs
 
 Konoran programs consist of a number of modules linked together, possibly dynamically, and possibly with non-Konoran modules. The specific semantics of linking are entirely implementation-defined.
