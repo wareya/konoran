@@ -696,6 +696,12 @@ The following program behaviors are generally undefined and the compiler is allo
 1) Accessing a variable without using its name or a correctly-derived pointer to it
 2) Calling a function without using its name or a correctly-derived pointer to it
 
+The above two rules do not apply to `export_extern`'d global variables or functions, because `export_extern` implies that such global variables or functions can have pointers to them derived "correctly" by external code (e.g. by a symbol table lookup).
+
+In some cases, the implementation is allowed to define new UB of its own.
+
+### 9.1 - Conjured variable access
+
 Point 1 means that other code using that variable is allowed to assume that it doesn't suddenly change for no reason, even if an incorrectly-derived pointer value might be pointing to it. For example:
 
 ```rust
@@ -709,11 +715,15 @@ The above program contains undefined behavior if `randi()` is capable of produci
 
 Importantly, point 1 does not make it instant UB to access/modify data via conjured pointers. The optimizer is merely allowed to assume that accesses via conjured pointers do not modify named variables. Arbitrary memory and heap memory are assumed to be disjoint from "variables".
 
-Point 2 means that the optimizer can remove functions that are never referenced even if code might accidentally construct the value of a function pointer that would point at that function if it hadn't been removed. The same is true of point 1 and variables. However, this does not apply to `export_extern`'d global variables or functions.
+### 9.2 - Executing 'dead code' functions
+
+Point 2 means that the optimizer can remove functions that are never referenced even if code might accidentally construct the value of a function pointer that would point at that function if it hadn't been removed. The same is true of point 1 and variables. However, this does not apply to `export_extern`'d global variables or functions, nor does it apply to default-visibility global variables or functions *before linking*. (After linking, it once again applies to global variables and functions, as long as they have default visibility and not `export_extern` visibility.)
+
+### 9.3 - Implementation-specified UB
 
 The implementation is allowed to define new UB in situations where threads, OS access, or language extensions are involved. For example, it's OK for an implementation to define it to be UB to read and write to a single variable or memory location from two threads without using a synchronization primitive or memory fence, even if those accesses are direct or use correctly-derived pointers.
 
-Implementations are allowed to specify things as being defined even if they're specified as UB here. For example, implementations are allowed to specify that it's not UB for a variable's value to magically change when a memory fence or thread synchronization operation is somehow performed.
+Implementations are allowed to specify things as being defined even if they're specified as UB here. For example, implementations are allowed to specify that it's not undefined for a variable's value to magically change after a memory fence or thread synchronization operation finishes (for example, if a pointer to that variable has passed into another thread).
 
 Implementations are allowed to specify unaligned memory accesses as UB, but this is discouraged and it's strongly recommended that they specify them as implementation-defined instead.
 
