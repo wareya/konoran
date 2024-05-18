@@ -497,7 +497,10 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
 
 (ptr_sized_int_val) bit_as <pointer type>
     Converts an integer to a pointer. When a pointer is casted to u64 (or u32 on 32-bit architectures) and then back to the same pointer type, it must point to the same object and memory location.
+    If a pointer to a stack value is cast to int and back, it cannot be assumed to point inside the address range of the original stack value, so accessing it is not immediately UB.
+        (see [examples/pointer_conjuration_test.knr], `main()`)
     If the compiler has provenance or aliasing analysis, the resulting pointer value is treated as being derived any value that contributed to the calculation of the given integer.
+        (see [examples/pointer_conjuration_test.knr], `main2()`)
 
 (float/int value) bit_as <float or int type of same size>
     Reinterprets the bits of a value of one primitive type as belonging to another type. The exact bit representation is used, not the logical value. Equivalent to type punning a pointer.
@@ -578,7 +581,7 @@ For integers, operators are defined trivially. (Integers are always two's comple
 
 #### 8.3.1.1 - Integer-specific unsafe numeric infix operator variants
 
-Integer division/remainder by zero does not result in undefined behavior. Division by zero results in either zero (for integers) or positive/negative infinity (for floats), and remainder by zero results in zero (for integers) or NaN (for floats). For faster, unsafe integer division/remainder, the following operators are also provided; for them, a right-hand value of zero gives an undefined result:
+Integer division/remainder by zero does not result in undefined behavior. Division by zero results in either zero (for integers) or positive/negative infinity or NaN (for floats, depending on whether or not the numerator is zero), and remainder by zero results in zero (for integers) or NaN (for floats). For faster, unsafe integer division/remainder, the following operators are also provided; for them, a right-hand value of zero gives an undefined result:
 
 ```
 div_unsafe    unsafe division
@@ -632,6 +635,8 @@ The following operators are supported for pointers:
 ```
 
 The right-side value must be a pointer-sized unsigned integer.
+
+The resulting pointer from these operators is not considered "conjured" and, if the compiler has provenance analysis, has provenance from the original pointer (or, at least, accesses to the value under the original pointer must consider the resulting pointer as aliasing it until the resulting pointer and anything derived from it stops existing).
 
 ##### 8.3.3.1 - Pointer infix operator semantics
 
@@ -822,7 +827,22 @@ Konoran doesn't include anything related to threads, e.g. synchronization primit
 
 Konoran supports utf-8 string literals, but they compile down to arrays or pointers over the `u8` type, not a unique string type. There is no string-handling library.
 
-### 10.6 - (No) strict aliasing analysis
+### 10.6 - Things that cause UB in C but not konoran
+
+Konoran tries to avoid UB when it can. There are certain things C's spec does that make UB really easy to run into accidentally. Konoran tries not to do these things.
+
+#### 10.6.1 - (No) strict aliasing analysis
 
 Konoran **specifically does not have strict type-based aliasing rules** and implementations are explicitly disallowed to perform type-based pointer aliasing analysis. Aside from pointer provenance concerns, the "underlying bytes" beyond a pointer are not considered to have a type except for during the moment that they are accessed.
 
+#### 10.6.2 - (No) forwards progress guarantee
+
+C compilers are allowed to optimize C code with the assumption that no code path that leads to a non-terminating loop (sometimes with additional language like "observable behavior" depending who you ask) that has no side effects. C++'s more explicit version of this is the "forwards progress guarantee". Konoran does not make this assumption and even trivial infinite loops are allowed.
+
+#### 10.6.3 - Certain things with conjured pointer values
+
+Accessing conjured pointer values is UB in some situations in C if the compiler "knows" that the pointer doesn't point to an object. In konoran, any side effects from accessing "non-object" pointers is implementation-defined behavior instead of the operating being undefined, e.g. it can crash, give a bogus value, raise an exception, "have no effect on other objects", etc. But it can't be treated like it "didn't happen", even if the compiler knows that the pointer doesn't point to an object.
+
+For example, if you manage to conjure a pointer with the same pointer value as the address of a local variable, and write to it without crashing, then read back the value you wrote via the conjured pointer, you "should" see the value you wrote to the conjured pointer, even if normal access to the variable itself is unaffected. [examples/pointer_conjuration_test.knr] is an example of this. Note the the pointer must **actually be conjured**. Doing pointer math to a properly-derived pointer pointing at another variable is not pointer conjuration.
+
+It's currently not possible for konoran to 100% guarantee this behavior while compiling down to LLVM, because LLVM's manual defines it as undefined behavior to access an object via a pointer that's not based on that object, but *in practice* it works.

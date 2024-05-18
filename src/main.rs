@@ -60,6 +60,7 @@ fn main()
                 "-sag"  | "--simple-aggregates" => { settings.insert("simple_aggregates", arg); }
                 "--timeinfo" => { settings.insert("semiverbose", arg); }
                 "--verbose" => { settings.insert("verbose", arg); }
+                "-ir" | "--asm-is-ir" => { settings.insert("asm_is_ir", arg); }
                 "--no-opt-no-verify" => { settings.insert("early_exit", arg); }
                 _ => panic!("unknown argument `{}`", arg),
             }
@@ -75,6 +76,10 @@ fn main()
         println!("-oat");
         println!("--output-assembly-triple");
         println!("    Specify a triple to output assembly for, e.g. x86_64-pc-windows");
+        println!("");
+        println!("-ir");
+        println!("--asm-is-ir");
+        println!("    If outputting assembly, output 'ir' (llvm ir) instead of assembly");
         println!("");
         println!("-ft");
         println!(" --force-triple");
@@ -237,11 +242,14 @@ fn main()
             {
                 machine.write_to_file(&loaded_modules[0], FileType::Object, fname.as_ref()).unwrap();
             }
+            else if settings.contains_key("asm_is_ir")
+            {
+                loaded_modules[0].print_to_file("out.ll").unwrap();
+            }
             else
             {
                 machine.write_to_file(&loaded_modules[0], FileType::Assembly, "out.asm".as_ref()).unwrap();
             }
-            // TODO: module.print_to_file("out_unopt.ll").unwrap();
         }
         if verbose
         {

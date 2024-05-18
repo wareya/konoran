@@ -2776,6 +2776,9 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
     let start = std::time::Instant::now();
     let context : &'static inkwell::context::Context = Box::leak(Box::new(inkwell::context::Context::create()));
     
+    let np_valid_attribute_id = inkwell::attributes::Attribute::get_named_enum_kind_id("null_pointer_is_valid");
+    let np_valid_attribute = context.create_enum_attribute(np_valid_attribute_id, 0);
+    
     let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
     
     // only holds frontend types, and only for primitives and structs, not pointers or arrays, those are constructed dynamically
@@ -3029,6 +3032,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                 let funcsig = function.to_sig();
                 let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                 let func_val = module.add_function(&f_name, func_type, Some(linkage));
+                func_val.add_attribute(inkwell::attributes::AttributeLoc::Function, np_valid_attribute);
                 func_val.as_global_value().set_dll_storage_class(storage_class);
                 func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
                 
@@ -3064,6 +3068,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                 };
                 let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                 let func_val = module.add_function(&f_name, func_type, Some(linkage));
+                func_val.add_attribute(inkwell::attributes::AttributeLoc::Function, np_valid_attribute);
                 func_val.as_global_value().set_dll_storage_class(storage_class);
                 func_decs.insert(f_name.clone(), (func_val, funcsig.clone()));
             }
@@ -3108,6 +3113,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                         let funcsig = FunctionSig { return_type : types.get("void").unwrap().clone(), args : Vec::new() };
                         let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                         let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
+                        func_val.add_attribute(inkwell::attributes::AttributeLoc::Function, np_valid_attribute);
                         
                         let entry_block = context.append_basic_block(func_val, "entry");
                         let builder = context.create_builder();
@@ -3191,6 +3197,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                     let funcsig = FunctionSig { return_type : types.get("void").unwrap().clone(), args : Vec::new() };
                     let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                     let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
+                    func_val.add_attribute(inkwell::attributes::AttributeLoc::Function, np_valid_attribute);
                     
                     let entry_block = context.append_basic_block(func_val, "entry");
                     let builder = context.create_builder();
@@ -3224,6 +3231,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
                 let funcsig = FunctionSig { return_type : types.get("void").unwrap().clone(), args : Vec::new() };
                 let func_type = get_function_type(&mut function_types, &mut backend_types, &types, &funcsig, &env_options);
                 let func_val = module.add_function(&f_name, func_type, Some(inkwell::module::Linkage::Internal));
+                func_val.add_attribute(inkwell::attributes::AttributeLoc::Function, np_valid_attribute);
                 
                 let block = context.append_basic_block(func_val, "entry");
                 let builder = context.create_builder();
