@@ -41,7 +41,7 @@ jobs:
       run: ${{env.nix_prefix}} rustup target add x86_64-unknown-linux-musl
 
     - name: Build
-      run: ${{env.nix_prefix}} cargo build --target=x86_64-unknown-linux-musl --release --verbose
+      run: ${{env.nix_prefix}} cargo build --release --verbose
     - name: Run tests
       run: ${{env.nix_prefix}} cargo test --release --verbose
       
