@@ -16,7 +16,7 @@ Specification (WIP): [Spec.md](Spec.md)
 
 Example of some konoran code:
 
-```rust
+```nim
 f32 func_gravity()
 {
     u64 i = 0u64;
