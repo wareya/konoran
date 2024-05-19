@@ -14,7 +14,7 @@ Each module is made of a series of function definitions, global variable definit
 
 Here's an example konoran program, consisting of two modules:
 
-```rust
+```nim
 // module 1
 struct Vec2
 {
@@ -24,7 +24,7 @@ struct Vec2
 
 Vec2 myvec = Vec2 { 151.015f32, 5.152f32 };
 ```
-```rust
+```nim
 // module 2
 struct Vec2
 {
