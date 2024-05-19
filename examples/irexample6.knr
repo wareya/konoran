@@ -37,8 +37,26 @@ i32 test4(i8 arg)
     }
 }
 
+u8 sdklf = 15u8;
+ptr(u8) myfunc_1()
+{
+    print_float(01011001.0f64);
+    return &sdklf;
+}
+u8 myfunc_2()
+{
+    print_float(20201.20201f64);
+    return 81u8;
+}
+
+
 void main()
 {
+    // myfunc_1 runs before myfunc_2
+    *myfunc_1() = myfunc_2();
+    
+    // branching compiler support tests follow
+    
     f64 myfloat = 12953.94193f64;
     if (myfloat == 0.0f64)
         goto down;
@@ -50,7 +68,18 @@ void main()
     if (myfloat == 0.0f64)
         goto up;
     
-    furtherdown:
+    {
+        f64 valid_variable = 4103.19f64;
+        furtherdown:
+        //print_float(valid_variable); // UB; value of valid_variable is not yet uninitialized, will print arbitrary (possibly poison) data
+        print_float(freeze valid_variable); // not UB; the 'freeze' operator turns undefined/poison data into valid (but arbitrary/unknown) data
+        valid_variable = 91.1f64;
+        print_float(valid_variable); // now valid
+        
+        constexpr f64 ogawer = 913.1f64;
+    }
+    // valid; constexpr variables ignore block scope rules and are always visible "below" where they're defined
+    print_float(ogawer);
     
     if (1u8)
     {

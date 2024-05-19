@@ -217,11 +217,15 @@ Branches can point "upwards", not just downwards. Branches can only point to lab
 
 ### 4.2 - Function variable mutability
 
-Variables are mutable and can be rewritten. Constexpr variables exist; they must be defined upon declaration and cannot be modified/rewritten. Variables and const variables follow the same logical access rules and cannot shadow each other in the same scope. Compilers are free to detect and mark const variables as const and optimize them away, as long as they're never explicitly accessed, or fold/inline them, even if their address is taken and modified. Writing to a const variable via a pointer is undefined behavior.
+Variables are mutable and can be rewritten. Compilers are free to detect and mark variables as const and optimize them away or fold/inline them, even if their address is taken, as long as the underlying value is never modified via correctly-derived pointer.
 
-### 4.2.1 - Local constants
+Reading an uninitialized variable (local or global) results in an undefined or poison value that can take on any value (even if the variable is only ever accessed once) and do anything, classic undefined behavior. If such a value is given to the `freeze` operator, it will be frozen into a then-known state; however, this state might not reflect what was actually present in the memory of the uninitialized variable.
 
-Variables marked with the `constexpr` keyword are not variables; they are local constants. Local constants follow the same rules as global constants (e.g. their initializer must be known at compile time, they cannot be modified, etc), except they are only visible to the function that defines them.
+Variables marked with the `constexpr` keyword are not variables; they are local constants. They must be defined upon declaration and cannot be modified/rewritten. Writing to a local constant via a pointer is undefined behavior.
+
+#### 4.2.1 - Local constants
+
+Local constants follow the same rules as global constants (e.g. their initializer must be known at compile time, they cannot be modified, etc), except they are only visible to the function that defines them.
 
 Local constants do not follow block scope rules; they are visible anywhere in the function that is below them, even if that place is outside of the scope in which the local constant was defined. Visible local constants have a defined value determined by their initializer even if the flow of execution never passed through the statement defining the local constant.
 
@@ -231,11 +235,11 @@ Local constants are only visible "from below".
 
 Jumps, including goto, are incapable of leaving the stack in an invalid state. Variable declarations in functions (and their arguments) only last for the body of the function and do not affect other functions. Function-specific variable declarations are allowed to "shadow" global variables and functions; doing so must not produce an error or warning.
 
-### 4.3.1 - Function variable behavior with regards to scopes
+#### 4.3.1 - Function variable behavior with regards to scopes
 
 When a function begins, its arguments are treated as normal variables, with their values pre-filled, in a "zeroth" scope. The function body begins the "first" scope, and can declare local variables that shadow its arguments. Other block scopes (defined in the grammar as `$statementlist$`) open new scopes, which can shadow variables created in outer scopes. Importantly, scopes do not logically grow or shrink the stack, so `goto`ing into them past variable declarations is not instant UB; shadowing and scoping are purely a name lookup concern, and the function must logically behave as though all variable declarations were invisibly hoisted to the top of the function (except for name lookup and shadowing). The implementation is highly encouraged to perform disjoint stack slot reuse optimizations to reduce how much stack space a given function uses up with variables declared in disjoint block scopes.
 
-### 4.3.2 - Function stack variable behavior
+#### 4.3.2 - Function stack variable behavior
 
 If a variable is declared in an inner scope, and its pointer is not leaked into an outer scope, it becomes inaccessible once that scope ends, and the optimizer is allowed to make this assumption. However, variables must 'exist' as long as a correctly-derived pointer to them is held within the same function. If their address was taken, their stack slot cannot be eliminated until no correctly-derived pointer is capable of referring to it, or the function returns or enters an infinite loop that cannot see it.
 
@@ -243,7 +247,7 @@ If a variable is declared in an inner scope, and its pointer is not leaked into 
 
 Attempting to derive a pointer to one local variable from a pointer to another local variable is UB and the optimizer is allowed to assume that a konoran program does not do this.
 
-### 4.3.2 - Function stack variable pointer leakage
+#### 4.3.2 - Function stack variable pointer leakage
 
 Attempting to conjure a pointer to a local variable that is not currently in-scope is UB because conjuring pointers to variables is UB, and the optimizer is allowed to assume that a konoran program does not do this.
 
@@ -262,6 +266,31 @@ print_float(8243.9f64);
 Function arguments are fully evaluated one at a time, from left to right.
 
 Function calls evaluate to a value of whatever type the function returns. If the function returns `void`, it evaluates to no value and cannot be used in expressions (because there's nothing an expression or statement can do with another expression of type `void`, inevitably leading to an error).
+
+### 4.6 - Statement evaluation order
+
+Statements within a function are evaluated top to bottom as control flow passes through the function. When a `goto` is encountered, it is followed. When an `if` statement is encountered, a particular branch from that if statement is followed. Which branch is taken after an if statement is trivially defined. See [irexample6.knr] for examples of all possible control flow uses (goto, if-goto, if, if-else, and if-else with an if-else inside the else, as well as goto jumping over a variable definition).
+
+Assignments are evaluated left-side-first. So, if you have a function that returns a pointer, and assign into it, the function is evaluated before the expression you assign into it:
+
+```rs
+u8 sdklf = 15u8;
+ptr(u8) myfunc_1()
+{
+    print_float(01011001.0f64);
+    return &sdklf;
+}
+u8 myfunc_2()
+{
+    print_float(20201.20201f64);
+    return 81u8;
+}
+void main()
+{
+    // myfunc_1 runs before myfunc_2
+    *myfunc_1() = myfunc_2();
+}
+```
 
 ## 5 - Types
 
@@ -843,6 +872,6 @@ C compilers are allowed to optimize C code with the assumption that no code path
 
 Accessing conjured pointer values is UB in some situations in C if the compiler "knows" that the pointer doesn't point to an object. In konoran, any side effects from accessing "non-object" pointers is implementation-defined behavior instead of the operating being undefined, e.g. it can crash, give a bogus value, raise an exception, "have no effect on other objects", etc. But it can't be treated like it "didn't happen", even if the compiler knows that the pointer doesn't point to an object.
 
-For example, if you manage to conjure a pointer with the same pointer value as the address of a local variable, and write to it without crashing, then read back the value you wrote via the conjured pointer, you "should" see the value you wrote to the conjured pointer, even if normal access to the variable itself is unaffected. [pointer_conjuration_test.knr](examples/pointer_conjuration_test.knr) is an example of this. Note the the pointer must **actually be conjured**. Doing pointer math to a properly-derived pointer pointing at another variable is not pointer conjuration.
+For example, if you manage to conjure a pointer with the same pointer value as the address of a local variable, and write to it without crashing, then read back the value you wrote via the conjured pointer, you "should" see the value you wrote to the conjured pointer, even if normal access to the variable itself is unaffected. [pointer_conjuration_test.knr](examples/pointer_conjuration_test.knr) is an example of this. Note the the pointer must **actually be conjured**. Doing pointer math to a correctly-derived pointer pointing at another variable is not pointer conjuration.
 
 It's currently not possible for konoran to 100% guarantee this behavior while compiling down to LLVM, because LLVM's manual defines it as undefined behavior to access an object via a pointer that's not based on that object, but *in practice* it works.
