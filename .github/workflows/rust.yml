@@ -6,6 +6,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  
+permissions:
+  contents: 'read'
+  id-token: 'write'
+  issues: 'write'
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,6 +20,15 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       
+    - name: Nightly Release
+      uses: andelf/nightly-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: nightly-linux
+        name: "Nightly Linux"
+        files: "target/release/konoran*"
+    
     - name: Use the determinate nix installer
       uses: DeterminateSystems/nix-installer-action@main
       
@@ -25,11 +40,3 @@ jobs:
     - name: Run tests
       run: ${{env.nix_prefix}} cargo test --release --verbose
 
-    - name: Nightly Release
-      uses: andelf/nightly-release@main
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: nightly-linux
-        name: "Nightly Linux"
-        files: "target/release/konoran*"
