@@ -36,7 +36,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: nightly-linux
-        name: "Linux Nightly"
+        tag_name: "nightly-linux-${{ env.RUNNERCPUARCH }}"
+        name: "Linux Nightly ${{ env.RUNNERCPUARCH }}"
         files: "target/release/konoran*"
     
