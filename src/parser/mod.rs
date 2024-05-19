@@ -1,6 +1,8 @@
 #![allow(clippy::len_zero)]
 #![allow(clippy::only_used_in_recursion)] // false positive (&self)
 #![allow(clippy::comparison_chain)] // refactorability
+#![allow(clippy::comparison_to_empty)] // subjective readability
+#![allow(clippy::single_char_pattern)] // subjective readability
 
 use std::collections::{HashMap, HashSet, BTreeSet};
 use std::time::Instant;

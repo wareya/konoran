@@ -11,6 +11,7 @@
 #![allow(clippy::collapsible_else_if)] // block ordering readability
 #![allow(clippy::match_like_matches_macro)] // refactoring ease
 #![allow(clippy::suspicious_else_formatting)] // false positive around commented-out code
+#![allow(clippy::to_string_trait_impl)] // extremely dumb lint
 
 use std::rc::Rc;
 use core::cell::RefCell;
@@ -2777,7 +2778,7 @@ pub struct ProcessOutput
 /// For more information, see the `inkwell` documentation: <https://thedan64.github.io/inkwell/inkwell/>
 ///
 
-pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterator<Item=String> + Clone, String)>, settings : HashMap<&'static str, String>) -> ProcessOutput
+pub fn process_program(mut modules : &mut dyn Iterator<Item=(impl IntoIterator<Item=String> + Clone, String)>, settings : HashMap<&'static str, String>) -> ProcessOutput
 {
     let verbose = settings.contains_key("verbose");
     let semiverbose = settings.contains_key("semiverbose");
@@ -2785,7 +2786,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
     {
         println!("startup...");
     }
-    let skip_jit = settings.get("asm_triple").is_some() | settings.get("objfile").is_some();
+    let skip_jit = settings.contains_key("asm_triple") | settings.contains_key("objfile");
     let optlevel_string = settings.get("optlevel").cloned().unwrap_or("2".to_string());
     
     let true_start = std::time::Instant::now();
@@ -2885,7 +2886,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
         let mut triple = TargetTriple::create(triple_string);
         if triple_string == "native"
         {
-            if settings.get("cpu").is_none() && settings.get("objfile").is_none()
+            if settings.contains_key("cpu") && settings.contains_key("objfile")
             {
                 cpu = TargetMachine::get_host_cpu_name().to_string();
                 features = TargetMachine::get_host_cpu_features().to_string();
@@ -2899,7 +2900,7 @@ pub fn process_program<'a>(mut modules : &mut dyn Iterator<Item=(impl IntoIterat
     }
     else
     {
-        if settings.get("cpu").is_none() && settings.get("objfile").is_none()
+        if settings.contains_key("cpu") && settings.contains_key("objfile")
         {
             cpu = TargetMachine::get_host_cpu_name().to_string();
             features = TargetMachine::get_host_cpu_features().to_string();

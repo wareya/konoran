@@ -1,3 +1,7 @@
+#![allow(clippy::len_zero)] // subjective readability
+#![allow(clippy::single_char_pattern)] // subjective readability
+#![allow(clippy::comparison_to_empty)] // subjective readability
+
 use std::collections::HashMap;
 
 use konoran::compiler::*;
@@ -70,42 +74,42 @@ fn main()
     {
         println!("Usage:");
         println!("konoran <source_files> <options> -- <arguments>");
-        println!("");
+        println!();
         println!("Options:");
-        println!("");
+        println!();
         println!("-oat");
         println!("--output-assembly-triple");
         println!("    Specify a triple to output assembly for, e.g. x86_64-pc-windows");
-        println!("");
+        println!();
         println!("-ir");
         println!("--asm-is-ir");
         println!("    If outputting assembly, output 'ir' (llvm ir) instead of assembly");
-        println!("");
+        println!();
         println!("-ft");
         println!(" --force-triple");
         println!("    Force a target triple, e.g. x86_64-pc-windows");
-        println!("");
+        println!();
         println!("-cpu <fname>");
         println!("--force-target-cpu <fname>");
         println!("    Force a particular target CPU, e.g. athlon64, skylake, native");
-        println!("");
+        println!();
         println!("-obj <fname>");
         println!("--generate-obj <fname>");
         println!("    Output an object file (e.g. main.o) for linking with an external toolchain.");
-        println!("");
+        println!();
         println!("-sag");
         println!("--simple-aggregates");
         println!("    Uses a different strategy for compiling structs/arrays that usually results in worse machine code, except on certain niche architectures it results in better machine code instead.");
-        println!("");
+        println!();
         println!("-O0 -O1 -O2 -O3 -Os -Oz -Od");
         println!("    Specify an optimization level. O0 is the least optimized, O3 is the most. Os and Oz optimize for size. Od optimizes for developer throughput time and sits somewhere between O0 and O1 in terms of compile-time speed without being horribly slow at runtime like O0 is. (On math-heavy code, Od is usually faster than O1.) Note that the first character is a capital o, not a zero.");
-        println!("");
+        println!();
         println!("--verbose");
         println!("    Print verbose mid-compilation output.");
-        println!("");
+        println!();
         println!("--timeinfo");
         println!("    Print output compilation timing info after compilation.");
-        println!("");
+        println!();
         println!("--no-opt-no-verify");
         println!("    Do not verify or optimize LLVM IR before finishing compilation. Only useful for debugging.");
         
@@ -131,7 +135,7 @@ fn main()
         let machine = process_output.machine;
         let loaded_modules = process_output.modules;
         
-        let skip_jit = settings.get("asm_triple").is_some() | settings.get("objfile").is_some();
+        let skip_jit = settings.contains_key("asm_triple") || settings.contains_key("objfile");
         
         if !skip_jit
         {
@@ -166,7 +170,7 @@ fn main()
             {
                 // check for errors
                 use core::ffi::c_char;
-                let mut msg : *mut c_char = 0 as *mut c_char;
+                let mut msg : *mut c_char = std::ptr::null_mut::<c_char>();
                 let val = llvm_sys::execution_engine::LLVMExecutionEngineGetErrMsg(executor.as_mut_ptr(), &mut msg as *mut *mut c_char);
                 if val != 0
                 {
@@ -211,15 +215,15 @@ fn main()
                     {
                         let f = get_func!(name, unsafe extern "C" fn());
                         time_start!();
-                        let out = f.call();
-                        time_end!(out);
+                        f.call();
+                        time_end!(());
                     }
                     Some((r#"unsafe extern "C" fn(i32, *mut *mut u8)"#, _)) =>
                     {
                         let f = get_func!(name, unsafe extern "C" fn(i32, *mut *mut u8));
                         time_start!();
-                        let out = f.call(argc, argv);
-                        time_end!(out);
+                        f.call(argc, argv);
+                        time_end!(());
                     }
                     Some((r#"unsafe extern "C" fn(i32, *mut *mut u8) -> i32"#, _)) =>
                     {
