@@ -20,7 +20,9 @@ jobs:
       uses: DeterminateSystems/nix-installer-action@main
       
     - name: print architecture
-      run: uname -a
+      run: uname -p
+           echo 'ARCH=echo "$(uname -p -p)"' > "$GITHUB_ENV"
+           echo "$action_state"
     
     - name: Build
       run: ${{env.nix_prefix}} cargo build --release --verbose
