@@ -16,16 +16,16 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       
-    - name: Use the determinate nix installer
-      uses: DeterminateSystems/nix-installer-action@main
-      
     - name: print architecture
       run: uname -p
     - name: save arch
-      run: echo 'ARCH=echo "$(uname -p -p)"' > "$GITHUB_ENV"
+      run: echo "RUNNERCPUARCH=$(uname -p -p)" >> $GITHUB_ENV
     - name: test arch
-      run: echo "$ARCH"
+      run: echo "${{ env.RUNNERCPUARCH }}"
     
+    - name: Use the determinate nix installer
+      uses: DeterminateSystems/nix-installer-action@main
+      
     - name: Build
       run: ${{env.nix_prefix}} cargo build --release --verbose
     - name: Run tests
