@@ -18,3 +18,4 @@ llvm-sys = { version = "180", features = ["force-static"] }
 [profile.release]
 opt-level = 2
 debug = true
+lto = "off"
