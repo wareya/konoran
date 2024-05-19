@@ -22,10 +22,12 @@ jobs:
       run: echo "RUNNERCPUARCH=$(uname -p -p)" >> $GITHUB_ENV
     - name: test arch
       run: echo "${{ env.RUNNERCPUARCH }}"
-    
+      
     - name: Use the determinate nix installer
       uses: DeterminateSystems/nix-installer-action@main
-
+      with:
+        source-revision: 7011c077ec491da410fbc39f68676b0908b9ce7e
+      
     - name: Print nix version
       run: nix --version
       
