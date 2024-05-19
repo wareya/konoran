@@ -25,8 +25,12 @@ jobs:
         tag: "18.x"
         fileName: "llvm-linux-amd64.tar.xz"
         out-file-path: "llvm"
+        
+    - name: print architecture
+      run: uname -a
     
-    - run: cd llvm && tar xf llvm-linux-amd64.tar.xz && ls . && cd ../
+    - name: unarchive llvm
+      run: cd llvm && tar xf llvm-linux-amd64.tar.xz && ls . && cd ../
       
     - name: Build
       run: LLVM_SYS_180_PREFIX=llvm/ cargo build --verbose
