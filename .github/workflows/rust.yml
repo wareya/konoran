@@ -21,8 +21,10 @@ jobs:
       
     - name: print architecture
       run: uname -p
-           echo 'ARCH=echo "$(uname -p -p)"' > "$GITHUB_ENV"
-           echo "$action_state"
+    - name: save arch
+      run: echo 'ARCH=echo "$(uname -p -p)"' > "$GITHUB_ENV"
+    - name: test arch
+      run: echo "$ARCH"
     
     - name: Build
       run: ${{env.nix_prefix}} cargo build --release --verbose
