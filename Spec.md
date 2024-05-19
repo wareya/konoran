@@ -878,7 +878,7 @@ In some cases, the implementation is allowed to define new UB of its own.
 
 Point 1 means that other code using that variable is allowed to assume that it doesn't suddenly change for no reason, even if an incorrectly-derived pointer value might be pointing to it. For example:
 
-```nim
+```lua
 u32 x = 0;
 ptr(u32) maybe_x = (randi()) as ptr(u32);
 *maybe_x = 16u32;

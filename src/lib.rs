@@ -7,7 +7,7 @@
 //! See <https://github.com/wareya/konoran/tree/main/examples> for more examples.
 //!
 //! Here's a small example Konoran program:
-//! ```nim
+//! ```lua
 //! f32 func_gravity()
 //! {
 //!     u64 i = 0u64;
