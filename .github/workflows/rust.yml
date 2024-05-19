@@ -21,6 +21,6 @@ jobs:
       run: uname -a
     
     - name: Build
-      run: ${{nix_prefix}} cargo build --release --verbose
+      run: ${{env.nix_prefix}} cargo build --release --verbose
     - name: Run tests
-      run: ${{nix_prefix}} cargo test --release --verbose
+      run: ${{env.nix_prefix}} cargo test --release --verbose
