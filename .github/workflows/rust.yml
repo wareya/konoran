@@ -23,10 +23,11 @@ jobs:
         repository: wareya/llvm-custom-builds
         # The github tag to download the release from
         tag: "18.x"
-        fileName: "llvm-linux-amd64.tar.xz "
+        fileName: "llvm-linux-amd64.tar.xz"
         out-file-path: "llvm"
-        extract: true
     
+    - run: cd llvm && tar xf llvm-linux-amd64.tar.xz && cd ../
+      
     - name: Build
       run: LLVM_SYS_180_PREFIX=llvm/ cargo build --verbose
     - name: Run tests
