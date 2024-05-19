@@ -8,7 +8,7 @@ This spec is *very* early, and is subject to change if any horrible design mista
 
 As an intuition aid, here's an example konoran program:
 
-```lua
+```typescript
 // a very simple gravity simulation
 void main()
 {
@@ -194,7 +194,7 @@ Functions have return types, names, argument lists, and bodies. A function's sig
 
 Functions are defined like follows:
 
-```lua
+```typescript
 <returntype> name ( type1 arg1, type2 arg2, ... )
 {
     // list of statements that must always either return or enter into an infinite loop
@@ -203,7 +203,7 @@ Functions are defined like follows:
 
 Functions are imported from other modules like follows:
 
-```lua
+```typescript
 [using|import_extern] <returntype> func_name ( type1 arg1, type2 arg2, ... );
 ```
 
@@ -245,7 +245,7 @@ If a variable is declared in an inner scope, and its pointer is not leaked into 
 
 The following code is legal; read the comments for more rationale:
 
-```lua
+```typescript
     ptr(f64) magic_ptr;
     {
         constexpr f64 gkue = 19843.81f64;
@@ -289,7 +289,7 @@ Unlike C, konoran does not have static function variables. Global variables must
 
 Functions are called with a syntax similar to C, e.g.
 
-```lua
+```typescript
 print_float(8243.9f64);
 ```
 
@@ -303,7 +303,7 @@ Statements within a function are evaluated top to bottom as control flow passes 
 
 Assignments are evaluated left-side-first. So, if you have a function that returns a pointer, and assign into it, the function is evaluated before the expression you assign into it:
 
-```lua
+```typescript
 u8 sdklf = 15u8;
 ptr(u8) myfunc_1()
 {
@@ -326,7 +326,7 @@ void main()
 
 Declarations with initializers evaluate the initializer before creating the variable being declared. For example:
 
-```lua
+```typescript
 f64 shadowed = 8143.81f64;
 {
     // `shadowed` in the below expression evaluates to the earlier-declared `shadowed` variable,
@@ -341,7 +341,7 @@ f64 shadowed = 8143.81f64;
 
 The supported control flow constructs are very limited. See [irexample6.knr] for examples of all possible control flow uses (goto, if-goto, if, if-else, and if-else with an if-else inside the else, as well as goto jumping over a variable definition). In short:
 
-```lua
+```typescript
 // goto
 goto label;
 // if-goto
@@ -371,7 +371,7 @@ Konoran is strongly typed and has primitive/intrinsic numeric types, struct type
 
 Konoran has the following primitive/intrinsic numeric types:
 
-```lua
+```typescript
 u8, i8, u16, i16, u32, i32, u64, i64, f32, f64
 ```
 
@@ -381,7 +381,7 @@ These are unsigned and signed integers (two's complement) and IEEE-compliant bin
 
 Konoran has the following pointer types:
 
-```lua
+```typescript
 ptr(type)
 funcptr(returntype, (arg1type, arg2type, ...))
 ```
@@ -392,7 +392,7 @@ Pointers can be casted back and forth with `u64` (or whatever the target's point
 
 Konoran has the following composite types:
 
-```lua
+```typescript
 struct <name> { type1 var1, type2 var2, ... }
 array(type, len)
 ```
@@ -403,7 +403,7 @@ Struct types consist of a series of members (also called variables, properties, 
 
 Structs have a fixed, known size, and their members are not reordered. Structs do not have any invisible padding; even if `u32`s need to be aligned to 4 bytes on the target platform, a struct that goes `struct ... { u8 a; u32 b; }` will have the `b` property start at the second byte of the struct, and the struct will be 5 bytes long. Alignment must be done manually. To make this easier, structs can have multiple members with the name `_`, none of which are accessible, and are assumed to have an unknown (possibly undefined/poison) value if accessed with pointer arithmetic. It should be noted that padding around floats should ideally be of a float type, and same for non-floats. For example:
 
-```lua
+```typescript
 struct asdf
 {
     f32 a;
@@ -471,7 +471,7 @@ Values that overflow past what can be stored in the given float type result in (
 
 Array literals are a list of values separate by a comma with an optional comma at the end, sandwiched between `[` and `]`. They immediately evaluate to the correct type of array with exactly the right length. The values do not need to be literals. The values must all be of the same type. The values are fully evaluated one at a time, from left to right.
 
-```lua
+```typescript
 array(u8, 2) myarray = [0u8, 14u8];
 //array(u8, 5) myarray2 = [0u8, 14u8]; // invalid; wrong length
 ```
@@ -480,7 +480,7 @@ array(u8, 2) myarray = [0u8, 14u8];
 
 Struct literals have a prefix of the name of their struct type, followed by a list of member values sandwiched between `{` and `}`. The values do not need to be literals. The values must have the correct types. The values are fully evaluated one at a time, from left to right.
 
-```lua
+```typescript
 struct Vec2
 {
     f32 x;
@@ -495,7 +495,7 @@ Vec2 my_vec2 = Vec2 { 124.016f32, 815.1538f32 };
 
 Konoran has char (pronounced 'care', as in 'character') literals that compile down to a u8 or u32 literal. u8 literals are valid for any unicode character with codepoint numbered 0xFF (i.e. U+00FF, 'ÿ') or less. u32 literals are valid for any unicode codepoint. This must be done at compile time and be exactly equivalent to using a normal integer literal. Char literals support escape sequences, specifically `\n`, `\r`, `\t`, `\'`, and `\\`. Char literals do not support numeric escape sequences.
 
-```lua
+```typescript
 '0' // 0x30u8
 'ÿ' // 0xFFu8
 //'𠂌' // not supported
@@ -514,7 +514,7 @@ Konoran has char (pronounced 'care', as in 'character') literals that compile do
 
 Konoran has utf-8 string literals. They compile down either to an array literal or to a pointer to const data, depending on which syntax is used. String literals support basic escape sequences, specifically `\n`, `\r`, `\t`, `\"`, and `\\`. String literals do not support numeric escape sequences. The string data as accessed by the konoran program is utf-8.
 
-```lua
+```typescript
 array(u8, 7) my_array = constexpr "skgue\n"array;
 ptr(array(u8, 7)) my_array_ptr = &"skgue\n"array;
 ptr(u8) my_ptr = "skgue\n";
@@ -523,7 +523,7 @@ ptr(u8) my_ptr = "skgue\n";
 
 It's also possible to use string literals that lack a null terminator, as follows:
 
-```lua
+```typescript
 array(u8, 6) my_array = constexpr "skgue\n"array_nonull;
 ptr(array(u8, 6)) my_array_ptr = &"skgue\n"array_nonull;
 ptr(u8) my_ptr = "skgue\n"nonull; // dangerous!!!
@@ -533,13 +533,13 @@ ptr(u8) my_ptr = "skgue\n"nonull; // dangerous!!!
 
 There is no `volatile` variable modifier. However, pointer values can be marked as having volatile access semantics using the `@` operator. So, to use an mmio register, you might use something like the following code:
 
-```lua
+```typescript
 ptr(u32) my_mmio_reg = (0x80000030u64) as ptr(u32);
 u32 my_val = *@my_mmio_reg; // @ causes * to perform a volatile load
 *@my_mmio_reg = my_val + 10u32; // @ causes = to perform a volatile store
 ```
 Given the above context, the following would NOT perform a volatile operation:
-```lua
+```typescript
 @my_mmio_reg = (0x80000040u64) as ptr(u32); // the volatility modifier does nothing in this case; the pointer value is just replaced
 ```
 
@@ -762,13 +762,13 @@ This operation produces a pointer (`ptr(type)`) pointing at the variable's value
 
 "Aggregate (struct/array) values" does not refer to variables containing structs/arrays. Those would be trivial to take the address of even if this language was not used. Rather, this language means that the following code is valid:
 
-```lua
+```typescript
 ptr(array(u8, 2)) myptr = &[0u8, 14u8];
 ```
 
 And is similar in logical behavior to this code:
 
-```lua
+```typescript
 array(u8, 2) myvar = [0u8, 14u8];
 ptr(array(u8, 2)) myptr = &myvar;
 ```
@@ -777,7 +777,7 @@ So, if the address of a struct/array *value* is taken, it must be given an autom
 
 In particular, non-constexpr temporary aggregates pointed to by valid pointers can be modified; building off the above array pointer example, the following code is allowed:
 
-```lua
+```typescript
     (*myptr)[1i64] = 1u8;
 ```
 
@@ -787,7 +787,7 @@ Pointers derived as above only need to remain valid as long as the code that der
 
 Accessing variables via a pointer to a different type is allowed; for example, accessing a `f32` via a `ptr(u16)` pointing at the first or third byte of the `f32` is allowed. For example, building off the above array pointer example, the following code is allowed:
 
-```lua
+```typescript
 u16 myint = *((myptr) bit_as ptr(u16));
 ```
 
@@ -835,13 +835,13 @@ The following prefix operators are supported for data pointers:
 
 The `*` operator is not only used when loading a value from a pointer in expressions, but also when assigning to the value pointed to by a pointer, e.g.
 
-```lua
+```typescript
 *my_ptr_to_u16 = 162u16;
 ```
 
 This must also be supported when indexing into arrays, e.g.
 
-```lua
+```typescript
 (*my_ptr_to_array_u16)[1i64] = 162u16;
 ```
 
@@ -849,7 +849,7 @@ This must also be supported when indexing into arrays, e.g.
 
 For arrays, the following prefix operator is defined:
 
-```lua
+```typescript
 decay_to_ptr    convert array of elements to pointer to first element
 ```
 
@@ -878,7 +878,7 @@ In some cases, the implementation is allowed to define new UB of its own.
 
 Point 1 means that other code using that variable is allowed to assume that it doesn't suddenly change for no reason, even if an incorrectly-derived pointer value might be pointing to it. For example:
 
-```lua
+```typescript
 u32 x = 0;
 ptr(u32) maybe_x = (randi()) as ptr(u32);
 *maybe_x = 16u32;
