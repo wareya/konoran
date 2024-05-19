@@ -26,8 +26,10 @@ jobs:
       run: ${{env.nix_prefix}} cargo test --release --verbose
 
     - name: Nightly Release
-      uses: andelf/nightly-release@v1
+      uses: andelf/nightly-release@main
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: nightly-linux
-        name: Nightly Linux
+        name: "Nightly Linux"
         files: "target/release/konoran*"
