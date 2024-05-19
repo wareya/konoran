@@ -25,6 +25,9 @@ jobs:
     
     - name: Use the determinate nix installer
       uses: DeterminateSystems/nix-installer-action@main
+
+    - name: Print nix version
+      run: nix --version
       
     - name: Download musl target
       run: ${{env.nix_prefix}} rustup target add x86_64-unknown-linux-musl
