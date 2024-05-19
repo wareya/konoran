@@ -35,7 +35,7 @@ jobs:
       run: mkdir target &&
            mkdir target/release &&
            mkdir target/release/deps &&
-           cp "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib/librt.a" /target/release/deps
+           cp "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib/librt.a" target/release/deps
       
     - name: Download musl target
       run: ${{env.nix_prefix}} rustup target add x86_64-unknown-linux-musl
