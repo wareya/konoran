@@ -68,18 +68,20 @@ void main()
     if (myfloat == 0.0f64)
         goto up;
     
+    goto furtherdown;
     {
         f64 valid_variable = 4103.19f64;
         furtherdown:
-        //print_float(valid_variable); // UB; value of valid_variable is not yet uninitialized, will print arbitrary (possibly poison) data
+        //print_float(valid_variable); // UB; value of valid_variable is not yet uninitialized, will print arbitrary (possibly poison) data. however, this would not access *unallocated* memory, only *uninitialized* memory.
         print_float(freeze valid_variable); // not UB; the 'freeze' operator turns undefined/poison data into valid (but arbitrary/unknown) data
         valid_variable = 91.1f64;
         print_float(valid_variable); // now valid
         
-        constexpr f64 ogawer = 913.1f64;
+        constexpr f64 ogawer = 9013.1f64;
+        //f64 ogawer = 53489.11f64; // invalid; cannot shadow variables or constants from the same scope
     }
-    // valid; constexpr variables ignore block scope rules and are always visible "below" where they're defined
-    print_float(ogawer);
+    // invalid; left scope
+    //print_float(ogawer);
     
     if (1u8)
     {

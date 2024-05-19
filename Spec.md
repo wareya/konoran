@@ -227,9 +227,9 @@ Variables marked with the `constexpr` keyword are not variables; they are local 
 
 Local constants follow the same rules as global constants (e.g. their initializer must be known at compile time, they cannot be modified, etc), except they are only visible to the function that defines them.
 
-Local constants do not follow block scope rules; they are visible anywhere in the function that is below them, even if that place is outside of the scope in which the local constant was defined. Visible local constants have a defined value determined by their initializer even if the flow of execution never passed through the statement defining the local constant.
+Local constants follow block scope rules just like normal local variables. Visible local constants have a defined value determined by their initializer even if the flow of execution never passed through the statement defining the local constant.
 
-Local constants are only visible "from below".
+Local constants and local variables are only visible after their declarations.
 
 ### 4.3 - Function stack consistency
 
@@ -242,6 +242,36 @@ When a function begins, its arguments are treated as normal variables, with thei
 #### 4.3.2 - Function stack variable behavior
 
 If a variable is declared in an inner scope, and its pointer is not leaked into an outer scope, it becomes inaccessible once that scope ends, and the optimizer is allowed to make this assumption. However, variables must 'exist' as long as a correctly-derived pointer to them is held within the same function. If their address was taken, their stack slot cannot be eliminated until no correctly-derived pointer is capable of referring to it, or the function returns or enters an infinite loop that cannot see it.
+
+The following code is legal; read the comments for more rationale:
+
+```rs
+    ptr(f64) magic_ptr;
+    {
+        constexpr f64 gkue = 19843.81f64;
+        f64 gkue2 = 5481.581f64;
+        magic_ptr = &gkue2;
+    }
+    //print_float(gkue); // invalid; no longer logically exists
+    //print_float(gkue2); // invalid; no longer logically exists
+    
+    print_float(*magic_ptr);
+    // the above memory access is VALID! declarations and block scopes are NOT runtime stack manipulation commands!
+    // local variables must remain accessible until whichever of the following happens sooner:
+    // 1. no correctly-derived pointers to them can exist
+    // 2. the function exits
+    // note that point 1 means that variables may still be valid even if no pointers point directly at the variable's address range
+    // as long as such a pointer may be correctly derived (e.g. an OOB pointer is turned back into an in-bounds pointer)
+    //
+    // This may seem strange, but it's reasonable with how "real" optimizing compilers process data flow.
+    // "Real" optimizing compilers can handle this no problem.
+    // And non-optimizing compilers can just allocate all possible variables on the stack when the function first enters.
+    //
+    // If you compile konoran code down to LLVM IR that `alloca`s every possible variable in the header of the function,
+    //  it'll optimize unnecessary `alloca`s away and also keep the stack as small as possible, automatically,
+    //  without breaking inner-scope variables whose addresses leaked to outer scopes. That's an example of a "real"
+    //  optimizing compiler handling this with no problem.
+```
 
 `goto`ing over a declaration is not UB, as any code that can see the variable's name is allowed to legally access it; variable declarations are not runtime stack manipulation instructions.
 
@@ -289,6 +319,21 @@ void main()
 {
     // myfunc_1 runs before myfunc_2
     *myfunc_1() = myfunc_2();
+}
+```
+
+#### 4.6.1 - Declaration initializer evaluation order
+
+Declarations with initializers evaluate the initializer before creating the variable being declared. For example:
+
+```rs
+f64 shadowed = 8143.81f64;
+{
+    // `shadowed` in the below expression evaluates to the earlier-declared `shadowed` variable,
+    //   not the new not-yet-initialized `shadowed` variable.
+    f64 shadowed = shadowed + 1000.0f64;
+    // must print 9143.81 (sans rounding)
+    print_float(shadowed);
 }
 ```
 
@@ -834,6 +879,8 @@ Implementations are allowed to specify unaligned memory accesses as UB, but this
 
 Konoran is intended as a compiler target, and as such expects the "programmer" to provide a lot of its own runtime functionality.
 
+Advanced implementations are highly encouraged to detect undefined behavior and produce warnings or errors.
+
 ### 10.1 - (No) memory management
 
 Konoran does not include memory management tools; however, at runtime, konoran needs to be able to allocate new memory for function-local variables. A konoran compiler will probably put this memory on the stack, while an interpreter will probably put it on the heap.
@@ -862,7 +909,7 @@ Konoran tries to avoid UB when it can. There are certain things C's spec does th
 
 #### 10.6.1 - (No) strict aliasing analysis
 
-Konoran **specifically does not have strict type-based aliasing rules** and implementations are explicitly disallowed to perform type-based pointer aliasing analysis. Aside from pointer provenance concerns, the "underlying bytes" beyond a pointer are not considered to have a type except for during the moment that they are accessed.
+Konoran **specifically does not have strict type-based aliasing rules** and implementations are explicitly not allowed to perform type-based pointer aliasing analysis. Aside from pointer provenance concerns, the "underlying bytes" beyond a pointer are not considered to have a type except for during the moment that they are accessed.
 
 #### 10.6.2 - (No) forwards progress guarantee
 

@@ -43,10 +43,19 @@ Vec2 print_vec2(Vec2 vec)
 
 void main()
 {
-    TestStruct asdf = TestStruct {8u8, 15u16};
+    f64 shadowed = 8143.81f64;
+    {
+        // `shadowed` in the below expression evaluates to the earlier-declared `shadowed` variable,
+        //   not the new not-yet-initialized `shadowed` variable.
+        f64 shadowed = shadowed + 1000.0f64;
+        // must print 9143.81 (sans rounding)
+        print_float(shadowed);
+    }
+    
+    TestStruct asdf = TestStruct { 8u8, 15u16 };
     print_float((asdf.a) as f64);
     print_float((asdf.b) as f64);
-    asdf = TestStruct {10u8, 45u16};
+    asdf = TestStruct { 10u8, 45u16 };
     asdf = asdf;
     print_float((asdf.a) as f64);
     print_float((asdf.b) as f64);
@@ -73,13 +82,41 @@ void main()
     
     //print_float(gkue); // invalid code
     
+    goto skip_definitions;
     {
         constexpr f64 gkue = 19843.81f64;
         f64 gkue2 = 5481.581f64;
+        skip_definitions:
+        print_float(gkue); // valid, prints 19843.81
+        // print_float(gkue2); // invalid, prints uninitialized memory
     }
     
-    print_float(gkue);
-    //print_float(gkue2); // invalid code
+    ptr(f64) magic_ptr;
+    {
+        constexpr f64 gkue = 19843.81f64;
+        f64 gkue2 = 5481.581f64;
+        magic_ptr = &gkue2;
+    }
+    //print_float(gkue); // invalid; no longer logically exists
+    //print_float(gkue2); // invalid; no longer logically exists
+    
+    print_float(*magic_ptr);
+    // the above memory access is VALID! declarations and block scopes are NOT runtime stack manipulation commands!
+    // local variables must remain accessible until whichever of the following happens sooner:
+    // 1. no correctly-derived pointers to them can exist
+    // 2. the function exits
+    // note that point 1 means that variables may still be valid even if no pointers point directly at the variable's address range
+    // as long as such a pointer may be correctly derived (e.g. an OOB pointer is turned back into an in-bounds pointer)
+    //
+    // This may seem strange, but it's reasonable with how "real" optimizing compilers process data flow.
+    // "Real" optimizing compilers can handle this no problem.
+    // And non-optimizing compilers can just allocate all possible variables on the stack when the function first enters.
+    //
+    // If you compile konoran code down to LLVM IR that `alloca`s every possible variable in the header of the function,
+    //  it'll optimize unnecessary `alloca`s away and also keep the stack as small as possible, automatically,
+    //  without breaking inner-scope variables whose addresses leaked to outer scopes. That's an example of a "real"
+    //  optimizing compiler handling this with no problem.
+    
     print_float(gkue3);
     
     //print_float(('𠂌') as f64); // invalid code
