@@ -12,10 +12,9 @@ doc = false
 
 [dependencies]
 regex = "1.7.1"
-inkwell = { git = "https://github.com/TheDan64/inkwell.git", rev = "5d5a531c765a6ad37aa6591c0287d0f9109fff62", features = ["llvm18-0"] }
+inkwell = { git = "https://github.com/TheDan64/inkwell.git", rev = "5d5a531c765a6ad37aa6591c0287d0f9109fff62", features = ["llvm18-0", "no-libffi-linking"] }
 llvm-sys = { version = "180", features = ["force-static"] }
 
 [profile.release]
-opt-level = 1
+opt-level = 2
 debug = true
-lto = "off"
