@@ -14,7 +14,7 @@ Each module is made of a series of function definitions, global variable definit
 
 Here's an example konoran program, consisting of two modules:
 
-```typescript
+```php
 // module 1
 struct Vec2
 {
@@ -24,7 +24,7 @@ struct Vec2
 
 Vec2 myvec = Vec2 { 151.015f32, 5.152f32 };
 ```
-```typescript
+```php
 // module 2
 struct Vec2
 {
@@ -81,7 +81,7 @@ u8 has a bit width of 8 and a byte width of 1, u16 has a bit width of 16 and a b
 
 Konoran also has pointer, function pointers, structs, and arrays:
 
-```typescript
+```php
 ptr(type)
 funcptr(returntype, (arg1type, arg2type, ...))
 struct <name> { type1 var1, type2 var2, ... }
