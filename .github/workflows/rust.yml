@@ -3,36 +3,24 @@ name: Rust
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
 
 env:
   CARGO_TERM_COLOR: always
-
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
+    env:
+      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#cargo nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c
     steps:
     - uses: actions/checkout@v4
-
-    - name: release-downloader
-      uses: robinraju/release-downloader@v1.10
-      with:
-        repository: wareya/llvm-custom-builds
-        # The github tag to download the release from
-        tag: "18.x"
-        fileName: "llvm-linux-amd64.tar.xz"
-        out-file-path: "llvm"
-        
+      
+    - name: Use the determinate nix installer
+      uses: DeterminateSystems/nix-installer-action@main
+      
     - name: print architecture
       run: uname -a
     
-    - name: unarchive llvm
-      run: cd llvm && tar xf llvm-linux-amd64.tar.xz && ls . && cd ../
-      
     - name: Build
-      run: LLVM_SYS_180_PREFIX=llvm/ cargo build --verbose
+      run: ${{nix_prefix}} cargo build --release --verbose
     - name: Run tests
-      run: LLVM_SYS_180_PREFIX=llvm/ cargo test --verbose
+      run: ${{nix_prefix}} cargo test --release --verbose
