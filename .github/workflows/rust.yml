@@ -7,13 +7,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   
-permissions:
-  contents: 'read'
-  id-token: 'write'
-  issues: 'write'
-
 jobs:
   build:
+    permissions: write-all
     runs-on: ubuntu-latest
     env:
       nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#cargo nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c
