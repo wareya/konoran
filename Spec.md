@@ -299,7 +299,7 @@ Function calls evaluate to a value of whatever type the function returns. If the
 
 ### 4.6 - Statement evaluation order
 
-Statements within a function are evaluated top to bottom as control flow passes through the function. When a `goto` is encountered, it is followed. When an `if` statement is encountered, a particular branch from that if statement is followed. Which branch is taken after an if statement is trivially defined. See [irexample6.knr] for examples of all possible control flow uses (goto, if-goto, if, if-else, and if-else with an if-else inside the else, as well as goto jumping over a variable definition).
+Statements within a function are evaluated top to bottom as control flow passes through the function. When a `goto` is encountered, it is followed. When an `if` statement is encountered, a particular branch from that if statement is followed. Which branch is taken after an if statement is trivially defined.
 
 Assignments are evaluated left-side-first. So, if you have a function that returns a pointer, and assign into it, the function is evaluated before the expression you assign into it:
 
@@ -336,6 +336,32 @@ f64 shadowed = 8143.81f64;
     print_float(shadowed);
 }
 ```
+
+### 4.7 - Control flow syntax
+
+The supported control flow constructs are very limited. See [irexample6.knr] for examples of all possible control flow uses (goto, if-goto, if, if-else, and if-else with an if-else inside the else, as well as goto jumping over a variable definition). In short:
+
+```rs
+// goto
+goto label;
+// if-goto
+if(cond) goto label;
+// if (braces mandatory)
+if(cond) { statement(); }
+// if-else (braces mandatory)
+if(cond) { statement(); } else { statement(); }
+// if-else with an if inside of the else
+if(cond) { statement(); } else if(cond2) { statement(); }
+// if-else with an if-else inside of the else
+if(cond) { statement(); } else if(cond2) { statement(); } else { statement(); }
+// the above two examples are equivalent to the following, which is also valid:
+if(cond) { statement(); } else { if(cond2) { statement(); } }
+if(cond) { statement(); } else { if(cond2) { statement(); } else { statement(); } }
+```
+
+The braces are mandatory even if there is only one statement. There can be multiple statements inside the braces, and they're executed from top to bottom.
+
+There is no braceless goto variant for compound if-else statements. "if-goto" is considered its own type of statement with its own syntax, not a specialization of the "if" statement syntax.
 
 ## 5 - Types
 
@@ -610,7 +636,7 @@ not  !    -    +   ~   *   &   @          <- prefix/unary operators
 and  or   &&   ||
 ```
 
-Operators on a given line have the same precedence and are evaluated left-to-right, i.e. `x + y + z` is evaluated as `(x + y) + z`.
+Operators on a given line have the same precedence and are evaluated left to right, i.e. `x + y + z` is evaluated as `(x + y) + z`.
 
 #### 8.1.1 - Precedence design note
 
