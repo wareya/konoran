@@ -29,11 +29,11 @@ jobs:
         repository: madler/zlib
         tag: v1.3.1
         fileName: zlib-1.3.1.tar.gz 
-        out-file-path: zlib
+        out-file-path: .
         extract: true
       
     - name: inspect zlib
-      run: cd zlib && ls . && echo "----"
+      run: cd zlib-1.3.1 && ls . && echo "----"
 
     - name: Use the determinate nix installer
       uses: DeterminateSystems/nix-installer-action@main
@@ -41,10 +41,10 @@ jobs:
         source-revision: 7011c077ec491da410fbc39f68676b0908b9ce7e
       
     - name: compile zlib
-      run: ${{env.nix_prefix}} ls . && echo "----" && cmake -B .build -S . -G Ninja && cmake --build .build
+      run: ${{env.nix_prefix}} cd zlib-1.3.1 && cmake -B .build -S . -G Ninja && cmake --build .build
 
     - name: inspect
-      run: cd "${GITHUB_WORKSPACE}" && ls zlib && echo "---" && ls zlib/.build
+      run: cd "${GITHUB_WORKSPACE}" && ls zlib-1.3.1 && echo "---" && ls zlib-1.3.1/.build
       
     - name: Install musl toolchain
       run: ${{env.nix_prefix}} rustup target add x86_64-unknown-linux-musl
