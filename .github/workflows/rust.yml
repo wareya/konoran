@@ -45,12 +45,9 @@ jobs:
            ls target/release/deps
       
     - name: Build
-      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo --config "build.rustflags=['-L', '$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib']" build --target x86_64-unknown-linux-musl --release --verbose
+      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on -L "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib"' cargo build --target x86_64-unknown-linux-musl --release --verbose
       
     - name: Inspect
-      run: ls target/x86_64-unknown-linux-gnu/release
-      
-    - name: Inspect (2)
       run: ls target/x86_64-unknown-linux-gnu/release
       
     - name: Nightly Release (Linux)
