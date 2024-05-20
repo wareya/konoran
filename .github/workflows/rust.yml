@@ -56,11 +56,14 @@ jobs:
     - name: save lib dirs (musl)
       run: echo "MUSLIBS=$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
       
-    - name: copy zlib libs into musl libs dir
-      run: cp "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib/*" "${{env.MUSLIBS}}"
+    - name: copy libz into musl libs dir
+      run: cp "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib/libz.a" "${{env.MUSLIBS}}"
     
-    - name: copy zlib libs into musl libs dir
-      run: cp "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib/*" "${{env.MUSLIBS}}"
+    - name: copy libtinfo into musl libs dir
+      run: cp "$(nix build nixpkgs#pkgsStatic.ncurses.out --print-out-paths --no-link)/lib/libtinfo.a*" "${{env.MUSLIBS}}"
+    
+    - name: copy libxml2 into musl libs dir
+      run: cp "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)/lib/libxml2.a*" "${{env.MUSLIBS}}"
     
     #- name: test musl-gcc
     #  run: ${{env.nix_prefix}} command -V musl-gcc
