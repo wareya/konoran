@@ -12,7 +12,7 @@ jobs:
     permissions: write-all
     runs-on: ubuntu-24.04
     env:
-      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#binutils nixpkgs#gcc nixpkgs#musl.dev nixpkgs#pkgsStatic.zlib nixpkgs#pkgsStatic.ncurses nixpkgs#pkgsStatic.libxml2 nixpkgs#rustup nixpkgs#llvmPackages_18.libllvm.dev nixpkgs#llvmPackages_18.clang -c
+      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#binutils nixpkgs#gcc nixpkgs#musl.dev nixpkgs#pkgsStatic.zlib nixpkgs#pkgsStatic.libffi nixpkgs#pkgsStatic.ncurses nixpkgs#pkgsStatic.libxml2 nixpkgs#rustup nixpkgs#llvmPackages_18.libllvm.dev nixpkgs#llvmPackages_18.clang -c
     steps:
     - uses: actions/checkout@v4
       
@@ -55,9 +55,9 @@ jobs:
     - name: inspect libxml2
       run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)/lib" && echo "----"
       
-    #- name: inspect clang
-    #  run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/bin" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/nix-support" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root/lib" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root/lib/linux" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root/share" && echo "----"
-    
+    - name: inspect libffi
+      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)/lib" && echo "----"
+      
     - name: inspect clang
       run: ${{env.nix_prefix}} clang++ --print-file-name='libstdc++.a' && echo "----" && dirname "$(clang++ --print-file-name='libstdc++.a')" && echo "----"
       
@@ -79,6 +79,9 @@ jobs:
     - name: save lib dirs (libxml2)
       run: echo "XLIBS=$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
       
+    - name: save lib dirs (libffi)
+      run: echo "FLIBS=$(nix build nixpkgs#pkgsStatic.libffi.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
+      
     - name: save lib dirs (std) (hardcoded, danger!!!)
       run: echo "STDLIBS=/usr/lib/gcc/x86_64-linux-gnu/12" >> $GITHUB_ENV
       
@@ -99,7 +102,7 @@ jobs:
            ls target/release/deps
       
     - name: Build
-      run: ${{env.nix_prefix}} cargo --config "build.rustflags=['-L', '${{env.MUSLIBS}}', '-L', '${{env.ZLIBS}}', '-L', '${{env.NLIBS}}', '-L', '${{env.XLIBS}}', '-L', '${{env.STDLIBS}}']" build --target x86_64-unknown-linux-musl --release --verbose
+      run: ${{env.nix_prefix}} cargo --config "build.rustflags=['-L', '${{env.MUSLIBS}}', '-L', '${{env.ZLIBS}}', '-L', '${{env.NLIBS}}', '-L', '${{env.XLIBS}}', '-L', '${{env.FLIBS}}', '-L', '${{env.STDLIBS}}']" build --target x86_64-unknown-linux-musl --release --verbose
       
     - name: Inspect
       run: ls target/x86_64-unknown-linux-gnu/release
