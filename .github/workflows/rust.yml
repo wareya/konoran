@@ -33,7 +33,7 @@ jobs:
       run: ls
       
     - name: Extract LLVM
-      run: tar -x -J -f llvm-windows-amd64.tar.xz
+      run: 7z x llvm-windows-amd64.tar.xz
     
     - name: inspect
       run: ls
