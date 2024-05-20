@@ -12,7 +12,7 @@ jobs:
     permissions: write-all
     runs-on: ubuntu-latest
     env:
-      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#rustup nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c
+      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#musl.dev nixpkgs#rustup nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c
     steps:
     - uses: actions/checkout@v4
       
