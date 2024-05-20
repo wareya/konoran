@@ -42,6 +42,9 @@ jobs:
       run: ls $env:GITHUB_WORKSPACE/llvm-windows
 
     - name: inspect directly (2)
+      run: set LLVM_SYS_180_PREFIX="$env:GITHUB_WORKSPACE/llvm-windows" && echo $LLVM_SYS_180_PREFIX
+      
+    - name: inspect directly (3)
       run: set LLVM_SYS_180_PREFIX="$env:GITHUB_WORKSPACE/llvm-windows" && ls $LLVM_SYS_180_PREFIX
     
     - name: Build
