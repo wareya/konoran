@@ -33,7 +33,10 @@ jobs:
       run: ls -l llvm-windows/llvm-windows-amd64.tar.xz
     
     - name: Extract LLVM
-      run: tar -xvf llvm-windows/llvm-windows-amd64.tar.xz && ls
+      run: tar -xvf llvm-windows/llvm-windows-amd64.tar.xz
+    
+    - name: inspect
+      run: ls -l
     
     - name: Build
       run: cargo build --verbose
