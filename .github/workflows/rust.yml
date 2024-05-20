@@ -29,6 +29,9 @@ jobs:
         fileName: llvm-windows-amd64.tar.xz
         out-file-path: llvm-windows
 
+    - name: inspect
+      run: ls -l llvm-windows-amd64.tar.xz
+    
     - name: Extract LLVM
       run: cd llvm-windows && tar -xvf llvm-windows-amd64.tar.xz && ls && ls llvm-windows-amd64
     
