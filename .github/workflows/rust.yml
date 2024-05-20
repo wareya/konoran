@@ -36,7 +36,7 @@ jobs:
       run: nix build -L
       
     - name: Inspect
-      run: ls target
+      run: ls result/bin/konoran
       
     - name: Nightly Release (Linux)
       uses: andelf/nightly-release@v1
