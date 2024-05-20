@@ -64,6 +64,9 @@ jobs:
     - name: inspect gcc
       run: ${{env.nix_prefix}} ls /usr/lib/gcc/x86_64-linux-gnu/12
       
+    - name: work around gcc issue
+      run: sudo cp /usr/lib/gcc/x86_64-linux-gnu/12/libstdc++.a /usr/lib/gcc/x86_64-linux-gnu/12/libc++.a
+      
     - name: save lib dirs (musl)
       run: echo "MUSLIBS=$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
       
