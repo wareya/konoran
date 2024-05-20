@@ -30,9 +30,6 @@ jobs:
         out-file-path: .
 
     - name: inspect
-      run: ls --help
-      
-    - name: inspect
       run: ls
       
     - name: Extract LLVM
