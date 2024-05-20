@@ -59,9 +59,7 @@ jobs:
     #  run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/bin" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/nix-support" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root/lib" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root/lib/linux" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root/share" && echo "----"
     
     - name: inspect clang
-      run: ${{env.nix_prefix}} clang++ --print-file-name='libstdc++.a' && echo "----" &&
-        dirname "$(clang++ --print-file-name='libstdc++.a')" && echo "----"
-        ${{env.nix_prefix}} dirname "$(clang++ --print-file-name='libstdc++.a')" && echo "----"
+      run: ${{env.nix_prefix}} clang++ --print-file-name='libstdc++.a' && echo "----" && dirname "$(clang++ --print-file-name='libstdc++.a')" && echo "----"
       
     
     #- name: inspect gcc
