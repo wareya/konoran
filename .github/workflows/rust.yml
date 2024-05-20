@@ -61,6 +61,7 @@ jobs:
     - name: inspect clang
       run: ${{env.nix_prefix}} clang++ --print-file-name='libstdc++.a' && echo "----" &&
         dirname "$(clang++ --print-file-name='libstdc++.a')" && echo "----"
+        ls "$(dirname $(clang++ --print-file-name='libstdc++.a'))" && echo "----"
       
     
     #- name: inspect gcc
