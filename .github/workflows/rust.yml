@@ -35,8 +35,12 @@ jobs:
       run: mkdir target
            mkdir target/release &&
            mkdir target/release/deps &&
+           ls "$(nix build nixpkgs#musl.out --print-out-paths --no-link)" &&
+           echo "----" &&
            ls "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" &&
-           cp "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib/librt.a" target/release/deps
+           cp "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib/librt.a" target/release/deps &&
+           echo "----" &&
+           ls target/release/deps
       
     - name: Build
       run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo --config "target.x86_64-unknown-linux-musl.llvm-sys.rustc-link-search=['$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib']" build --target x86_64-unknown-linux-musl --release --verbose
