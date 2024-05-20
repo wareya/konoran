@@ -23,18 +23,6 @@ jobs:
     - name: test arch
       run: echo "${{ env.RUNNERCPUARCH }}"
       
-    #- name: download zlib source code
-    #  uses: robinraju/release-downloader@v1.10
-    #  with:
-    #    repository: madler/zlib
-    #    tag: v1.3.1
-    #    fileName: zlib-1.3.1.tar.gz 
-    #    out-file-path: .
-    #    extract: true
-      
-    #- name: inspect zlib
-    #  run: cd zlib-1.3.1 && ls . && echo "----"
-      
     - name: Use the determinate nix installer
       uses: DeterminateSystems/nix-installer-action@main
       with:
@@ -43,69 +31,17 @@ jobs:
     - name: load nix environment
       run: ${{env.nix_prefix}} ls
       
-    - name: inspect musl
-      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#musl.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" && echo "----"
-      
-    - name: inspect zlib
-      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib" && echo "----"
-      
-    - name: inspect ncurses
-      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.ncurses.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.ncurses.out --print-out-paths --no-link)/lib" && echo "----"
-      
-    - name: inspect libxml2
-      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)/lib" && echo "----"
-      
-    - name: inspect libffi
-      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)/lib" && echo "----"
-      
-    - name: inspect clang
-      run: ${{env.nix_prefix}} clang++ --print-file-name='libstdc++.a' && echo "----" && dirname "$(clang++ --print-file-name='libstdc++.a')" && echo "----"
-      
-    - name: inspect gcc
-      run: ${{env.nix_prefix}} ls /usr/lib/gcc/x86_64-linux-gnu/12
-      
-    - name: work around gcc issue
-      run: sudo cp /usr/lib/gcc/x86_64-linux-gnu/12/libstdc++.a /usr/lib/gcc/x86_64-linux-gnu/12/libc++.a
-      
-    - name: save lib dirs (musl)
-      run: echo "MUSLIBS=$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
-      
-    - name: save lib dirs (zlib)
-      run: echo "ZLIBS=$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
-      
-    - name: save lib dirs (curses)
-      run: echo "NLIBS=$(nix build nixpkgs#pkgsStatic.ncurses.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
-      
-    - name: save lib dirs (libxml2)
-      run: echo "XLIBS=$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
-      
-    - name: save lib dirs (libffi)
-      run: echo "FLIBS=$(nix build nixpkgs#pkgsStatic.libffi.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
-      
-    - name: save lib dirs (std) (hardcoded, danger!!!)
-      run: echo "STDLIBS=/usr/lib/gcc/x86_64-linux-gnu/12" >> $GITHUB_ENV
-      
-    - name: Install musl toolchain
-      run: ${{env.nix_prefix}} rustup target add x86_64-unknown-linux-musl
-      
-    - name: Become horror
-      run: mkdir target
-           mkdir target/release &&
-           mkdir target/release/deps &&
-           echo "$(nix build nixpkgs#musl.out --print-out-paths --no-link)" &&
-           echo "----" &&
-           ls "$(nix build nixpkgs#musl.out --print-out-paths --no-link)" &&
-           echo "----" &&
-           ls "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" &&
-           cp "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib/librt.a" target/release/deps &&
-           echo "----" &&
-           ls target/release/deps
-      
+    - name: set up cachix
+      run: nix-env -iA cachix -f https://cachix.org/api/v1/install
+
+    - name: use dependency cache
+      run: cachix use konoran-cache
+
     - name: Build
-      run: ${{env.nix_prefix}} cargo --config "build.rustflags=['-C', 'target-feature=+crt-static', '-C', 'default-linker-libraries=on', '-L', '${{env.MUSLIBS}}', '-L', '${{env.ZLIBS}}', '-L', '${{env.NLIBS}}', '-L', '${{env.XLIBS}}', '-L', '${{env.FLIBS}}', '-L', '${{env.STDLIBS}}']" build --target x86_64-unknown-linux-musl --release --verbose
+      run: nix build
       
     - name: Inspect
-      run: ls target/x86_64-unknown-linux-gnu/release
+      run: ls target/release
       
     - name: Nightly Release (Linux)
       uses: andelf/nightly-release@v1
