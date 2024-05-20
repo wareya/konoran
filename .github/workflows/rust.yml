@@ -27,13 +27,13 @@ jobs:
         repository: wareya/llvm-custom-builds
         tag: 18.x
         fileName: llvm-windows-amd64.tar.xz
-        out-file-path: llvm-windows
+        out-file-path: .
 
     - name: inspect
-      run: ls -l llvm-windows/llvm-windows-amd64.tar.xz
-    
+      run: ls -l
+      
     - name: Extract LLVM
-      run: tar -xvf llvm-windows/llvm-windows-amd64.tar.xz
+      run: tar -x -J --force-local -f llvm-windows-amd64.tar.xz
     
     - name: inspect
       run: ls -l
