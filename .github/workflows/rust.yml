@@ -31,7 +31,7 @@ jobs:
     - name: Build
       run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo build --target x86_64-unknown-linux-gnu --release --verbose
     - name: Run tests
-      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo test --target x86_64-unknown-linux-gnu --release --verbose
+      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo test --target x86_64-unknown-linux-gnu --verbose
       
     - name: Nightly Release (Linux)
       uses: andelf/nightly-release@v1
