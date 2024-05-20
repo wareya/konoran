@@ -37,12 +37,11 @@ jobs:
       with:
         source-revision: 7011c077ec491da410fbc39f68676b0908b9ce7e
       
+    - name: inspect zlib
+      run: cd zlib && ls . && echo "----" &&
+
     - name: compile zlib
-      run: ${{env.nix_prefix}} cd zlib && 
-        ls . &&
-        echo "----" &&
-        cmake -B .build -S . -G Ninja &&
-        cmake --build .build
+      run: ${{env.nix_prefix}} cmake -B .build -S . -G Ninja && cmake --build .build
 
     - name: inspect
       run: cd "${GITHUB_WORKSPACE}" && ls zlib && echo "---" && ls zlib/.build
