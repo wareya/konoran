@@ -36,7 +36,7 @@ jobs:
            mkdir target/release &&
            mkdir target/release/deps &&
            ls "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" &&
-           cp "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib/librt.a" /target/release/deps
+           cp "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib/librt.a" target/release/deps
       
     - name: Build
       run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo build --target x86_64-unknown-linux-musl --release --verbose
