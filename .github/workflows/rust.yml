@@ -39,7 +39,7 @@ jobs:
            cp "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib/librt.a" target/release/deps
       
     - name: Build
-      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on --config target.x86_64-unknown-linux-musl.llvm-sys.rustc-link-search=target/release/deps' cargo build --target x86_64-unknown-linux-musl --release --verbose
+      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo --config target.x86_64-unknown-linux-musl.llvm-sys.rustc-link-search=target/release/deps build --target x86_64-unknown-linux-musl --release --verbose
       
     - name: Inspect
       run: ls target/x86_64-unknown-linux-gnu/release
