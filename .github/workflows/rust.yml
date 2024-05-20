@@ -38,7 +38,7 @@ jobs:
         source-revision: 7011c077ec491da410fbc39f68676b0908b9ce7e
       
     - name: compile zlib
-      run: ${{env.nix_prefix}} mkdir zlib && cd zlib && 
+      run: ${{env.nix_prefix}} cd zlib && 
         ls . &&
         echo "----" &&
         cmake -B .build -S . -G Ninja &&
