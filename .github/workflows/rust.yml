@@ -35,6 +35,8 @@ jobs:
       run: mkdir target
            mkdir target/release &&
            mkdir target/release/deps &&
+           echo "$(nix build nixpkgs#musl.out --print-out-paths --no-link)" &&
+           echo "----" &&
            ls "$(nix build nixpkgs#musl.out --print-out-paths --no-link)" &&
            echo "----" &&
            ls "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" &&
