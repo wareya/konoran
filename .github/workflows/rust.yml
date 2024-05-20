@@ -40,6 +40,7 @@ jobs:
     - name: compile zlib
       run: ${{env.nix_prefix}} mkdir zlib && cd zlib && 
         nix develop nixpkgs#zlib &&
+        ls &&
         cmake -B .build -S . -G Ninja &&
         cmake --build .build
 
