@@ -30,7 +30,7 @@ jobs:
         out-file-path: llvm-windows
 
     - name: Extract LLVM
-      run: cd llvm-windows && tar xf llvm-windows-amd64.tar.xz && ls && ls llvm-windows-amd64
+      run: cd llvm-windows && tar -xf llvm-windows-amd64.tar.xz && ls && ls llvm-windows-amd64
     
     - name: Build
       run: cargo build --verbose
