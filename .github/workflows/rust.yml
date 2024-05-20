@@ -40,6 +40,9 @@ jobs:
       with:
         source-revision: 7011c077ec491da410fbc39f68676b0908b9ce7e
       
+    - name: load nix environment
+      run: ${{env.nix_prefix}} ls
+    
     - name: test musl-gcc
       run: ${{env.nix_prefix}} musl-gcc -v
     
