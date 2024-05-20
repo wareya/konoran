@@ -17,7 +17,7 @@ jobs:
     - name: print architecture
       run: printenv PROCESSOR_ARCHITECTURE
     - name: save arch
-      run: echo "RUNNERCPUARCH=$(printenv PROCESSOR_ARCHITECTURE)" >> $env:GITHUB_ENV
+      run: echo "RUNNERCPUARCH=$(printenv PROCESSOR_ARCHITECTURE)" | Out-File -FilePath $env:GITHUB_ENV -Append
     - name: test arch
       run: echo "${{ env.RUNNERCPUARCH }}"
 
