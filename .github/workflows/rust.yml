@@ -32,13 +32,13 @@ jobs:
       run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo build --target x86_64-unknown-linux-gnu --release --verbose
 
     - name: Inspect
-      run: ls target && echo "---" && ls target/release
+      run: ls target && echo "---" && ls target/release && echo "---" && ls target/x86_64-unknown-linux-gnu
       
     - name: Run tests
       run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo test --target x86_64-unknown-linux-gnu --verbose
       
     - name: Inspect (2)
-      run: ls target && echo "---" && ls target/release
+      run: ls target && echo "---" && ls target/release && echo "---" && ls target/x86_64-unknown-linux-gnu
       
     - name: Nightly Release (Linux)
       uses: andelf/nightly-release@v1
@@ -47,5 +47,5 @@ jobs:
       with:
         tag_name: "nightly-linux-${{ env.RUNNERCPUARCH }}"
         name: "Linux Nightly ${{ env.RUNNERCPUARCH }}"
-        files: "target/release/konoran*"
+        files: "target/x86_64-unknown-linux-gnu/konoran*"
     
