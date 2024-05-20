@@ -33,7 +33,7 @@ jobs:
       run: cachix use konoran-cache
 
     - name: Build Dynamic
-      run: nix build .#konoranStatic -L
+      run: nix build -L
 
     - name: Generate appimage
       run: nix bundle --bundler https://github.com/hcssmith/nix-appimage/archive/c4353dd70ed491ad0d1e4d8a61a11b0523f9ab09.tar.gz .#konoran
