@@ -48,8 +48,8 @@ jobs:
       run: $env:LLVM_SYS_180_PREFIX="$env:GITHUB_WORKSPACE/llvm-windows"; ls $env:LLVM_SYS_180_PREFIX
     
     - name: Build
-      run: $env:LLVM_SYS_180_PREFIX="$env:GITHUB_WORKSPACE/llvm-windows"; cargo build --verbose
-      
+      run: $env:LLVM_SYS_180_PREFIX="$env:GITHUB_WORKSPACE/llvm-windows"; cargo build --release
+
     - name: Nightly Release (Windows)
       uses: andelf/nightly-release@v1
       env:
