@@ -43,6 +43,9 @@ jobs:
     - name: load nix environment
       run: ${{env.nix_prefix}} ls
       
+    - name: test musl
+      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#musl.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" && echo "----"
+      
     - name: test zlib
       run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib" && echo "----"
       
