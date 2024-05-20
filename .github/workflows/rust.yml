@@ -44,7 +44,13 @@ jobs:
       run: ${{env.nix_prefix}} ls
 
     - name: test
-      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)" && echo "----"
+      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib" && echo "----"
+    
+    - name: save lib dirs (musl)
+      run: echo "MUSLIBS=$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
+      
+    - name: save lib dirs (zlib)
+      run: echo "ZLIBS=$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
     
     #- name: test musl-gcc
     #  run: ${{env.nix_prefix}} command -V musl-gcc
@@ -72,7 +78,7 @@ jobs:
            ls target/release/deps
       
     - name: Build
-      run: ${{env.nix_prefix}} cargo --config "build.rustflags=['-L', '$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib']" build --target x86_64-unknown-linux-musl --release --verbose
+      run: ${{env.nix_prefix}} cargo --config "build.rustflags=['-L', '${{env.MUSLIBS}}', '-L', '${{env.ZLIBS}}']" build --target x86_64-unknown-linux-musl --release --verbose
       
     - name: Inspect
       run: ls target/x86_64-unknown-linux-gnu/release
