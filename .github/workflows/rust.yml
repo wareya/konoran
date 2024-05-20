@@ -42,7 +42,7 @@ jobs:
       run: nix build .#konoranStatic -L
     
     - name: Rename static build
-      run: cp result/bin/konoran result/bin/konoran-static
+      run: cp result/bin/konoran konoran-static
     
     - name: Inspect
       run: ls result/bin/
@@ -57,5 +57,5 @@ jobs:
         body: "Built release for 64-bit Linux systems. AppImage supports JIT mode. Raw executable is statically linked and does not support JIT mode, but does support everything else."
         files: |
           "konoran-unstable-x86_64.AppImage"
-          "result/bin/konoran"
+          "konoran-static"
     
