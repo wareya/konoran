@@ -12,7 +12,7 @@ jobs:
     permissions: write-all
     runs-on: ubuntu-latest
     env:
-      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#glibc nixpkgs#cargo nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c
+      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#rustup nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c
     steps:
     - uses: actions/checkout@v4
       
@@ -29,13 +29,13 @@ jobs:
         source-revision: 7011c077ec491da410fbc39f68676b0908b9ce7e
       
     - name: Build
-      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo build --target x86_64-unknown-linux-gnu --release --verbose
+      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo build --target x86_64-unknown-linux-musl --release --verbose
 
     - name: Inspect
       run: ls target/x86_64-unknown-linux-gnu/release
       
     - name: Run tests
-      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo test --target x86_64-unknown-linux-gnu --verbose
+      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static -C default-linker-libraries=on' cargo test --target x86_64-unknown-linux-musl --verbose
       
     - name: Inspect (2)
       run: ls target/x86_64-unknown-linux-gnu/release
