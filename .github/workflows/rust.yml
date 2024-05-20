@@ -45,5 +45,6 @@ jobs:
       with:
         tag_name: "nightly-linux-${{ env.RUNNERCPUARCH }}"
         name: "Linux Nightly ${{ env.RUNNERCPUARCH }}"
+        body: "Statically built release for 64-bit Linux systems. Does not support JIT mode, but does support outputting object, asm, and llvm ir files."
         files: "result/bin/konoran*"
     
