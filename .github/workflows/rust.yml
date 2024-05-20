@@ -33,10 +33,10 @@ jobs:
       run: cachix use konoran-cache
 
     - name: Build
-      run: nix build
+      run: nix build -L
       
     - name: Inspect
-      run: ls target/release
+      run: ls target
       
     - name: Nightly Release (Linux)
       uses: andelf/nightly-release@v1
