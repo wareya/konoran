@@ -13,14 +13,14 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
-    
+      
     - name: print architecture
       run: printenv PROCESSOR_ARCHITECTURE
     - name: save arch
       run: echo "RUNNERCPUARCH=$(printenv PROCESSOR_ARCHITECTURE)" >> $env:GITHUB_ENV
     - name: test arch
       run: echo "${{ env.RUNNERCPUARCH }}"
-
+      
     - name: Download LLVM
       uses: robinraju/release-downloader@v1.10
       with:
@@ -28,21 +28,18 @@ jobs:
         tag: 18.x
         fileName: llvm-windows-amd64.tar.xz
         out-file-path: llvm-windows
-
+      
     - name: inspect
       run: ls llvm-windows
       
     - name: Extract LLVM
       run: cd llvm-windows && 7z x llvm-windows-amd64.tar.xz && 7z x llvm-windows-amd64.tar
-    
+      
     - name: inspect
       run: ls llvm-windows
-
-    - name: set envar
-      run: echo "LLVM_SYS_180_PREFIX=llvm-windows" >> $env:GITHUB_ENV
       
     - name: Build
-      run: cargo build --verbose
+      run: set "LLVM_SYS_180_PREFIX=llvm-windows" && cargo build --verbose
       
     - name: Nightly Release (Windows)
       uses: andelf/nightly-release@v1
