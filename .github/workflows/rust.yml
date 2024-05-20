@@ -36,7 +36,7 @@ jobs:
       run: nix build -L
       
     - name: Inspect
-      run: ls result/bin/konoran
+      run: ls result/bin/
       
     - name: Nightly Release (Linux)
       uses: andelf/nightly-release@v1
@@ -45,5 +45,5 @@ jobs:
       with:
         tag_name: "nightly-linux-${{ env.RUNNERCPUARCH }}"
         name: "Linux Nightly ${{ env.RUNNERCPUARCH }}"
-        files: "target/x86_64-unknown-linux-gnu/release/konoran*"
+        files: "result/bin/konoran*"
     
