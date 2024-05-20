@@ -58,8 +58,11 @@ jobs:
     #- name: inspect clang
     #  run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/bin" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/nix-support" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root/lib" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root/lib/linux" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/resource-root/share" && echo "----"
     
-    - name: inspect gcc
-      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#gcc.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#gcc.out --print-out-paths --no-link)" && echo "----"
+    - name: inspect clang
+      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#clang-18.1.5-lib.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#clang-18.1.5-lib.out --print-out-paths --no-link)" && echo "----"
+    
+    #- name: inspect gcc
+    #  run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#gcc.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#gcc.out --print-out-paths --no-link)" && echo "----"
       
     - name: save lib dirs (musl)
       run: echo "MUSLIBS=$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
