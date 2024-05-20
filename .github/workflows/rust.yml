@@ -38,8 +38,8 @@ jobs:
         source-revision: 7011c077ec491da410fbc39f68676b0908b9ce7e
       
     - name: compile zlib
-      run: ${{env.nix_prefix}} cd llvm && 
-        nix develop nixpkgs#llvm &&
+      run: ${{env.nix_prefix}} mkdir zlib && cd zlib && 
+        nix develop nixpkgs#zlib &&
         cmake -B .build -S . -G Ninja &&
         cmake --build .build
 
