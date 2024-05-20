@@ -61,8 +61,8 @@ jobs:
     - name: inspect clang
       run: ${{env.nix_prefix}} clang++ --print-file-name='libstdc++.a' && echo "----"
     
-    #- name: inspect gcc
-    #  run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#gcc.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#gcc.out --print-out-paths --no-link)" && echo "----"
+    - name: inspect gcc
+      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#gcc.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#gcc.out --print-out-paths --no-link)" && echo "----"
       
     - name: save lib dirs (musl)
       run: echo "MUSLIBS=$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
