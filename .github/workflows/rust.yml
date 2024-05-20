@@ -8,6 +8,43 @@ env:
   CARGO_TERM_COLOR: always
   
 jobs:
+  build-windows:
+    permissions: write-all
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: print architecture
+      run: printenv PROCESSOR_ARCHITECTURE
+    - name: save arch
+      run: echo "RUNNERCPUARCH=$(printenv PROCESSOR_ARCHITECTURE)" >> $GITHUB_ENV
+    - name: test arch
+      run: echo "${{ env.RUNNERCPUARCH }}"
+
+    - name: Download LLVM
+      uses: robinraju/release-downloader@v1.10
+      with:
+        repository: wareya/llvm-custom-builds
+        tag: 18.x
+        fileName: llvm-windows-amd64.tar.xz
+        out-file-path: llvm-windows
+
+    - name: Extract LLVM
+      run: cd llvm-windows && tar xf llvm-windows-amd64.tar.xz && ls && ls llvm-windows-amd64
+    
+    - name: Build
+      run: cargo build --verbose
+      
+    - name: Nightly Release (Windows)
+      uses: andelf/nightly-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: "nightly-win32-${{ env.RUNNERCPUARCH }}"
+        name: "Windows Nightly ${{ env.RUNNERCPUARCH }}"
+        body: "Built release for 64-bit Windows systems. Supports JIT."
+        files: |
+          target/release/konoran*
   build:
     permissions: write-all
     runs-on: ubuntu-24.04
