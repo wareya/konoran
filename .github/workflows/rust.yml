@@ -12,7 +12,7 @@ jobs:
     permissions: write-all
     runs-on: ubuntu-latest
     env:
-      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#gcc nixpkgs#musl.dev nixpkgs#pkgsStatic.zlib nixpkgs#pkgsStatic.ncurses nixpkgs#pkgsStatic.libxml2 nixpkgs#rustup nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c
+      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#gcc nixpkgs#musl.dev nixpkgs#pkgsStatic.zlib nixpkgs#pkgsStatic.ncurses nixpkgs#pkgsStatic.libxml2 nixpkgs#rustup nixpkgs#llvmPackages_18.libllvm.dev nixpkgs#llvmPackages_18.clang -c
     steps:
     - uses: actions/checkout@v4
       
@@ -43,17 +43,20 @@ jobs:
     - name: load nix environment
       run: ${{env.nix_prefix}} ls
       
-    - name: test musl
+    - name: inspect musl
       run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#musl.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" && echo "----"
       
-    - name: test zlib
+    - name: inspect zlib
       run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib" && echo "----"
       
-    - name: test ncurses
+    - name: inspect ncurses
       run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.ncurses.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.ncurses.out --print-out-paths --no-link)/lib" && echo "----"
       
-    - name: test libxml2
+    - name: inspect libxml2
       run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)/lib" && echo "----"
+      
+    - name: inspect clang
+      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#llvmPackages_18.clang.out --print-out-paths --no-link)/lib" && echo "----"
       
     - name: save lib dirs (musl)
       run: echo "MUSLIBS=$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
@@ -84,7 +87,7 @@ jobs:
            ls target/release/deps
       
     - name: Build
-      run: ${{env.nix_prefix}} cargo --config "build.rustflags=['-C', 'target-feature=+crt-static', '-C', 'default-linker-libraries=on', '-L', '${{env.MUSLIBS}}', '-L', '${{env.ZLIBS}}', '-L', '${{env.NLIBS}}', '-L', '${{env.XLIBS}}']" build --target x86_64-unknown-linux-musl --release --verbose
+      run: ${{env.nix_prefix}} cargo --config "build.rustflags=['-L', '${{env.MUSLIBS}}', '-L', '${{env.ZLIBS}}', '-L', '${{env.NLIBS}}', '-L', '${{env.XLIBS}}']" build --target x86_64-unknown-linux-musl --release --verbose
       
     - name: Inspect
       run: ls target/x86_64-unknown-linux-gnu/release
