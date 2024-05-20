@@ -11,8 +11,6 @@ jobs:
   build:
     permissions: write-all
     runs-on: ubuntu-24.04
-    env:
-      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#binutils nixpkgs#gcc nixpkgs#musl.dev nixpkgs#pkgsStatic.zlib nixpkgs#pkgsStatic.libffi nixpkgs#pkgsStatic.ncurses nixpkgs#pkgsStatic.libxml2 nixpkgs#rustup nixpkgs#pkgsStatic.llvmPackages_18.libllvm.dev nixpkgs#llvmPackages_18.clang -c
     steps:
     - uses: actions/checkout@v4
       
@@ -27,9 +25,6 @@ jobs:
       uses: DeterminateSystems/nix-installer-action@main
       with:
         source-revision: 7011c077ec491da410fbc39f68676b0908b9ce7e
-      
-    - name: load nix environment
-      run: ${{env.nix_prefix}} ls
       
     - name: set up cachix
       run: nix-env -iA cachix -f https://cachix.org/api/v1/install
