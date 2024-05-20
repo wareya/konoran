@@ -12,7 +12,7 @@ jobs:
     permissions: write-all
     runs-on: ubuntu-latest
     env:
-      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#gcc nixpkgs#musl.dev nixpkgs#pkgsStatic.zlib nixpkgs#rustup nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c
+      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#gcc nixpkgs#musl.dev nixpkgs#pkgsStatic.zlib nixpkgs#pkgsStatic.ncurses nixpkgs#pkgsStatic.libxml2 nixpkgs#rustup nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c
     steps:
     - uses: actions/checkout@v4
       
@@ -43,14 +43,24 @@ jobs:
     - name: load nix environment
       run: ${{env.nix_prefix}} ls
 
-    - name: test
+
+    - name: test zlib
       run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib" && echo "----"
+    
+    - name: test ncurses
+      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.ncurses.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.ncurses.out --print-out-paths --no-link)/lib" && echo "----"
+    
+    - name: test libxml2
+      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)/lib" && echo "----"
     
     - name: save lib dirs (musl)
       run: echo "MUSLIBS=$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
       
-    - name: save lib dirs (zlib)
-      run: echo "ZLIBS=$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
+    - name: copy zlib libs into musl libs dir
+      run: cp "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib/*" "${{env.MUSLIBS}}"
+    
+    - name: copy zlib libs into musl libs dir
+      run: cp "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)/lib/*" "${{env.MUSLIBS}}"
     
     #- name: test musl-gcc
     #  run: ${{env.nix_prefix}} command -V musl-gcc
@@ -78,7 +88,7 @@ jobs:
            ls target/release/deps
       
     - name: Build
-      run: ${{env.nix_prefix}} cargo --config "build.rustflags=['-L', '${{env.MUSLIBS}}', '-L', '${{env.ZLIBS}}']" build --target x86_64-unknown-linux-musl --release --verbose
+      run: ${{env.nix_prefix}} cargo --config "build.rustflags=['-L', '${{env.MUSLIBS}}']" build --target x86_64-unknown-linux-musl --release --verbose
       
     - name: Inspect
       run: ls target/x86_64-unknown-linux-gnu/release
