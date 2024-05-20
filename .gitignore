@@ -8,3 +8,8 @@ target/
 *.asm
 *.c
 *.pdb
+
+# Nix result symlinks
+# N.B.: These are symlinks, so you can't add / to the end.
+result
+result-*
