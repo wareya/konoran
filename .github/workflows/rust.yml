@@ -61,6 +61,9 @@ jobs:
     - name: inspect clang
       run: ${{env.nix_prefix}} clang++ --print-file-name='libstdc++.a' && echo "----" && dirname "$(clang++ --print-file-name='libstdc++.a')" && echo "----"
       
+    - name: inspect gcc
+      run: ${{env.nix_prefix}} ls /usr/lib/gcc/x86_64-linux-gnu/12
+      
     - name: save lib dirs (musl)
       run: echo "MUSLIBS=$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
       
