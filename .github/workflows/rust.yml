@@ -15,7 +15,7 @@ jobs:
     - uses: actions/checkout@v4
       
     - name: inspect directly (2)
-      run: set "LLVM_SYS_180_PREFIX=$env:GITHUB_WORKSPACE/llvm-windows" && call echo %LLVM_SYS_180_PREFIX%
+      run: set "LLVM_SYS_180_PREFIX=$env:GITHUB_WORKSPACE/llvm-windows" && echo $env:LLVM_SYS_180_PREFIX
       
     - name: print architecture
       run: printenv PROCESSOR_ARCHITECTURE
