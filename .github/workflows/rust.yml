@@ -39,7 +39,7 @@ jobs:
       run: ls llvm-windows
 
     - name: set envar
-      run: echo "LLVM_SYS_180_PREFIX=llvm-windows" >> $GITHUB_ENV
+      run: echo "LLVM_SYS_180_PREFIX=llvm-windows" >> $env:GITHUB_ENV
       
     - name: Build
       run: cargo build --verbose
