@@ -37,9 +37,12 @@ jobs:
     
     - name: inspect
       run: ls llvm-windows
-    
+
+    - name: set envar
+      run: echo "LLVM_SYS_180_PREFIX=llvm-windows" >> $GITHUB_ENV
+      
     - name: Build
-      run: LLVM_SYS_180_PREFIX=llvm-windows cargo build --verbose
+      run: cargo build --verbose
       
     - name: Nightly Release (Windows)
       uses: andelf/nightly-release@v1
