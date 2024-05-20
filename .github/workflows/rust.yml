@@ -27,16 +27,16 @@ jobs:
         repository: wareya/llvm-custom-builds
         tag: 18.x
         fileName: llvm-windows-amd64.tar.xz
-        out-file-path: .
+        out-file-path: llvm-windows
 
     - name: inspect
-      run: ls
+      run: ls llvm-windows
       
     - name: Extract LLVM
-      run: 7z x llvm-windows-amd64.tar.xz
+      run: cd llvm-windows && 7z x llvm-windows-amd64.tar.xz && 7z x llvm-windows-amd64.tar
     
     - name: inspect
-      run: ls llvm-windows-amd64.tar
+      run: ls llvm-windows
     
     - name: Build
       run: LLVM_SYS_180_PREFIX=llvm-windows cargo build --verbose
