@@ -42,6 +42,9 @@ jobs:
       
     - name: load nix environment
       run: ${{env.nix_prefix}} ls
+
+    - name: test
+      run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#pkgsStatic.zlib.out --print-out-paths --no-link)" && echo "----"
     
     #- name: test musl-gcc
     #  run: ${{env.nix_prefix}} command -V musl-gcc
