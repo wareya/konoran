@@ -12,7 +12,7 @@ jobs:
     permissions: write-all
     runs-on: ubuntu-latest
     env:
-      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#gcc nixpkgs#musl.dev nixpkgs#rustup nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c
+      nix_prefix: nix shell -i -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/33d1e753c82ffc557b4a585c77de43d4c922ebb5.tar.gz nixpkgs#coreutils nixpkgs#gcc nixpkgs#musl nixpkgs#musl.dev nixpkgs#rustup nixpkgs#llvmPackages_18.libllvm.dev nixpkgs\#llvmPackages_18.clang -c
     steps:
     - uses: actions/checkout@v4
       
@@ -40,6 +40,9 @@ jobs:
       with:
         source-revision: 7011c077ec491da410fbc39f68676b0908b9ce7e
       
+    - name: test musl-gcc
+      run: ${{env.nix_prefix}} musl-gcc -v
+    
     - name: compile zlib
       run: ${{env.nix_prefix}} ls . && echo "----" && cd zlib-1.3.1 && cmake --help && cmake -B .build -S . -DCMAKE_C_COMPILER=musl-gcc -DCMAKE_BUILD_TYPE=Release && cmake --build .build
 
