@@ -39,7 +39,7 @@ jobs:
       run: ls llvm-windows
       
     - name: Build
-      run: set "LLVM_SYS_180_PREFIX=llvm-windows" && cargo build --verbose
+      run: set "LLVM_SYS_180_PREFIX=${{GITHUB_WORKSPACE}}/llvm-windows" && cargo build --verbose
       
     - name: Nightly Release (Windows)
       uses: andelf/nightly-release@v1
