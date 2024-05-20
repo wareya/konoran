@@ -1,8 +1,12 @@
 # Konoran
 
-Want to use konoran's reference implementation as a library? Docs are here! <https://wareya.github.io/konoran/konoran>
-
   <img align="right" width="380" src="logo.png" style="float: right">
+
+Library docs here: <https://wareya.github.io/konoran/konoran>
+
+Compiler binaries here:
+- [Windows](https://github.com/wareya/konoran/releases/tag/nightly-win32-AMD64)
+- [Linux](https://github.com/wareya/konoran/releases/tag/nightly-linux-x86_64)
 
 Konoran is a very simple low-level programming language (simpler than C) designed to be used as a compiler target. It is meant to be human readable and writeable, and provide high-level features like structs and arrays. At the same time, it aims to be simple enough that a new, from-scratch reimplementation of Konoran can (in theory) be built by a single skilled developer given a few weeks. The core of the compiler is under 3000 LoC (lines of code) long.
 
