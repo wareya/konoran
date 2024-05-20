@@ -41,6 +41,7 @@ jobs:
       run: ${{env.nix_prefix}} mkdir zlib && cd zlib && 
         nix develop nixpkgs#zlib &&
         ls &&
+        echo "----" &&
         cmake -B .build -S . -G Ninja &&
         cmake --build .build
 
