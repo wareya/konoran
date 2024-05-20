@@ -29,9 +29,9 @@ jobs:
         source-revision: 7011c077ec491da410fbc39f68676b0908b9ce7e
       
     - name: Build
-      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --verbose
+      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static' cargo build --target x86_64-unknown-linux-gnu --release --verbose
     - name: Run tests
-      run: ${{env.nix_prefix}} cargo test --release --verbose
+      run: ${{env.nix_prefix}} env RUSTFLAGS='-C target-feature=+crt-static' cargo test --target x86_64-unknown-linux-gnu --release --verbose
       
     - name: Nightly Release (Linux)
       uses: andelf/nightly-release@v1
