@@ -33,7 +33,7 @@ jobs:
         extract: true
       
     - name: inspect zlib
-      run: cd zlib && ls . && echo "----" &&
+      run: cd zlib && ls . && echo "----"
 
     - name: Use the determinate nix installer
       uses: DeterminateSystems/nix-installer-action@main
