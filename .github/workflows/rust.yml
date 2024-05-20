@@ -30,13 +30,16 @@ jobs:
         out-file-path: .
 
     - name: inspect
-      run: ls -h
+      run: ls --help
+      
+    - name: inspect
+      run: ls
       
     - name: Extract LLVM
-      run: tar -x -J --force-local -f llvm-windows-amd64.tar.xz
+      run: tar -x -J -f llvm-windows-amd64.tar.xz
     
     - name: inspect
-      run: ls -h
+      run: ls
     
     - name: Build
       run: cargo build --verbose
