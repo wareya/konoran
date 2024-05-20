@@ -1,4 +1,4 @@
-Warpainter is licensed under the Apache License v2.0 with the LLVM exception
+Konoran is licensed under the Apache License v2.0 with the LLVM exception
 and a custom exception. They follow:
 
 

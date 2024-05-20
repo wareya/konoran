@@ -150,9 +150,9 @@ Global constants must have initializers, and those initializers must be folded d
 
 Global variables and constants are visible to the bodies of all functions defined in the current module, including functions defined above them.
 
-Global constant initializers *must* be folded down into known values at compile time, and *require* initializers.
+Global constant initializers *must* be folded down into known values at compile time, and *require* initializers. Global constant initializers cannot contain function calls as konoran doesn't support constexpr functions, only constexpr expressions.
 
-Global constants may not be modified and the compiler is allowed to assume that they never change from what is computed during at compile time. The initializers of global constants can see and refer to the values of earlier global constants that were defined above them in the module file.
+Global constants may not be modified and the compiler is allowed to assume that they never change from what is computed during at compile time.
 
 Global constants are not visible to other modules.
 
@@ -161,6 +161,8 @@ Global constants are not visible to other modules.
 Within a single module, two structs cannot have the same name, two functions cannot have the same name, and two global constants or global variables cannot have the same name.
 
 ### 3.4 - Module component visibility rules
+
+The initializers of global variables/constants can see and refer to the values of earlier global variables/constants that were defined above them in the module file, and not ones that are defined below them.
 
 Structs are not exposed to other modules. If two modules want to use the same struct they need to redefine it.
 
@@ -677,7 +679,7 @@ For numbers:
 ```
 The math operators result in the same type. The equality operators result in a u8 containing either 0 (false) or 1 (true).
 
-For integers, operators are defined trivially. (Integers are always two's complement, and integer division truncates the remainder.) For floats, they're defined according to IEEE 754.
+For integers, operators are defined trivially. (Integers are always two's complement, with overflow being wraparound, and integer division truncates the remainder.) For floats, they're defined according to IEEE 754.
 
 #### 8.3.1.1 - Integer-specific unsafe numeric infix operator variants
 
@@ -861,7 +863,7 @@ Konoran has a `constexpr` pseudo-operator that looks like e.g. `constexpr (16u64
 
 Expressions inside of the `constexpr` operator must be guaranteed to be const-foldable down to a specific literal value at compile time, with no runtime computation of the inside result. However, if the implementation has separate "optimizations" and "no optimizations" modes, the "no optimizations" mode is allowed to not perform constant folding. If there are no such separate modes, the implementation must perform constant folding.
 
-If a `constexpr` expression is being assigned to a `constexpr` variable, then it must be folded down during compilation, even if the implementation has a "no optimizations" mode and is configured to use it. Then, if the implementation supports static memory, this value must be stored in static memory, not loaded into memory piecemeal at runtime.
+If a `constexpr` expression is being assigned to a `constexpr` variable, then it must be folded down during compilation, even if the implementation has a "no optimizations" mode and is configured to use it. Then, if the implementation supports static memory, this variable must be stored in static memory, not loaded into memory piecemeal at runtime.
 
 ## 9 - Generally undefined behaviors
 

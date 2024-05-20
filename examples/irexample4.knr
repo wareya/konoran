@@ -123,7 +123,21 @@ void main()
     print_float(('ÿ') as f64);
     print_float(('𠂌'u32) as f64);
     
+    print_float(third); // 943.05
+    
     return;
 }
 
 constexpr f64 gkue3 = 91439.10f64;
+
+constexpr f64 first = 943.05f64;
+//constexpr f64 second = third; // invalid; not declared yet
+//f64 second = third; // also invalid
+constexpr f64 third = first;
+
+f64 myfunc()
+{
+    return 9641.9f64;
+}
+
+//constexpr f64 nnn = myfunc(); // invalid; not constexpr
