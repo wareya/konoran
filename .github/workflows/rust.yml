@@ -61,10 +61,6 @@ jobs:
     - name: inspect clang
       run: ${{env.nix_prefix}} clang++ --print-file-name='libstdc++.a' && echo "----" && dirname "$(clang++ --print-file-name='libstdc++.a')" && echo "----"
       
-    
-    #- name: inspect gcc
-    #  run: ${{env.nix_prefix}} echo "$(nix build nixpkgs#gcc.out --print-out-paths --no-link)" && echo "----" && ls "$(nix build nixpkgs#gcc.out --print-out-paths --no-link)" && echo "----"
-      
     - name: save lib dirs (musl)
       run: echo "MUSLIBS=$(nix build nixpkgs#musl.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
       
@@ -76,6 +72,9 @@ jobs:
       
     - name: save lib dirs (libxml2)
       run: echo "XLIBS=$(nix build nixpkgs#pkgsStatic.libxml2.out --print-out-paths --no-link)/lib" >> $GITHUB_ENV
+      
+    - name: save lib dirs (std) (hardcoded, danger!!!)
+      run: echo "STDLIBS=/usr/lib/gcc/x86_64-linux-gnu/12" >> $GITHUB_ENV
       
     - name: Install musl toolchain
       run: ${{env.nix_prefix}} rustup target add x86_64-unknown-linux-musl
@@ -94,7 +93,7 @@ jobs:
            ls target/release/deps
       
     - name: Build
-      run: ${{env.nix_prefix}} cargo --config "build.rustflags=['-L', '${{env.MUSLIBS}}', '-L', '${{env.ZLIBS}}', '-L', '${{env.NLIBS}}', '-L', '${{env.XLIBS}}']" build --target x86_64-unknown-linux-musl --release --verbose
+      run: ${{env.nix_prefix}} cargo --config "build.rustflags=['-L', '${{env.MUSLIBS}}', '-L', '${{env.ZLIBS}}', '-L', '${{env.NLIBS}}', '-L', '${{env.XLIBS}}', '-L', '${{env.STDLIBS}}']" build --target x86_64-unknown-linux-musl --release --verbose
       
     - name: Inspect
       run: ls target/x86_64-unknown-linux-gnu/release
