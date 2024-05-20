@@ -37,7 +37,13 @@ jobs:
       
     - name: inspect
       run: ls llvm-windows
-      
+
+    - name: inspect
+      run: ls ${{ env.GITHUB_WORKSPACE }}/llvm-windows
+
+    - name: inspect
+      run: set "LLVM_SYS_180_PREFIX=${{ env.GITHUB_WORKSPACE }}/llvm-windows" && ls %LLVM_SYS_180_PREFIX%
+    
     - name: Build
       run: set "LLVM_SYS_180_PREFIX=${{ env.GITHUB_WORKSPACE }}/llvm-windows" && cargo build --verbose
       
