@@ -32,12 +32,21 @@ jobs:
     - name: use dependency cache
       run: cachix use konoran-cache
 
-    - name: Build
-      run: nix build -L
-      
+    - name: Build Dynamic
+      run: nix build .#konoranStatic -L
+
+    - name: Generate appimage
+      run: nix bundle --bundler https://github.com/hcssmith/nix-appimage/archive/c4353dd70ed491ad0d1e4d8a61a11b0523f9ab09.tar.gz .#konoran
+    
+    - name: Build Static
+      run: nix build .#konoranStatic -L
+    
+    - name: Rename static build
+      run: cp result/bin/konoran result/bin/konoran-static
+    
     - name: Inspect
       run: ls result/bin/
-      
+    
     - name: Nightly Release (Linux)
       uses: andelf/nightly-release@v1
       env:
@@ -45,6 +54,8 @@ jobs:
       with:
         tag_name: "nightly-linux-${{ env.RUNNERCPUARCH }}"
         name: "Linux Nightly ${{ env.RUNNERCPUARCH }}"
-        body: "Statically built release for 64-bit Linux systems. Does not support JIT mode, but does support outputting object, asm, and llvm ir files."
-        files: "result/bin/konoran*"
+        body: "Built release for 64-bit Linux systems. AppImage supports JIT mode. Raw executable is statically linked and does not support JIT mode, but does support everything else."
+        files: |
+          "konoran-unstable-x86_64.AppImage"
+          "result/bin/konoran"
     
