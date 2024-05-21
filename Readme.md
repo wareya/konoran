@@ -114,7 +114,7 @@ This software is licensed with the LLVM exceptions on top of the
 Apache 2.0 license. These exceptions make it compatible with the GNU
 GPLv2 and also waive certain restrictions when distributing binaries.
 
-This software is licensed an additional, custom exception that makes the
+This software is licensed with an additional, custom exception that makes the
 Apache 2.0 license more permissive by not requiring modified source
 files to be marked with prominent notices. This exception can be
 removed, turning the license into pure `Apache-2.0 WITH LLVM-exception`.
