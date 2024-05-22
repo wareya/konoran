@@ -369,6 +369,8 @@ There is no braceless goto variant for compound if-else statements. "if-goto" is
 
 Konoran is strongly typed and has primitive/intrinsic numeric types, struct types, array types, and pointer types (including function pointers).
 
+Konoran has a `void` type, but it is only used as the return type of functions that do not return a value. It is forbidden in all other contexts, including as a pointee type for pointers. (Type punning via pointers is explicitly allowed; instead of void pointers, use `ptr(u8)`.)
+
 ### 5.1 - Numeric types
 
 Konoran has the following primitive/intrinsic numeric types:
@@ -398,6 +400,8 @@ Konoran has the following composite types:
 struct <name> { type1 var1, type2 var2, ... }
 array(type, len)
 ```
+
+Zero-size composite types are illegal.
 
 #### 5.3.1 - Struct type semantics
 
