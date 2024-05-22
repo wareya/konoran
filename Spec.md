@@ -789,6 +789,19 @@ In particular, non-constexpr temporary aggregates pointed to by valid pointers c
 
 Pointers derived as above only need to remain valid as long as the code that derives them is actually using them. So, an optimizer can eliminate the storage for a variable or an automatic storage slot if it knows that it's no longer referred to and that all pointers correctly derived from it are dead.
 
+If the address-of operator is used on a struct/array value in a loop, then the same storage location is used for that given address-of operator on each successive iteration of the loop, however that storage location must still remain valid until the function exits (or until the compiler knows that it cannot be legally accessed). For example:
+
+``php
+loophead:
+    ptr(array(u8, 2)) myptr = &[0u8, 14u8];
+    ptr(array(u8, 2)) myptr2 = &[0u8, 14u8];
+    if (read_input() == '\n') // assume that such a function exists
+        return;
+    goto loophead;
+```
+
+In the above example, `myptr` has the same value on each iteration, and `myptr2` has the same value on each iteration. However, they have different values, i.e. point at arrays in different storage locations. Each time the loop runs, the arrays inside the storage locations are refreshed with the array values whose addresses are being taken, before their addresses are taken.
+
 ##### 8.4.1.2 - Type punning with correctly-derived pointers
 
 Accessing variables via a pointer to a different type is allowed; for example, accessing a `f32` via a `ptr(u16)` pointing at the first or third byte of the `f32` is allowed. For example, building off the above array pointer example, the following code is allowed:
