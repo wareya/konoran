@@ -683,7 +683,7 @@ For numbers:
 ```
 The math operators result in the same type. The equality operators result in a u8 containing either 0 (false) or 1 (true).
 
-For integers, operators are defined trivially. (Integers are always two's complement, with overflow being wraparound, and integer division truncates the remainder.) For floats, they're defined according to IEEE 754.
+For integers, operators are defined trivially. Integers are always two's complement, with overflow being wraparound (even for signed integers), and integer division truncates the remainder (towards zero). For floats, they're defined according to IEEE 754.
 
 #### 8.3.1.1 - Integer-specific unsafe numeric infix operator variants
 
