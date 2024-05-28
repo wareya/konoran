@@ -568,7 +568,7 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
     Does nothing. Returns original value.
 
 (pointer val) as <different pointer type>
-    Reinterprets the pointer as pointing at a different type. Legal even if casting between function pointer and normal pointer, however the resulting pointer may be illegal to use depending on how the platform defines the behavior of such an operation.
+    Reinterprets the pointer as pointing at a different type. Legal even if casting between function pointer and normal pointer; however, the resulting pointer may be illegal to use depending on how the platform defines the behavior of such an operation. (The existence of illegal-to-use pointers in memory is not, itself, UB or illegal.)
 
 (integer_val) as <integer type of same size>
     Converts an integer to an integer of a different signedness. Does not modify the underlying bit representation of the integer.
@@ -583,7 +583,7 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
     Converts an integer to a floating-point number. If the integer cannot be represented exactly, the closest value is given.
 
 (float_val) as <integer type>
-    Converts an floating-point number to an integer type. If the value is outside of the integer range, either the minimum or maximum integer value is given, whichever is closer.
+    Converts an floating-point number to an integer type. If the value is outside of the integer range, either the minimum or maximum integer value is given, whichever is closer. If the value is NaN, either zero, maximum, or minimum integer value is given, according to the implementation.
 ```
 ### 7.2 - Unsafe value casts
 ```
