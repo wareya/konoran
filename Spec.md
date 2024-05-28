@@ -381,6 +381,8 @@ u8, i8, u16, i16, u32, i32, u64, i64, f32, f64
 
 These are unsigned and signed integers (two's complement) and IEEE-compliant binary floating point numbers. u8 has a bit width of 8 and a byte width of 1, u16 has a bit width of 16 and a byte width of 2, etc.
 
+The implementation is allowed to assume that signaling NaNs act like quiet NaNs in arbitrary situations, i.e. operating on a NaN is not guaranteed to have signalling side effects.
+
 ### 5.2 - Pointer types
 
 Konoran has the following pointer types:
