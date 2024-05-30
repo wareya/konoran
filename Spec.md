@@ -768,7 +768,7 @@ This operation produces a pointer (`ptr(type)`) pointing at the variable's value
 
 ##### 8.4.1.1 - Pointer-to clarification for aggregate values
 
-"Aggregate (struct/array) values" does not refer to variables containing structs/arrays. Those would be trivial to take the address of even if this language was not used. Rather, this language means that the following code is valid:
+The phrasing "aggregate (struct/array) values" does not refer to variables containing structs/arrays. Those would be trivial to take the address of even if this phrasing was not used. Rather, this language means that the following code is valid:
 
 ```php
 ptr(array(u8, 2)) myptr = &[0u8, 14u8];
