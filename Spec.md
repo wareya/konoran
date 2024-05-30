@@ -768,7 +768,7 @@ This operation produces a pointer (`ptr(type)`) pointing at the variable's value
 
 ##### 8.4.1.1 - Pointer-to clarification for aggregate values
 
-The phrasing "aggregate (struct/array) values" does not refer to variables containing structs/arrays. Those would be trivial to take the address of even if this phrasing was not used. Rather, this language means that the following code is valid:
+The phrasing "aggregate (struct/array) values" does not refer to variables containing structs/arrays. Those would be trivial to take the address of even if this phrasing was not used. Rather, this phrasing means that the following code is valid:
 
 ```php
 ptr(array(u8, 2)) myptr = &[0u8, 14u8];
@@ -781,7 +781,7 @@ array(u8, 2) myvar = [0u8, 14u8];
 ptr(array(u8, 2)) myptr = &myvar;
 ```
 
-So, if the address of a struct/array *value* is taken, it must be given an automatic storage location and pinned there until the function exits (or some other logically equivalent implementation-defined behavior). This is not true of any other value type and other values cannot have their address taken, only variables containing them.
+So, if the address of a struct/array *value* is taken, it must be given an automatic storage location and pinned there until the function exits or it becomes impossible to correctly derive a pointer to it (or some other logically equivalent implementation-defined behavior). This is not true of any other value type and other values cannot have their address taken, only variables containing them.
 
 In particular, non-constexpr temporary aggregates pointed to by valid pointers can be modified; building off the above array pointer example, the following code is allowed:
 
