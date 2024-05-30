@@ -186,7 +186,7 @@ Functions with non-private visibility are imported and exported according to the
 
 #### 3.5.1 - Aggregate values on the ABI boundary
 
-Functions that have array or struct values pass through them are not guaranteed for conform to the platform's C ABI, and may have different implementation-defined rules for what parts of the aggregate are passed in which registers or where on the stack or in memory in what situations.
+Functions that have array or struct values pass through them are not guaranteed for conform to the platform's C ABI, and may have different implementation-defined rules for what parts of the aggregate are passed in which registers or where on the stack or in memory in what situations. In other words, implementations may or may not make struct values passed by value across the ABI boundary conform to the C ABI, might provide only partial support, etc.
 
 Pointers to arrays/structs are fine and must be passed according to the platform's C ABI.
 
