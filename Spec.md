@@ -37,7 +37,7 @@ head:
     // if statements other than just "goto" need curly braces around the body, even if it's a single line, as do else statements
     // print final y coordinate
     print_float(y);
-    // type pun first 4 bytes of f64 ad a u32, then print it
+    // type pun first 4 bytes of f64 as a u32, then print it as a f64
     print_float((*((&y) as ptr(u32))) as f64);
     // again, but with a shrunken value
     y = y * (0.1f64);
