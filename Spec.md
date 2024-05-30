@@ -685,7 +685,11 @@ For numbers:
 ```
 The math operators result in the same type. The equality operators result in a u8 containing either 0 (false) or 1 (true).
 
-For integers, operators are defined trivially. Integers are always two's complement, with overflow being wraparound (even for signed integers), and integer division truncates the remainder (towards zero). For floats, they're defined according to IEEE 754.
+For integers, operators are defined trivially. Division and remainder by zero produce zero, not UB. Integers are always two's complement, with overflow being wraparound (even for signed integers). Integer division truncates the remainder (towards zero).
+
+For floats, operators other than remainder are defined according to IEEE 754, assuming a floating point environment where traps are disabled, floating point operations have no side-effects, the rounding mode is round-to-nearest, and subnormals are not flushed.
+
+Floating point remainder for `x % y` is defined as resulting in the number closest to the infinite-precision result of `x - (y * trunc(x / y))`, where `trunc` is a function that discards any fractional portion of the number (i.e. 'round towards zero'). Floating point remainder is allowed to be approximated as `x - (y * trunc_ftype(x / y))` or any more-accurate approximation, with accuracy determined by output error in the modulus space defined by y. In the reference approximation, `trunc_ftype` is a function that accurately truncates a floating point number towards zero, discarding any fractional portion; `trunc_ftype(-5.9f32)` returns `-5.0f32`, and `trunc_ftype(5.9f32)` returns `5.0f32`. The implementation must document if it uses an approximation.
 
 #### 8.3.1.1 - Integer-specific unsafe numeric infix operator variants
 
