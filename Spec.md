@@ -396,14 +396,14 @@ Pointers can be casted back and forth with `u64` (or whatever the target's point
 
 ### 5.3 - Composite types
 
-Konoran has the following composite types:
+Konoran has the following composite (aka aggregate) types:
 
 ```php
 struct <name> { type1 var1, type2 var2, ... }
 array(type, len)
 ```
 
-Zero-size composite types are illegal.
+Zero-size composite types are illegal. Using the void type for struct properties is illegal.
 
 #### 5.3.1 - Struct type semantics
 
@@ -430,7 +430,7 @@ struct asdf2
 
 Composite types (structs/arrays) are passed by value when calling functions with them as arguments, or returning them from functions.
 
-#### 5.3.3 - Array semantics
+#### 5.3.3 - Composite type size
 
 Array types have a size of the size of their inner type multiplied by their length. Structs have a size of the sum of the sizes of their inner types.
 
@@ -444,7 +444,7 @@ Casting pointers to `u64` (or, on 32-bit architectures, `u32`) and back is allow
 
 ### 5.5 - Misaligned structs
 
-The konoran implementation is allowed, but not encouraged, to produce an error if structs have misaligned members for the target platform.
+The konoran implementation is allowed, but not encouraged, to produce an error if structs have misaligned members for the target platform. It is encouraged to produce a warning instead.
 
 ### 5.6 - Numeric literals
 
@@ -762,7 +762,7 @@ Konoran has prefix/unary operators for certain types, and for any type in certai
 
 ##### 8.4.1 - Pointer-to / Address-of operator
 
-The following prefix operator is supported for any variable, and also for aggregate (struct/array) values:
+The following prefix operator is supported for any variable, and also for aggregate (aka composite) (struct/array) values:
 
 ```
 &    take address
