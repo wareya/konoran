@@ -929,7 +929,7 @@ Point 2 means that the optimizer can remove functions that are never referenced 
 
 The implementation is allowed to define new UB in situations where threads, OS access, or language extensions are involved. For example, it's OK for an implementation to define it to be UB to read and write to a single variable or memory location from two threads without using a synchronization primitive or memory fence, even if those accesses are direct or use correctly-derived pointers.
 
-Implementations are allowed to specify things as being defined even if they're specified as UB here. For example, implementations are allowed to specify that it's not undefined for a variable's value to magically change after a memory fence or thread synchronization operation finishes (for example, if a pointer to that variable has passed into another thread).
+Implementations are allowed to specify things as being defined even if they're specified as UB here. For example, implementations are allowed to specify that it's not undefined for a variable's value to magically change after a memory fence or thread synchronization operation finishes (for example, if a pointer to that variable has passed into another thread), or to specify that the "unsafe" infix operators will never give undefined results, etc.
 
 Implementations are allowed to specify unaligned memory accesses as UB, but this is discouraged and it's strongly recommended that they specify them as implementation-defined instead.
 
@@ -951,7 +951,7 @@ Konoran does not include any error handling tools. Konoran programmers are encou
 
 ### 10.3 - (No) standard library
 
-Konoran's reference implementation includes a basic set of output-printing functions in JIT mode, for testing purpose. However, this is not a true standard library, and konoran does not provide a true standard library. Any standard library must be specified by and provided by the implementation if it is desired.
+Konoran's reference implementation includes a basic set of output-printing functions in JIT mode, for testing purposes. However, this is not a true standard library, and konoran does not provide a true standard library. Any standard library must be specified by and provided by the implementation if it is desired.
 
 ### 10.4 - (No) threading primitives
 
@@ -975,7 +975,7 @@ C compilers are allowed to optimize C code with the assumption that no code path
 
 #### 10.6.3 - Certain things with conjured pointer values
 
-Accessing conjured pointer values is UB in some situations in C if the compiler "knows" that the pointer doesn't point to an object. In konoran, any side effects from accessing "non-object" pointers is implementation-defined behavior instead of the operating being undefined, e.g. it can crash, give a bogus value, raise an exception, "have no effect on other objects", etc. But it can't be treated like it "didn't happen", even if the compiler knows that the pointer doesn't point to an object.
+Accessing conjured pointer values is UB in some situations in C if the compiler "knows" that the pointer doesn't point to an object. In konoran, any side effects from accessing "non-object" pointers is implementation-defined behavior instead of being undefined, e.g. it can crash, give a bogus value, raise an exception, "have no effect on other objects", etc. But it can't be treated like it "didn't happen", even if the compiler knows that the pointer doesn't point to an object.
 
 For example, if you manage to conjure a pointer with the same pointer value as the address of a local variable, and write to it without crashing, then read back the value you wrote via the conjured pointer, you "should" see the value you wrote to the conjured pointer, even if normal access to the variable itself is unaffected. [pointer_conjuration_test.knr](examples/pointer_conjuration_test.knr) is an example of this. Note the the pointer must **actually be conjured**. Doing pointer math to a correctly-derived pointer pointing at another variable is not pointer conjuration.
 
