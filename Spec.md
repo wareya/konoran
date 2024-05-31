@@ -763,11 +763,11 @@ These operations operate on the bitwise representation of the pointer, as though
 
 In particular, the `+` and `-` operators do not work like they do in C; they operate on byte-sized pointer logic, not word-sized pointer logic, so, for example, adding `1` to an already-aligned `ptr(u64)` will result in an unaligned pointer pointing one byte after the start of the `u64`.
 
-#### 8.4 - Prefix/unary operators
+### 8.4 - Prefix/unary operators
 
 Konoran has prefix/unary operators for certain types, and for any type in certain situations.
 
-##### 8.4.1 - Pointer-to / Address-of operator
+#### 8.4.1 - Pointer-to / Address-of operator
 
 The following prefix operator is supported for any variable, and also for aggregate (aka composite) (struct/array) values:
 
@@ -853,7 +853,7 @@ In particular, notice that `!`/`not` is not defined for floats. You must use `(f
 
 The other above operators are trivially defined.
 
-##### 8.4.3 - Pointer prefix operators
+#### 8.4.4 - Pointer prefix operators
 
 The following prefix operators are supported for data pointers:
 
@@ -863,7 +863,7 @@ The following prefix operators are supported for data pointers:
 !    boolean "not" (results in a u8; 1u8 if the pointer is null, 0u8 if the pointer is not null)
 ```
 
-##### 8.4.3.1 - Dereference operator semantics
+##### 8.4.4.1 - Dereference operator semantics
 
 The `*` operator is not only used when loading a value from a pointer in expressions, but also when assigning to the value pointed to by a pointer, e.g.
 
@@ -877,7 +877,7 @@ This must also be supported when indexing into arrays, e.g.
 (*my_ptr_to_array_u16)[1i64] = 162u16;
 ```
 
-#### 8.4.4 - Array prefix operators
+#### 8.4.5 - Array prefix operators
 
 For arrays, the following prefix operator is defined:
 
