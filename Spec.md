@@ -804,7 +804,7 @@ Pointers derived as above only need to remain valid as long as the code that der
 
 If the address-of operator is used on a struct/array value in a loop, then the same storage location is used for that given address-of operator on each successive iteration of the loop; however, that storage location must still remain valid until the function exits (or until the compiler knows that it cannot be legally accessed). For example:
 
-``php
+```php
 loophead:
     ptr(array(u8, 2)) myptr = &[0u8, 14u8];
     ptr(array(u8, 2)) myptr2 = &[0u8, 14u8];
