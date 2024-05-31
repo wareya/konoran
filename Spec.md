@@ -683,6 +683,9 @@ For numbers:
 ==, !=, >=, <=, >, <
     exact equality/inequality
 ```
+
+The boolean operators result in a u8 containing either `0u8` (false) or `1u8` (true).
+
 The math operators result in the same type. The equality operators result in a u8 containing either 0 (false) or 1 (true).
 
 For integers, operators are defined trivially. Division and remainder by zero produce zero, not UB. Integers are always two's complement, with overflow being wraparound (even for signed integers). Integer division truncates the remainder (towards zero).
@@ -717,17 +720,21 @@ For integers, the following additional operators are defined:
 or, ||    boolean 'or'
 and, &&   boolean 'and'
 ```
-The bitwise and bitshift operators result in the same type. The boolean operators result in a u8 containing either 0 (false) or 1 (true).
+The bitwise and bitshift operators result in the same type. The boolean operators result in a u8 containing either `0u8` (false) or `1u8` (true).
 
 The right-side value of a bitshift (`<<` or `>>`) must be an unsigned integer of the same size as the type of the left-side integer. In other words, `62i32 >> 2u32` is legal, while `62i32 >> 2i32` and `62i32 >> 2u8` are not.
 
-The `and`/`or`/`&&`/`||` operators do NOT short-circuit.
+The `and`/`or`/`&&`/`||` operators do NOT short-circuit. They are valid for any one integer type on their left and right, but the type must be the same. `and`/`&&` evaluates to whether both operands are not equal to zero. `or`/`||` evaluates to whether at least one operand is not equal to zero.
 
-The left bitshift operator shifts in zeroes. The right bitshift operator shifts in the sign bit if the left-side value is signed, and zeroes otherwise. The other operators are trivially defined.
+Style note: the `and`/`or` forms are preferred and generally have better compatibility with navigation shortcuts (like ctrl+left, ctrl+right) across a wide range of text editors.
+
+The left bitshift operator shifts in zeroes. The right bitshift operator shifts in the sign bit if the left-side value is signed, and zeroes otherwise.
+
+The bitshift operators are safe and do not result in UB even if the right-hand value is equal to or greater than the number of bits in the input value; in such cases, they result in a maximally-shifted value. In other words, for a `u64`, trying to right shift by 100 bits results in a right shift by 63 bits.
 
 ##### 8.3.2.1 - Unsafe bitshift operator variants
 
-The bitshift operators are safe and do not result in UB even if the right-hand value is equal to or greater than the number of bits in the input value; in such cases, they result in a maximally-shifted value. For faster, unsafe bitshifting, the following operators are also provided; for them, overflowed bitshifting gives an undefined result:
+For faster, unsafe bitshifting, the following operators are also provided; for them, overflowed bitshifting gives an undefined result:
 
 ```
 shl_unsafe    unsafe bitshift right
