@@ -67,7 +67,7 @@ https://github.com/wareya/konoran/blob/main/src/parser/mod.rs
 
 ### 1.1 - Tokenization
 
-Token patterns are derived from the grammar (some of which are regexes, and some of which are literals) and matched against the source text in top-to-bottom order (for regexes) or in order of decreasing length (for literals/symbols; with length ties broken by top-to-bottom order) to derive a token stream. Regexes are matched first. Whitespace is used as an explicit token boundary and is stripped. Tokens cannot span lines. C-style, C++-style, and Bash-style (`#`) comments are supported, and are matched for before tokens. Then the token stream is fed to the parser.
+Token patterns are derived from the grammar (some of which are regexes, and some of which are literals) and matched against the source text in top-to-bottom order (for regexes) or in order of decreasing length (for literals/symbols; with length ties broken by top-to-bottom order) to derive a token stream. Regexes are matched first. Whitespace is used as an explicit token boundary and is stripped. Tokens cannot span lines. C-style, C++-style, and Bash-style (`#`) comments are supported, and they are matched for before tokens. Then the token stream is fed to the parser.
 
 ### 1.2 - Reserved keywords (lack thereof)
 
@@ -75,11 +75,11 @@ Struct/function/constant/variable names ("struct/symbol names") are allowed to b
 
 ### 1.3 - Understanding the declarative grammar
 
-The declarative grammar is a list of "grammar points" (e.g. `type`), each of which have a list of "grammar forms" that they can take (e.g. `$ptr_type$`, `$funcptr_type$`, etc), each of which consist of a list of matching rules.
+The declarative grammar is a list of "grammar points" (e.g. `type`), each of which has a list of "grammar forms" that they can take (e.g. `$ptr_type$`, `$funcptr_type$`, etc), each of which consists of a list of matching rules.
 
 When attempting to match a grammar point to the token stream and find a successful parse, each grammar form is attempted from first to last, and the first successful form is taken (causing the subsequent forms of the point to not be attempted). Each form is a list of matching rules, which can be a literal symbol (e.g. `(`, a grammar point reference (e.g. `$ptr_type$`), a grammar point reference with a modifier (e.g. `$unusedcomma$?` or `$expr$...,`), or a "remaining matches optional" operator (`>>?`).
 
-Each "matching rule" within a grammar point is separated from the next by exactly a single space. Grammar forms are separated from the next grammar point using a single blank line. A grammar form matches the token stream if all of its matching rules finds a match in the token stream, contiguously with no gaps or overlaps, excluding any matching rules after a "remaining matches optional" operator.
+Each "matching rule" within a grammar point is separated from the next by exactly a single space. Grammar forms are separated from the next grammar point using a single blank line. A grammar form matches the token stream if all of its matching rules find a match in the token stream, contiguously with no gaps or overlaps, excluding any matching rules after a "remaining matches optional" operator.
 
 #### 1.3.1 - Grammar point modifiers
 
@@ -108,13 +108,13 @@ Assuming the matching rules to the left of the `>>?` operator match, the remaini
 
 ## 2 - Programs
 
-Konoran programs consist of a number of modules linked together, possibly dynamically, and possibly with non-Konoran modules. The specific semantics of linking are entirely implementation-defined.
+Konoran programs consist of one or more modules linked together, possibly dynamically, and possibly with non-konoran modules. The specific semantics of linking are entirely implementation-defined.
 
 Standalone konoran programs usually export a `main` function that can be executed by an OS.
 
 ### 2.1 - Static initialization
 
-Konoran programs have statically-initalized data. Sometimes this data can only be initialized by running code. In such cases, that initialization code must be run before any function in the Konoran program is called, and it must be run exactly once. This initialization code might call out to non-Konoran code, and the environment must tolerate this. Static initialization code is run from top to bottom.
+Konoran programs have statically-initialized data. Sometimes this data can only be initialized by running code. In such cases, that initialization code must be run before any function in the Konoran program is called, and it must be run exactly once. This initialization code might call out to non-Konoran code, and the environment must tolerate this. Static initialization code is run from top to bottom.
 
 ### 2.2 - Static initialization linking order
 
@@ -152,7 +152,7 @@ Global variables and constants are visible to the bodies of all functions define
 
 Global constant initializers *must* be folded down into known values at compile time, and *require* initializers. Global constant initializers cannot contain function calls as konoran doesn't support constexpr functions, only constexpr expressions.
 
-Global constants may not be modified and the compiler is allowed to assume that they never change from what is computed during at compile time.
+Global constants may not be modified and the compiler is allowed to assume that they never change from what is computed at compile time.
 
 Global constants are not visible to other modules.
 
@@ -186,7 +186,7 @@ Functions with non-private visibility are imported and exported according to the
 
 #### 3.5.1 - Aggregate values on the ABI boundary
 
-Functions that have array or struct values pass through them are not guaranteed for conform to the platform's C ABI, and may have different implementation-defined rules for what parts of the aggregate are passed in which registers or where on the stack or in memory in what situations. In other words, implementations may or may not make struct values passed by value across the ABI boundary conform to the C ABI, might provide only partial support, etc.
+Functions that have array or struct values pass through them are not necessarily guaranteed to conform to the platform's C ABI, and may have different implementation-defined rules for what parts of the aggregate are passed in which registers or where on the stack or in memory in what situations. In other words, implementations may or may not make struct values passed by value across the ABI boundary conform to the C ABI, might provide only partial support, etc.
 
 Pointers to arrays/structs are fine and must be passed according to the platform's C ABI.
 
@@ -194,7 +194,7 @@ Pointers to arrays/structs are fine and must be passed according to the platform
 
 Functions have return types, names, argument lists, and bodies. A function's signature consists of its return type and the list of its argument types. Function bodies consist of a series of local variable declarations/definitions, statements, labels, and branching statements (if statements and gotos), in any order.
 
-Functions are defined like follows:
+Functions are defined similar to as follows (for the exact syntax, see the grammar):
 
 ```php
 <returntype> name ( type1 arg1, type2 arg2, ... )
@@ -254,8 +254,8 @@ The following code is legal; read the comments for more rationale:
         f64 gkue2 = 5481.581f64;
         magic_ptr = &gkue2;
     }
-    //print_float(gkue); // invalid; no longer logically exists
-    //print_float(gkue2); // invalid; no longer logically exists
+    //print_float(gkue); // invalid; variable name no longer exists
+    //print_float(gkue2); // invalid; variable name no longer exists
     
     print_float(*magic_ptr);
     // the above memory access is VALID! declarations and block scopes are NOT runtime stack manipulation commands!
@@ -301,9 +301,9 @@ Function calls evaluate to a value of whatever type the function returns. If the
 
 ### 4.6 - Statement evaluation order
 
-Statements within a function are evaluated top to bottom as control flow passes through the function. When a `goto` is encountered, it is followed. When an `if` statement is encountered, a particular branch from that if statement is followed. Which branch is taken after an if statement is trivially defined.
+Statements within a function are evaluated top to bottom as control flow passes through the function. When a `goto` is encountered, it is followed. When an `if` statement is encountered, a particular branch from that if statement is followed. It is trivially defined which branch is taken after an if statement.
 
-Assignments are evaluated left-side-first. So, if you have a function that returns a pointer, and assign into it, the function is evaluated before the expression you assign into it:
+Assignments are evaluated left-side-first. So, if you have a function that returns a pointer, and you assign into it, the function call is evaluated before the expression you assign into it:
 
 ```php
 u8 sdklf = 15u8;
@@ -381,7 +381,7 @@ u8, i8, u16, i16, u32, i32, u64, i64, f32, f64
 
 These are unsigned and signed integers (two's complement) and IEEE-compliant binary floating point numbers. u8 has a bit width of 8 and a byte width of 1, u16 has a bit width of 16 and a byte width of 2, etc.
 
-The implementation is allowed to assume that signaling NaNs act like quiet NaNs in arbitrary situations, i.e. operating on a NaN is not guaranteed to have signalling side effects.
+The implementation is allowed to assume that signaling NaNs act like quiet NaNs in arbitrary situations, i.e. operating on a NaN is not guaranteed to have signaling side effects.
 
 ### 5.2 - Pointer types
 
@@ -409,7 +409,7 @@ Zero-size composite types are illegal. Using the void type for struct properties
 
 Struct types consist of a series of members (also called variables, properties, etc) declared one at a time, with no specified value. Struct values consist of a series of values with the appropriate type for the struct being constructed, and are prefixed with the name of the struct (e.g. `Vec2 { 1.0f32, 0.5f32 }`).
 
-Structs have a fixed, known size, and their members are not reordered. Structs do not have any invisible padding; even if `u32`s need to be aligned to 4 bytes on the target platform, a struct that goes `struct ... { u8 a; u32 b; }` will have the `b` property start at the second byte of the struct, and the struct will be 5 bytes long. Alignment must be done manually. To make this easier, structs can have multiple members with the name `_`, none of which are accessible, and are assumed to have an unknown (possibly undefined/poison) value if accessed with pointer arithmetic. It should be noted that padding around floats should ideally be of a float type, and same for non-floats. For example:
+Structs have a fixed, known size, and their members are not reordered. Structs do not have any invisible padding; even if `u32`s need to be aligned to 4 bytes on the target platform, a struct that goes `struct ... { u8 a; u32 b; }` will have the `b` property start at the second byte of the struct, and the struct will be 5 bytes long. Alignment must be done manually. To make this easier, structs can have multiple members with the name `_`, none of which are accessible, and are assumed to have an unknown (possibly undefined/poison) value if accessed with pointer arithmetic. It should be noted that padding around floats should ideally be of a float type, and likewise, padding should be of non-float types around non-floats. (This is because some platforms define composite ABI behavior as depending on whether padding has a type or not.) For example:
 
 ```php
 struct asdf
@@ -477,7 +477,7 @@ Values that overflow past what can be stored in the given float type result in (
 
 ### 5.7 - Array literals
 
-Array literals are a list of values separate by a comma with an optional comma at the end, sandwiched between `[` and `]`. They immediately evaluate to the correct type of array with exactly the right length. The values do not need to be literals. The values must all be of the same type. The values are fully evaluated one at a time, from left to right.
+Array literals are a list of values separated by a comma with an optional comma at the end, sandwiched between `[` and `]`. They immediately evaluate to the correct type of array with exactly the right length. The values do not need to be literals. The values must all be of the same type. The values are fully evaluated one at a time, from left to right.
 
 ```php
 array(u8, 2) myarray = [0u8, 14u8];
@@ -555,7 +555,7 @@ This more closely reflects how compiler backends tend to work than a `volatile` 
 
 ### 6.1 - Volatile memory access rules
 
-Volatile memory acceses must be treated as though they have (non-UB-producing) side effects. In particular, optimizations must not change volatile memory accesses in order, number, or address. Implementations are allowed to specify arbitrary side-effects for volatile memory accesses. Volatile memory accesses are not typically assumed to modify variables or memory that they do not point at, but implementations are allowed to specify situations where they do. For example, an implementation might specify that doing a volatile read of a status register can cause an interrupt handler to run; normally, the implementation's optimizer is allowed to assume that this interrupt handler doesn't modify any variables or memory that the current non-interrupt code is working on, but the implementation is allowed to specify that it does, and prevent its own optimizer from assuming that those variables or memory are unchanged during the interrupt. If the implementation does not specify such a situation, then it is assumed that volatile memory accesses do not alter unrelated variables/memory, and the optimizer is free to use that assumption.
+Volatile memory accesses must be treated as though they have (non-UB-producing) side effects. In particular, optimizations must not change volatile memory accesses in order, number, or address. Implementations are allowed to specify arbitrary side-effects for volatile memory accesses. Volatile memory accesses are not typically assumed to modify variables or memory that they do not point at, but implementations are allowed to specify situations where they do. For example, an implementation might specify that doing a volatile read of a status register can cause an interrupt handler to run; normally, the implementation's optimizer is allowed to assume that this interrupt handler doesn't modify any variables or memory that the current non-interrupt code is working on, but the implementation is allowed to specify that it does, and prevent its own optimizer from assuming that those variables or memory are unchanged during the interrupt. If the implementation does not specify such a situation, then it is assumed that volatile memory accesses do not alter unrelated variables/memory, and the optimizer is free to use that assumption.
 
 Having a value magically change between consecutive *volatile* accesses is allowed, i.e. the compiler cannot change the order or number of volatile operations or what addresses they operate on. In particular, volatile writes to even a correctly-derived pointer cannot be optimized away (even if the variable the pointer points at is never used again), and volatile reads from even a correctly-derived pointer must assume that the value may have magically changed since the last time it was accessed (even if it has not been accessed).
 
@@ -569,7 +569,7 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
 (val) as <val type>
     Does nothing. Returns original value.
 
-(pointer val) as <different pointer type>
+(pointer_val) as <different pointer type>
     Reinterprets the pointer as pointing at a different type. Legal even if casting between function pointer and normal pointer; however, the resulting pointer may be illegal to use depending on how the platform defines the behavior of such an operation. (The existence of illegal-to-use pointers in memory is not, itself, UB or illegal.)
 
 (integer_val) as <integer type of same size>
@@ -585,12 +585,12 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
     Converts an integer to a floating-point number. If the integer cannot be represented exactly, the closest value is given.
 
 (float_val) as <integer type>
-    Converts an floating-point number to an integer type. If the value is outside of the integer range, either the minimum or maximum integer value is given, whichever is closer. If the value is NaN, either zero, maximum, or minimum integer value is given, according to the implementation.
+    Converts a floating-point number to an integer type. If the value is outside of the integer range, either the minimum or maximum integer value is given, whichever is closer. If the value is NaN, either zero, maximum, or minimum integer value is given, according to the implementation.
 ```
 ### 7.2 - Unsafe value casts
 ```
 (float_val) unsafe_as <integer type>
-    Converts an floating-point number to an integer type. If the value is outside of the integer range, the result is undefined.
+    Converts a floating-point number to an integer type. If the value is outside of the integer range, the result is undefined.
 ```
 ### 7.3 - Bitcasts
 ```
@@ -607,7 +607,7 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
     Converts an integer to a pointer. When a pointer is casted to u64 (or u32 on 32-bit architectures) and then back to the same pointer type, it must point to the same object and memory location.
     If a pointer to a stack value is cast to int and back, it cannot be assumed to point inside the address range of the original stack value, so accessing it is not immediately UB.
         (see [examples/pointer_conjuration_test.knr], `main()`)
-    If the compiler has provenance or aliasing analysis, the resulting pointer value is treated as being derived any value that contributed to the calculation of the given integer.
+    If the compiler has provenance or aliasing analysis, the resulting pointer value is treated as being derived from any value that contributed to the calculation of the given integer.
         (see [examples/pointer_conjuration_test.knr], `main2()`)
 
 (float/int value) bit_as <float or int type of same size>
@@ -632,7 +632,7 @@ Konoran has both binary/infix and unary/prefix operators. Some expressions are n
 
 ### 8.1 - Operator precedence
 
-Operator precedence is defined by konoran's declarative grammar. The grammar is written right-associatively, but has metadata that marks certain nodes as being left-associative; when the parse tree is converted to an AST, these nodes need to be rotated to be left-associative. As a helper, here's a short description of konoran's operator predecence, but remember that the actual definition is in the declarative grammar:
+Operator precedence is defined by konoran's declarative grammar. The grammar is written right-associatively, but has metadata that marks certain nodes as being left-associative; when the parse tree is converted to an AST, these nodes need to be rotated to be left-associative. As a helper, here's a short description of konoran's operator precedence, but remember that the actual definition is in the declarative grammar:
 
 ```
 not  !    -    +   ~   *   &   @          <- prefix/unary operators
@@ -648,7 +648,7 @@ Operators on a given line have the same precedence and are evaluated left to rig
 
 #### 8.1.1 - Precedence design note
 
-Note that `&&` and `||` have the same precedence. While `&&` can be interpreted as multiplication and `||` can be interpreted as addition, by that line of reasoning, `!=` should be interpreted as addition in that case as well, but giving them all the same precedence would be awful, so konoran abandoned that entire line of reasoning. As primarily a compiler target language, specificational clarity was prioritized over similarity to C; people need to look up C's precedence for these operators all the time, and konoran decided that was unnecessary wasted effort and decided to define them as having the same precedence. As such, `x && y || z` and `x || y & z` are both parsed left to right, as `(x && y) || z` and `(x || y) & z`.
+Note that `&&` and `||` have the same precedence. While `&&` can be interpreted as multiplication and `||` can be interpreted as addition, by that line of reasoning, `!=` should be interpreted as addition as well, but giving equality and junction operators the same precedence would be awful, so konoran abandoned the entire line of reasoning. As primarily a compiler target language, specificational clarity was prioritized over similarity to C; people need to look up C's precedence for these operators all the time, and konoran decided that was unnecessary wasted effort and decided to define them as having the same precedence. As such, `x && y || z` and `x || y & z` are both parsed left to right, as `(x && y) || z` and `(x || y) & z`.
 
 Likewise, note that `>=` etc. have the same precedence as `==` etc.
 
@@ -666,7 +666,7 @@ In-place assignments like `+=` do not exist, only simple assignments with `=`.
 
 ### 8.3 - Infix/binary operators
 
-Infix/binary operators are typically only defined for left and right hand sides of the same type, with very few exceptions. The exceptions will be noted.
+Infix/binary operators are typically only defined for using left and right operands of the same type, with very few exceptions. The exceptions will be noted.
 
 When evaluating an infix operator, the operands are evaluated left-first, right-second.
 
@@ -759,7 +759,7 @@ The resulting pointer from these operators is not considered "conjured" and, if 
 
 ##### 8.3.3.1 - Pointer infix operator semantics
 
-These operations operate on the bitwise representation of the pointer, as though it were an integer. They are equivalent to casting to a u64 and back, with the exception that if the compiler supports provenance/aliasing analysis, these operations MUST retain any relevant provenance/aliasing information. (In other words, adding 50 to a pointer, then subtracting 50 from it, must result in an equivalently-usable pointer value to what you started with, even if the compiler does provenance/aliasing analysis.) The resulting pointer always has a defined value; however, accessing it might cause undefined behavior, depending on how the underlying platform defines such operations.
+These operations operate on the bitwise representation of the pointer, as though it were an integer. They are equivalent to casting to a u64 and back, with the exception that if the compiler supports provenance/aliasing analysis, these operations MUST retain any relevant provenance/aliasing information. (In other words, adding 50 to a pointer, then subtracting 50 from it, must result in an equivalently usable pointer value to what you started with, even if the compiler does provenance/aliasing analysis.) The resulting pointer always has a defined value; however, accessing it might cause undefined behavior, depending on how the underlying platform defines such operations.
 
 In particular, the `+` and `-` operators do not work like they do in C; they operate on byte-sized pointer logic, not word-sized pointer logic, so, for example, adding `1` to an already-aligned `ptr(u64)` will result in an unaligned pointer pointing one byte after the start of the `u64`.
 
@@ -802,7 +802,7 @@ In particular, non-constexpr temporary aggregates pointed to by valid pointers c
 
 Pointers derived as above only need to remain valid as long as the code that derives them is actually using them. So, an optimizer can eliminate the storage for a variable or an automatic storage slot if it knows that it's no longer referred to and that all pointers correctly derived from it are dead.
 
-If the address-of operator is used on a struct/array value in a loop, then the same storage location is used for that given address-of operator on each successive iteration of the loop, however that storage location must still remain valid until the function exits (or until the compiler knows that it cannot be legally accessed). For example:
+If the address-of operator is used on a struct/array value in a loop, then the same storage location is used for that given address-of operator on each successive iteration of the loop; however, that storage location must still remain valid until the function exits (or until the compiler knows that it cannot be legally accessed). For example:
 
 ``php
 loophead:
@@ -885,7 +885,7 @@ For arrays, the following prefix operator is defined:
 decay_to_ptr    convert array of elements to pointer to first element
 ```
 
-It performs pointer decay, the same type that C performs for arrays at function boundaries. An `array(u8, 4)` will turn into a `ptr(u8)` pointing at the first element of the array. This is logically equivalent to using `&` on array and casting the resulting pointer to `ptr(inner_type)`.
+It performs pointer decay, the same type that C performs for arrays at function boundaries. An `array(u8, 4)` will turn into a `ptr(u8)` pointing at the first element of the array. This is logically equivalent to using `&` on the array and casting the resulting pointer to `ptr(inner_type)`.
 
 ### 8.5 - Constant expressions
 
@@ -971,12 +971,12 @@ Konoran **specifically does not have strict type-based aliasing rules** and impl
 
 #### 10.6.2 - (No) forwards progress guarantee
 
-C compilers are allowed to optimize C code with the assumption that no code path that leads to a non-terminating loop (sometimes with additional language like "observable behavior" depending who you ask) that has no side effects. C++'s more explicit version of this is the "forwards progress guarantee". Konoran does not make this assumption and even trivial infinite loops are allowed.
+C compilers are allowed to optimize C code with the assumption that no code path leads to a non-terminating loop (sometimes with additional language like "observable behavior" depending on who you ask) that has no side effects. C++'s more explicit version of this is the "forwards progress guarantee". Konoran does not make this assumption and even trivial infinite loops are allowed.
 
 #### 10.6.3 - Certain things with conjured pointer values
 
-Accessing conjured pointer values is UB in some situations in C if the compiler "knows" that the pointer doesn't point to an object. In konoran, any side effects from accessing "non-object" pointers is implementation-defined behavior instead of being undefined, e.g. it can crash, give a bogus value, raise an exception, "have no effect on other objects", etc. But it can't be treated like it "didn't happen", even if the compiler knows that the pointer doesn't point to an object.
+Accessing conjured pointer values is UB in some situations in C if the compiler "knows" that the pointer doesn't point to an object. In konoran, any side effects from accessing "non-object" pointers are implementation-defined behavior instead of being undefined, e.g. it can crash, give a bogus value, raise an exception, "have no effect on other objects", etc. But it can't be treated like it "didn't happen", even if the compiler knows that the pointer doesn't point to an object.
 
-For example, if you manage to conjure a pointer with the same pointer value as the address of a local variable, and write to it without crashing, then read back the value you wrote via the conjured pointer, you "should" see the value you wrote to the conjured pointer, even if normal access to the variable itself is unaffected. [pointer_conjuration_test.knr](examples/pointer_conjuration_test.knr) is an example of this. Note the the pointer must **actually be conjured**. Doing pointer math to a correctly-derived pointer pointing at another variable is not pointer conjuration.
+For example, if you manage to conjure a pointer with the same pointer value as the address of a local variable, and write to it without crashing, then read back the value you wrote via the conjured pointer, you "should" see the value you wrote to the conjured pointer, even if normal access to the variable itself is unaffected. [pointer_conjuration_test.knr](examples/pointer_conjuration_test.knr) is an example of this. Note that the pointer must **actually be conjured**. Doing pointer math to a correctly-derived pointer pointing at another variable is not pointer conjuration.
 
 It's currently not possible for konoran to 100% guarantee this behavior while compiling down to LLVM, because LLVM's manual defines it as undefined behavior to access an object via a pointer that's not based on that object, but *in practice* it works.
