@@ -365,6 +365,8 @@ The braces are mandatory even if there is only one statement. There can be multi
 
 There is no braceless goto variant for compound if-else statements. "if-goto" is considered its own type of statement with its own syntax, not a specialization of the "if" statement syntax.
 
+Any `if` statement can only take an integer or a pointer as their conditional expression. A condition is true if the value of the conditional expression is not zero.
+
 ## 5 - Types
 
 Konoran is strongly typed and has primitive/intrinsic numeric types, struct types, array types, and pointer types (including function pointers).
