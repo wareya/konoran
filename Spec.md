@@ -538,6 +538,7 @@ array(u8, 6) my_array = constexpr "skgue\n"array_nonull;
 ptr(array(u8, 6)) my_array_ptr = &"skgue\n"array_nonull;
 ptr(u8) my_ptr = "skgue\n"nonull; // dangerous!!!
 ```
+`nonull` strings may still be followed by a zero byte in memory depending on how memory is laid out in the implementation.
 
 ## 6 - Volatile memory access
 
