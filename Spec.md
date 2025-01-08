@@ -562,6 +562,8 @@ Volatile memory accesses must be treated as though they have (non-UB-producing) 
 
 Having a value magically change between consecutive *volatile* accesses is allowed, i.e. the compiler cannot change the order or number of volatile operations or what addresses they operate on. In particular, volatile writes to even a correctly-derived pointer cannot be optimized away (even if the variable the pointer points at is never used again), and volatile reads from even a correctly-derived pointer must assume that the value may have magically changed since the last time it was accessed (even if it has not been accessed).
 
+Volatile accesses through a pointer cannot be reordered relative to *any* other accesses of that pointer, even non-volatile ones. This applies to any mutually aliasing pointer expressions that refer to the same memory, not abstract pointer value 'objects' or pointer 'variables'.
+
 ## 7 - Casts
 
 Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are defined over the following type pairs and have the given behaviors. Note that it is not possible to change both the signedness and size of an integer in a single cast operation.
@@ -849,7 +851,7 @@ The following prefix operators are supported for ints, and return a new value of
 ~    bitwise inversion (flip all bits)
 !, not    boolean "not" (results in a u8; equivalent to `(val == <zero>)`)
 ```
-
+i forgot to specify that volatile writes are not necessarily assumed to 
 In particular, notice that `!`/`not` is not defined for floats. You must use `(float == 0.0<floattype>)` instead.
 
 `-` does not result in UB when used with maximally negative signed integers; it results in the same value being given back. In other words, `-(-128i8)` evaluates to `-128i8`.
