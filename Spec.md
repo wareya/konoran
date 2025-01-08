@@ -562,7 +562,7 @@ Volatile memory accesses must be treated as though they have (non-UB-producing) 
 
 Having a value magically change between consecutive *volatile* accesses is allowed, i.e. the compiler cannot change the order or number of volatile operations or what addresses they operate on. In particular, volatile writes to even a correctly-derived pointer cannot be optimized away (even if the variable the pointer points at is never used again), and volatile reads from even a correctly-derived pointer must assume that the value may have magically changed since the last time it was accessed (even if it has not been accessed).
 
-Volatile accesses through a pointer cannot be reordered relative to *any* other accesses of that pointer, even non-volatile ones. This applies to any mutually aliasing pointer expressions that refer to the same memory, not abstract pointer value 'objects' or pointer 'variables'.
+Volatile accesses through a pointer cannot be reordered relative to *any* other accesses of that pointer, even non-volatile ones. This 'don't reorder other accesses of the same pointer relative to the volatile access' rule applies to any mutually aliasing pointer expressions that refer to the same memory, not abstract pointer value 'objects' or pointer 'variables'.
 
 ## 7 - Casts
 
