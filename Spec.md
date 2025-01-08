@@ -651,7 +651,7 @@ not  !    -    +   ~   *   &   @          <- prefix/unary operators
 and  or   &&   ||
 ```
 
-Operators on a given line have the same precedence and are evaluated left to right, i.e. `x + y + z` is evaluated as `(x + y) + z`.
+Operators on a given line have the same precedence and are evaluated left to right, as are their operands; i.e. `x + y + z` is evaluated as `(x + y) + z`, with x then y being calculated, then summed, then z being calculated, then summed into the former.
 
 #### 8.1.1 - Precedence design note
 
