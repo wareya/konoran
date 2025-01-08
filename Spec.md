@@ -853,7 +853,7 @@ The following prefix operators are supported for ints, and return a new value of
 ~    bitwise inversion (flip all bits)
 !, not    boolean "not" (results in a u8; equivalent to `(val == <zero>)`)
 ```
-i forgot to specify that volatile writes are not necessarily assumed to 
+
 In particular, notice that `!`/`not` is not defined for floats. You must use `(float == 0.0<floattype>)` instead.
 
 `-` does not result in UB when used with maximally negative signed integers; it results in the same value being given back. In other words, `-(-128i8)` evaluates to `-128i8`.
