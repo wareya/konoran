@@ -124,7 +124,11 @@ The above-described initialization code comes from each individual module. When 
 
 Variables and constants may be referred together at once as "variables" in contexts where the mutability distinction is not relevant.
 
-"Correctly-derived" of a pointer means that the pointer was, at some point, derived from the address-of operator, or imported from another module which itself "correctly derived" it, or blessed by the implementation to point at some known object. If you end up turning a pointer into an integer, then bit mashing at it, then happening to turn it back into the original untouched integer value, and then converting that integer back into a pointer, that counts as "correctly derived".
+"Constant" is taken to refer to the property of something being known at compilation time or link time, and not 
+
+#### 2.3.1 - Pointer-specific clarifications
+
+"Correctly-derived" of a pointer means that the pointer was, at some point, derived from the address-of operator, or imported from another module which itself "correctly derived" it, or blessed by the implementation to point at some known object, and points within the original object. If you end up turning a pointer into an integer, then bit mashing at it, then happening to turn it back into the original untouched integer value, and then converting that integer back into a pointer, that counts as "correctly derived".
 
 "Pointer" and "address value" refer to almost the same thing, but a "pointer" has a pointed-to data type while an "address value" is just a number.
 
@@ -291,7 +295,7 @@ Attempting to derive a pointer to one local variable from a pointer to another l
 
 #### 4.3.2 - Function stack variable pointer leakage
 
-Attempting to conjure a pointer to a local variable that is not currently in-scope is UB because conjuring pointers to variables is UB, and the optimizer is allowed to assume that a konoran program does not do this.
+Attempting to conjure a pointer to a variable whose value does not contribute to the pointer's address value is UB.
 
 ### 4.4 - Functions do not have static variables
 
@@ -622,7 +626,7 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
 
 (ptr_sized_int_val) bit_as <pointer type>
     Converts an integer to a pointer. When a pointer is casted to u64 (or u32 on 32-bit architectures) and then back to the same pointer type, it must point to the same object and memory location.
-    If a pointer to a stack value is cast to int and back, it cannot be assumed to point inside the address range of the original stack value, so accessing it is not immediately UB.
+    If a pointer is cast to int and back with arithmetic being performed to the int, but it still points inside of some object, then accessing it is not immediately UB. Rather, afterwards reading an object that the compiler believes does not alias that pointer is UB.
         (see [examples/pointer_conjuration_test.knr], `main()`)
     If the compiler has provenance or aliasing analysis, the resulting pointer value is treated as being derived from any value that contributed to the calculation of the given integer.
         (see [examples/pointer_conjuration_test.knr], `main2()`)
@@ -936,7 +940,7 @@ print_float((x) as f64);
 
 The above program contains undefined behavior if `randi()` is capable of producing a value matching the address of the `x` variable. As such, a compiler optimizing this code is allowed to assume that the value passed to `print_float()` remains `0.0f64`, even if `*maybe_x` is written to in the meantime, because even if `maybe_x` points to `x`, it was not correctly derived.
 
-Importantly, point 1 does not make it instant UB to access/modify data via conjured pointers. The optimizer is merely allowed to assume that accesses via conjured pointers do not modify named variables. Arbitrary memory and heap memory are assumed to be disjoint from "variables".
+Importantly, point 1 does not make it instant UB to access/modify data via conjured pointers. The optimizer is merely allowed to assume that accesses via conjured pointers do not modify named variables whose addresses do not contribute to the address value of the pointer. Arbitrary memory and heap memory are assumed to be disjoint from "variables".
 
 ### 9.2 - Executing 'dead code' functions
 
@@ -994,6 +998,6 @@ C compilers are allowed to optimize C code with the assumption that no code path
 
 Accessing conjured pointer values is UB in some situations in C if the compiler "knows" that the pointer doesn't point to an object. In konoran, any side effects from accessing "non-object" pointers are implementation-defined behavior instead of being undefined, e.g. it can crash, give a bogus value, raise an exception, "have no effect on other objects", etc. But it can't be treated like it "didn't happen", even if the compiler knows that the pointer doesn't point to an object.
 
-For example, if you manage to conjure a pointer with the same pointer value as the address of a local variable, and write to it without crashing, then read back the value you wrote via the conjured pointer, you "should" see the value you wrote to the conjured pointer, even if normal access to the variable itself is unaffected. [pointer_conjuration_test.knr](examples/pointer_conjuration_test.knr) is an example of this. Note that the pointer must **actually be conjured**. Doing pointer math to a correctly-derived pointer pointing at another variable is not pointer conjuration.
+For example, if you manage to conjure a pointer with the same pointer value as the address of a local variable (whose value did not contribute to the conjured pointer), and write to it without crashing, then read back the value you wrote via the conjured pointer, you should just see the value you wrote to the conjured pointer, even if normal access to the variable itself is unaffected (unless some other write to the variable itself has overwritten the write to the conjured pointer). [pointer_conjuration_test.knr](examples/pointer_conjuration_test.knr) is an example of this. Note that the pointer must **actually be conjured**. Doing pointer math to a correctly-derived pointer pointing at another variable is not pointer conjuration.
 
 It's currently not possible for konoran to 100% guarantee this behavior while compiling down to LLVM, because LLVM's manual defines it as undefined behavior to access an object via a pointer that's not based on that object, but *in practice* it works.
