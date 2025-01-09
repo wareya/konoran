@@ -29,7 +29,7 @@ void main()
     // Instead, we have to do something like below:
     ptr(i32) conjured_ptr = ((&dummy2) bit_as u64) bit_as ptr(i32);
     conjured_ptr = conjured_ptr + 4u64;
-    *conjured_ptr = 1234i32; // If conjured_ptr happens to point outside of an object, this must produce a fault. If it points inside of an object, then the write should be performed.
+    *conjured_ptr = 1234i32; // If conjured_ptr happens to point outside of an object, this produces implementation-defined behavior. If it points inside of an object, then the write should be performed.
     // Casting to int and back destroys provenance information, so this works and creates a genuinely "conjured" pointer.
     
     f64 out_b = (*conjured_ptr) as f64;
