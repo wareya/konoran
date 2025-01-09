@@ -11,6 +11,7 @@
 
 void main()
 {
+    // This example assumes that these variables are consecutive on the stack and packed together (i.e. they collectively take up 8 bytes).
     i32 dummy  = 42i32;
     i32 dummy2 = 42i32;
 
@@ -28,7 +29,7 @@ void main()
     // Instead, we have to do something like below:
     ptr(i32) conjured_ptr = ((&dummy2) bit_as u64) bit_as ptr(i32);
     conjured_ptr = conjured_ptr + 4u64;
-    *conjured_ptr = 9245i32;
+    *conjured_ptr = 1234i32; // If conjured_ptr happens to point outside of an object, this must produce a fault. If it points inside of an object, then the write should be performed.
     // Casting to int and back destroys provenance information, so this works and creates a genuinely "conjured" pointer.
     
     f64 out_b = (*conjured_ptr) as f64;
@@ -37,7 +38,7 @@ void main()
     *@&dummy = *@&dummy2; // ensure dummy2 and dummy exist on the stack until after conjured_ptr is written to and read from
     
     print_float(out_b); // must print "9245"
-    print_float(out_a); // allowed to print "42", may also print "9245"
+    print_float(out_a); // allowed to print "42", may also print "1234". However, if it's "1234", then there was UB.
     
     main2();
     
