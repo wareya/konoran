@@ -106,7 +106,7 @@ In the declarative grammar, grammar point references within a grammar form take 
 
 Assuming the matching rules to the left of the `>>?` operator match, the remaining matching rules in the given grammar form are optional and are only included if they successfully match. If they do not successfully match they are all discarded and the grammar form is considered to have parsed successfully as only the prior matching rules.
 
-## 2 - Programs
+## 2 - Programs and clarifications
 
 Konoran programs consist of one or more modules linked together, possibly dynamically, and possibly with non-konoran modules. The specific semantics of linking are entirely implementation-defined.
 
@@ -119,6 +119,16 @@ Konoran programs have statically-initialized data. Sometimes this data can only 
 ### 2.2 - Static initialization linking order
 
 The above-described initialization code comes from each individual module. When linking multiple modules together into a single program, the exact order in which each module's initialization code is run is implementation-defined; however, implementations are strongly encouraged to allow the user to control it. For example, if you link a user's modules called `main` and `mathlib` together with the command `link main.o mathlib.o`, the implementation could specify that the initializers from `main.o` should run before those from `mathlib.o` because it was listed first in the linking command; such behavior would comply with this encouragement.
+
+### 2.3 - Clarifications
+
+Variables and constants may be referred together at once as "variables" in contexts where the mutability distinction is not relevant.
+
+"Correctly-derived" of a pointer means that the pointer was, at some point, derived from the address-of operator, or imported from another module which itself "correctly derived" it, or blessed by the implementation to point at some known object. If you end up turning a pointer into an integer, then bit mashing at it, then happening to turn it back into the original untouched integer value, and then converting that integer back into a pointer, that counts as "correctly derived".
+
+"Pointer" and "address value" refer to almost the same thing, but a "pointer" has a pointed-to data type while an "address value" is just a number.
+
+When discussing aliasing, the compiler is allowed to perform analyses where, if it knows that two pointers' pointees do not overlap, it assumes that those pointers do not alias. However, if those pointers can both be used to correctly derive a pointer to a 'parent' or 'container' object, and the program does so separately for each non-overlapping pointer, and those objects belong to the same or overlapping parent(s)/container(s), then those derived parent/container pointers cannot be assumed to not alias, i.e. de-aliasing analysis cannot be "blind" and have forgotten old aliasing information after further pointer arithmetic or type conversions are performed. The uniqueness of a given pointer does not imply that its derived pointers are unique.
 
 ## 3 - Modules
 
@@ -782,11 +792,11 @@ The following prefix operator is supported for any variable, and also for aggreg
 &    take address
 ```
 
-This operation produces a pointer (`ptr(type)`) pointing at the variable's value or the aggregate struct/array's value. If the address of a variable or struct/array value is taken, then that address must be valid for the entire duration of the function. Using such an address after the function has returned is undefined behavior.
+This operation produces a pointer (`ptr(type)`) pointing at a value inside of a variable or inside of an aggregate struct/array variable, subvalue, or literal. If such an address is taken with this operation, then that address must be valid for the entire duration of the function, or until it is proven that it is impossible to correctly derive a pointer to the pointee. Using such an address after the function has returned is undefined behavior.
 
-##### 8.4.1.1 - Pointer-to clarification for aggregate values
+##### 8.4.1.1 - Pointer-to clarification for aggregate literals
 
-The phrasing "aggregate (struct/array) values" does not refer to variables containing structs/arrays. Those would be trivial to take the address of even if this phrasing was not used. Rather, this phrasing means that the following code is valid:
+The phrasing "aggregate struct/array subvalue or literal" means that the following code is valid:
 
 ```php
 ptr(array(u8, 2)) myptr = &[0u8, 14u8];
