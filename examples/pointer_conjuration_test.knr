@@ -37,7 +37,7 @@ void main()
     
     *@&dummy = *@&dummy2; // ensure dummy2 and dummy exist on the stack until after conjured_ptr is written to and read from
     
-    print_float(out_b); // must print "9245"
+    print_float(out_b); // must print "1234"
     print_float(out_a); // allowed to print "42", may also print "1234". However, if it's "1234", then there was UB.
     
     main2();
