@@ -128,11 +128,11 @@ Variables and constants may be referred together at once as "variables" in conte
 
 #### 2.3.1 - Pointer-specific clarifications
 
-"Correctly-derived" of a pointer means that the pointer was, at some point, derived from the address-of operator, or imported from another module which itself "correctly derived" it, or blessed by the implementation to point at some known object, and points within the original object. If you end up turning a pointer into an integer, then bit mashing at it, then happening to turn it back into the original untouched integer value, and then converting that integer back into a pointer, that counts as "correctly derived".
+"Correctly-derived" of a pointer means that the pointer was, at some point, derived from the address-of operator, or imported from another module which itself "correctly-derived" it, or blessed by the implementation to point at some known object, and points within the underlying object. If you end up turning a pointer into an integer, bit mash at it, and then turn it back into a pointer, that pointer counts as "conjured" rather than "derived" (unless the implementation proves that it still points inside of the original underlying object, in which case it is free to treat it as "derived"). "Conjured" pointers are considered to alias all objects.
 
 "Pointer" and "address value" refer to almost the same thing, but a "pointer" has a pointed-to data type while an "address value" is just a number.
 
-When discussing aliasing, the compiler is allowed to perform analyses where, if it knows that two pointers' pointees do not overlap, it assumes that those pointers do not alias. However, if those pointers can both be used to correctly derive a pointer to a 'parent' or 'container' object, and the program does so separately for each non-overlapping pointer, and those objects belong to the same or overlapping parent(s)/container(s), then those derived parent/container pointers cannot be assumed to not alias, i.e. de-aliasing analysis cannot be "blind" and have forgotten old aliasing information after further pointer arithmetic or type conversions are performed. The uniqueness of a given pointer does not imply that its derived pointers are unique.
+When discussing aliasing, the compiler is allowed to perform analyses where, if it knows that two pointers' pointees do not overlap, it assumes that those pointers do not alias. However, if those pointers can both be used to correctly derive a pointer to a 'parent' or 'container' object, and the program does so, and those objects belong to the same or overlapping parent(s)/container(s), then those derived parent/container pointers cannot be assumed to not alias. In otehr words, de-aliasing analysis cannot be "blind" and have forgotten old aliasing information after further pointer arithmetic or type conversions are performed. The mutual uniqueness of two pointers does not imply that their derived pointers are likewise mutually unique.
 
 ## 3 - Modules
 
@@ -235,17 +235,19 @@ Branches can point "upwards", not just downwards. Branches can only point to lab
 
 Variables are mutable and can be rewritten. Compilers are free to detect and mark variables as const and optimize them away or fold/inline them, even if their address is taken, as long as the underlying value is never modified via correctly-derived pointer.
 
-Reading an uninitialized variable (local or global) results in an undefined or poison value that can take on any value (even if the variable is only ever accessed once) and do anything, classic undefined behavior. If such a value is given to the `freeze` operator, it will be frozen into a then-known state; however, this state might not reflect what was actually present in the memory of the uninitialized variable.
+Reading an uninitialized variable (local or global) results in an undefined or poison value that can take on any value (even if the variable is only ever accessed once) and do anything, classic undefined behavior. If such a value is given to the `freeze` operator, it will be frozen into a then-known state; however, this state is not required to reflect what was actually present in the memory of the uninitialized variable.
 
-Variables marked with the `constexpr` keyword are not variables; they are local constants. They must be defined upon declaration and cannot be modified/rewritten. Writing to a local constant via a pointer is undefined behavior.
+Variables marked with the `constexpr` keyword are not variables; they are local constants. They must be defined upon declaration and cannot be modified/rewritten. Writing to a local constant via a pointer is undefined behavior. Creating a pointer to a constant is safe as long as it is not written through.
 
 #### 4.2.1 - Local constants
 
 Local constants follow the same rules as global constants (e.g. their initializer must be known at compile time, they cannot be modified, etc), except they are only visible to the function that defines them.
 
-Local constants follow block scope rules just like normal local variables. Visible local constants have a defined value determined by their initializer even if the flow of execution never passed through the statement defining the local constant.
+Local constants follow block scope rules just like normal local variables.
 
-Local constants and local variables are only visible after their declarations.
+Visible local constants have the value defined by their initializer even if the flow of execution never passed through the statement defining the local constant.
+
+Local constants and local variables are only visible after their declarations and stop being visible once the block in which they were defined has been closed. They are visible from more-inner blocks inside of the block in which they were declared and below their declarations.
 
 ### 4.3 - Function stack consistency
 
@@ -311,13 +313,17 @@ print_float(8243.9f64);
 
 Function arguments are fully evaluated one at a time, from left to right.
 
-Function calls evaluate to a value of whatever type the function returns. If the function returns `void`, it evaluates to no value and cannot be used in expressions (because there's nothing an expression or statement can do with another expression of type `void`, inevitably leading to an error).
+Function calls evaluate to a value of whatever type the function returns. If the function returns `void`, it evaluates to no value and attempting to use it in an expression (or otherwise as a value) must produce a type error.
+
+Expressions or variable that evaluate to a function pointer can be called just like function names can be called.
 
 ### 4.6 - Statement evaluation order
 
 Statements within a function are evaluated top to bottom as control flow passes through the function. When a `goto` is encountered, it is followed. When an `if` statement is encountered, a particular branch from that if statement is followed. It is trivially defined which branch is taken after an if statement.
 
-Assignments are evaluated left-side-first. So, if you have a function that returns a pointer, and you assign into it, the function call is evaluated before the expression you assign into it:
+Within a statement, its parts are evaluated from left to right. For example, array literals are evaluated starting from the leftmost item and ending at the rightmost item, with no skipping or reordering. "Left to right" is determined by the grammar; `4 + 5 * 8` evaluates the multiplication before the addition.
+
+Assignments are evaluated left-side-first. So, if you have a function that returns a pointer, and you dereference it in the "variable" position of an assignment, the function call is evaluated before the expression you assign into its returned pointer:
 
 ```php
 u8 sdklf = 15u8;
@@ -385,7 +391,7 @@ Any `if` statement can only take an integer or a pointer as their conditional ex
 
 Konoran is strongly typed and has primitive/intrinsic numeric types, struct types, array types, and pointer types (including function pointers).
 
-Konoran has a `void` type, but it is only used as the return type of functions that do not return a value. It is forbidden in all other contexts, including as a pointee type for pointers. (Type punning via pointers is explicitly allowed; instead of void pointers, use `ptr(u8)`.)
+Konoran has a `void` type, but it is only used as the return type of functions that do not return a value. It is forbidden in all other contexts, including as a pointee type for pointers. (Type punning of data via pointers is explicitly allowed; instead of void pointers, use `ptr(u8)`.)
 
 ### 5.1 - Numeric types
 
@@ -425,7 +431,9 @@ Zero-size composite types are illegal. Using the void type for struct properties
 
 Struct types consist of a series of members (also called variables, properties, etc) declared one at a time, with no specified value. Struct values consist of a series of values with the appropriate type for the struct being constructed, and are prefixed with the name of the struct (e.g. `Vec2 { 1.0f32, 0.5f32 }`).
 
-Structs have a fixed, known size, and their members are not reordered. Structs do not have any invisible padding; even if `u32`s need to be aligned to 4 bytes on the target platform, a struct that goes `struct ... { u8 a; u32 b; }` will have the `b` property start at the second byte of the struct, and the struct will be 5 bytes long. Alignment must be done manually. To make this easier, structs can have multiple members with the name `_`, none of which are accessible, and are assumed to have an unknown (possibly undefined/poison) value if accessed with pointer arithmetic. It should be noted that padding around floats should ideally be of a float type, and likewise, padding should be of non-float types around non-floats. (This is because some platforms define composite ABI behavior as depending on whether padding has a type or not.) For example:
+Structs have a fixed, known size, and their members are not reordered. Structs do not have any invisible padding; even if `u32`s need to be aligned to 4 bytes on the target platform, a struct that goes `struct ... { u8 a; u32 b; }` will have the `b` property start at the second byte of the struct, and the struct will be 5 bytes long. Alignment must be done manually. To make this easier, structs can have multiple members with the name `_`, none of which are accessible, and are assumed to have an unknown (possibly undefined/poison) value if accessed with pointer arithmetic.
+
+Hygiene note: padding around floats should ideally be of a float type, and likewise, padding should be of non-float types around non-floats. (This is because some platforms define composite ABI behavior as depending on whether padding has a type or not.) For example:
 
 ```php
 struct asdf
@@ -456,11 +464,15 @@ Type punning is allowed and legal.
 
 #### 5.4.1 - Pointer casting
 
-Casting pointers to `u64` (or, on 32-bit architectures, `u32`) and back is allowed, and is allowed to either retain or destroy provenance information, but must be considered a correctly-derived pointer to the pointed-at object if the optimizer does provenance/alias analysis.
+Casting pointers to `u64` (or, on 32-bit architectures, `u32`) and back without any manipulation is allowed, and is allowed to either retain or destroy provenance information, but must be considered a correctly-derived pointer to the original pointed-at object if the optimizer does provenance/alias analysis.
+
+Casting an arbitrary or originally-pointer-but-later-modified integer to pointer creates a "conjured" pointer (unless, for the latter, the implementation proves that it still points inside of the original underlying object, in which case it is free to treat it as "derived"). Conjured pointers are assumed to alias all objects.
 
 ### 5.5 - Misaligned structs
 
-The konoran implementation is allowed, but not encouraged, to produce an error if structs have misaligned members for the target platform. It is encouraged to produce a warning instead.
+The konoran implementation is encouraged to produce a compile-time warning if structs have misaligned members for the target platform. However, only if accessing unaligned fields on the target platform would produce a runtime error or crash the program or handle an unexpected value, the implementation is allowed to produce a compile-time error instead.
+
+The same is true of arrays.
 
 ### 5.6 - Numeric literals
 
@@ -476,6 +488,12 @@ For integers, the following regexes are used:
 ```
 
 If the non-`0x` regex finds a match, the number is interpreted as an integer of the given type written in decimal. If the given value exceeds the capacity of the type, the compiler must throw an error. Importantly, `-128i8` must immediately be interpreted as a maximally negative `i8`, not as an `i8` with an overflown value that is then negated with a unary operator; the `-` is part of the regex for a reason.
+
+Because the `-` is part of the regex, expressions like the following will not parse as C programmars might expect. Instead of a subtraction operation, this parses as a name lookup followed by an integer literal, with no `-` operator. This is known and intentional.
+
+```rust
+x-1i8
+```
 
 #### 5.6.2 - Floating-point literals
 
@@ -552,11 +570,15 @@ array(u8, 6) my_array = constexpr "skgue\n"array_nonull;
 ptr(array(u8, 6)) my_array_ptr = &"skgue\n"array_nonull;
 ptr(u8) my_ptr = "skgue\n"nonull; // dangerous!!!
 ```
-`nonull` strings may still be followed by a zero byte in memory depending on how memory is laid out in the implementation.
+The backing memory of `nonull` strings may be followed by zero or more zero bytes, i.e. it is not a promise that the next byte is *not* a null character. If it is followed by a zero byte, attempting to access it is undefined behavior, because it is outside of the underlying object for the string literal.
+
+Pointer string literals (nonull or otherwise) point to immutable data and attempting to modify that data is undefined behavior.
+
+Array string literals (nonull or otherwise) act precisely the same as a u8 array literal storing the same data. In other words, they produce a mutable value and are re-evaluated whenever encountered (even if you immediately take their address in the same expression).
 
 ## 6 - Volatile memory access
 
-There is no `volatile` variable modifier. However, pointer values can be marked as having volatile access semantics using the `@` operator. So, to use an mmio register, you might use something like the following code:
+There is no `volatile` variable modifier. However, pointer values can be marked as having volatile access semantics using the `@` operator. So, to use a memory-mapped-input-output (mmio) register, you might use something like the following code:
 
 ```php
 ptr(u32) my_mmio_reg = (0x80000030u64) as ptr(u32);
@@ -568,7 +590,13 @@ Given the above context, the following would NOT perform a volatile operation:
 @my_mmio_reg = (0x80000040u64) as ptr(u32); // the volatility modifier does nothing in this case; the pointer value is just replaced
 ```
 
-This more closely reflects how compiler backends tend to work than a `volatile` variable modifier. As such, konoran chose this approach to exposing volatile memory operations, rather than a variable modifier.
+Compared to C's `volatile` variable modifier, this more closely reflects how compiler backends tend to work.
+
+The volatility imbued by the `@` operator is expression-only and is silently lost if you attempt to pass the expression to a function or assign it to a variable, i.e. the following code is valid but does nothing:
+
+```php
+my_mmio_reg = @my_mmio_reg; // valid but does nothing
+```
 
 ### 6.1 - Volatile memory access rules
 
@@ -578,7 +606,7 @@ Volatile memory accesses must be treated as though they have (non-UB-producing) 
 
 Having a value magically change between consecutive *volatile* accesses is allowed, i.e. the compiler cannot change the order or number of volatile operations or what addresses they operate on. In particular, volatile writes to even a correctly-derived pointer cannot be optimized away (even if the variable the pointer points at is never used again), and volatile reads from even a correctly-derived pointer must assume that the value may have magically changed since the last time it was accessed (even if it has not been accessed).
 
-Volatile accesses through a pointer cannot be reordered relative to *any* other accesses of that pointer, even non-volatile ones. This 'don't reorder other accesses of the same pointer relative to the volatile access' rule applies to any mutually aliasing pointer expressions that refer to the same memory, not abstract pointer value 'objects' or pointer 'variables'. Similarly, the expression created by a volatile read must actually use the value created by that volatile read and not some other read or prior-known value.
+Volatile accesses through a pointer cannot be reordered relative to *any* other accesses of that pointer, even non-volatile ones. This 'don't reorder other accesses of the same pointer relative to the volatile access' rule applies to any mutually aliasing pointer expressions that refer to the same memory, not to abstract pointer value 'objects' or pointer 'variables'. Similarly, the expression created by a volatile read must actually use the value created by that volatile read and not some other read or prior-known value.
 
 ## 7 - Casts
 
@@ -591,7 +619,7 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
     Does nothing. Returns original value.
 
 (pointer_val) as <different pointer type>
-    Reinterprets the pointer as pointing at a different type. Legal even if casting between function pointer and normal pointer; however, the resulting pointer may be illegal to use depending on how the platform defines the behavior of such an operation. (The existence of illegal-to-use pointers in memory is not, itself, UB or illegal.)
+    Reinterprets the pointer as pointing at a different type. Legal even if casting between function pointer and normal pointer; however, the resulting pointer may be illegal to use depending on how the platform defines the behavior of such an operation. (Holding the value of an illegal-to-use pointer is not, itself, UB or illegal.)
 
 (integer_val) as <integer type of same size>
     Converts an integer to an integer of a different signedness. Does not modify the underlying bit representation of the integer.
@@ -600,36 +628,36 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
     Truncates or extends an integer to a different size. When truncating, upper bits are dropped. When extending, signed integers get sign-extended, and unsigned integers get zero-extended.
 
 (float_val) as <different float type>
-    Converts a floating-point number from one width to another. If the number doesn't have a nearby value in the target type, either positive/negative infinity or a minimal/maximal value is given (usually positive/negative infinity).
+    Converts a floating-point number from one width to another, using the nearest value in terms of real number difference. Tie-breaking direction is implementation-defined. If one of the two nearest values is an infinity, that infinity may be given. NaN conversion is implementation-defined.
 
 (int_val) as <float type>
-    Converts an integer to a floating-point number. If the integer cannot be represented exactly, the closest value is given.
+    Converts an integer to a floating-point number. If the integer cannot be represented exactly, the nearest value is given. Edge cases follow the same rules as float-to-float casts.
 
 (float_val) as <integer type>
-    Converts a floating-point number to an integer type. If the value is outside of the integer range, either the minimum or maximum integer value is given, whichever is closer. If the value is NaN, either zero, maximum, or minimum integer value is given, according to the implementation.
+    Converts a floating-point number to an integer type, using truncation towards zero (e.g. `-3.7` is `-3`, `3.7` is `3`). If the truncated value of the float as a real number is outside of the integer type's value range, either the minimum or maximum integer value is given, whichever is closer. If the value is NaN, then the resulting integer is either zero or the maximum possible or the minimum possible, chosen by the implementation.
 ```
 ### 7.2 - Unsafe value casts
 ```
 (float_val) unsafe_as <integer type>
-    Converts a floating-point number to an integer type. If the value is outside of the integer range, the result is undefined.
+    Converts a floating-point number to an integer type, using truncation towards zero. If the truncated value is outside of the integer range, or if the value is NaN, the result is undefined.
 ```
 ### 7.3 - Bitcasts
 ```
 (val) bit_as <val type>
     Does nothing. Returns original value.
 
+(pointer_val) bit_as <u64> (or u32 on 32-bit architectures)
+    Converts a pointer to an integer-based representation. The bitwise value of the integer must exactly match the pointer's actual bitwise address location as a number.
+
 (pointer val) bit_as <different pointer type>
     Reinterprets the pointer as pointing at a different type. Same semantics as a normal pointer-to-pointer cast.
-
-(pointer_val) bit_as <u64> (or u32 on 32-bit architectures)
-    Converts a pointer to an integer-based representation.
+    Type punning a pointer to an integer (e.g. `ptr(u64)`) to a pointer to a pointer (e.g. `ptr(ptr(u8))`) produces a pointer to a "conjured" pointer; see below.
 
 (ptr_sized_int_val) bit_as <pointer type>
-    Converts an integer to a pointer. When a pointer is casted to u64 (or u32 on 32-bit architectures) and then back to the same pointer type, it must point to the same object and memory location.
-    If a pointer is cast to int and back with arithmetic being performed to the int, but it still points inside of some object, then accessing it is not immediately UB. Rather, afterwards reading an object that the compiler believes does not alias that pointer is UB.
-        (see [examples/pointer_conjuration_test.knr], `main()`)
-    If the compiler has provenance or aliasing analysis, the resulting pointer value is treated as being derived from any value that contributed to the calculation of the given integer.
-        (see [examples/pointer_conjuration_test.knr], `main2()`)
+    Converts an integer to a pointer. If the given integer's value is within the set of values that can be produced by a ptr-to-int bitcast, then the pointer must point at the same address as if would if it were a pointer that was used to derive an integer with that value. The set of such values must be assumed to include zero and all values between zero and any pointer to a legally-accessible object. Casts of integers outside of this set to a pointer type are implementation-defined behavior.
+    !!! When a pointer is cast to u64 (or u32 on 32-bit architectures) and then back to the same pointer type with no arithmetic performed, including if the integer's bits are scrambled and then unscrambled, or chopped up into bytes and pieced back together, it must have the same in-pointer-value bitwise representation.
+    !!! Any pointer resulting from an int-to-ptr bitcast is considered "conjured", unless the compiler proves that it points entirely inside of the same underlying object as some pointer whose value contributed to the calculation of the integer, in which case the compiler may consider it "derived" instead. Conjured pointers are assumed to alias all objects. Accessing a conjured pointer is implementation-defined behavior.
+    The above two notes also apply when bitcasting to a struct type that contains any pointer-typed members (perhaps through another struct type), applying to any such members.
 
 (float/int value) bit_as <float or int type of same size>
     Reinterprets the bits of a value of one primitive type as belonging to another type. The exact bit representation is used, not the logical value. Equivalent to type punning a pointer.
@@ -637,12 +665,13 @@ Konoran has three casting operators: `as`, `unsafe_as`, and `bit_as`. They are d
 (struct/array value) bit_as <struct/array of same size>
 (struct/array value) bit_as <primitive of same size>
 (float/int value) bit_as <struct/array of same size>
-    Equivalent to memcpying the given value into a memory slot allocated for the given type, then dereferencing it. Like type punning a pointer, but safe even for pointer values, unlike LLVM's bitcast operation.
-    (In the past, and possibly at the time of writing, LLVM had a spec bug that implied that memcpying data containing pointers into a buffer where the pointer data will be interpreted as integer values, and then back, is equivalent to conjuring a pointer from the aether and will not be considered with using fully-kosher copies of the original pointer, but this is a bug in LLVM's spec and I expect it to be fixed.)
-    (See: https://discourse.llvm.org/t/a-memory-model-for-llvm-ir-supporting-limited-type-punning/61948 )
-    (See: https://www.ralfj.de/blog/2022/04/11/provenance-exposed.html )
-    (See: http://nhaehnle.blogspot.com/2021/06/can-memcpy-be-implemented-in-llvm-ir.html )
+    Equivalent to memcpying the given value into a memory slot allocated for the given type, then dereferencing it. Copying into an object of a type that contains pointers, when the original object had non-undefined integer data at any of those memory locations, invokes the previously-described "conjured" pointer semantics for those pointers whose bitwise values are coming from integers.
 ```
+
+Note that there are no bitcasts for float-ptr or aggregate-ptr conversion, only int-ptr conversion.
+
+The semantics for "conjured" pointers apply to any and all situations where a pointer's value is initialized from an integer or set of integers; type punning, bitcasting, and memcpy are not exhaustively the only invokers of those semantics.
+
 ### 7.4 - Unsupported casts
 
 Only the above casts are defined and other casts should produce an error. In particular, `unsafe_as` cannot cast to the same type.
@@ -653,7 +682,7 @@ Konoran has both binary/infix and unary/prefix operators. Some expressions are n
 
 ### 8.1 - Operator precedence
 
-Operator precedence is defined by konoran's declarative grammar. The grammar is written right-associatively, but has metadata that marks certain nodes as being left-associative; when the parse tree is converted to an AST, these nodes need to be rotated to be left-associative. As a helper, here's a short description of konoran's operator precedence, but remember that the actual definition is in the declarative grammar:
+Operator precedence is defined by konoran's declarative grammar. The grammar is written right-associatively, but has metadata that marks certain nodes as being left-associative; when the parse tree is converted to an AST, these nodes need to be rotated to be left-associative. As a helper, here's a table describing konoran's operator precedence, but remember that the actual definition is in the declarative grammar:
 
 ```
 not  !    -    +   ~   *   &   @          <- prefix/unary operators
@@ -665,13 +694,15 @@ not  !    -    +   ~   *   &   @          <- prefix/unary operators
 and  or   &&   ||
 ```
 
-Operators on a given line have the same precedence and are evaluated left to right, as are their operands; i.e. `x + y + z` is evaluated as `(x + y) + z`, with x then y being calculated, then summed, then z being calculated, then summed into the former.
+Operators on a given row in the above table have the same precedence as one another and their evaluation follows the source code left to right, as with their operands; i.e. `x + y + z` is evaluated as `(x + y) + z`, with x then y being calculated, then summed, then z being calculated, then summed into the former.
 
 #### 8.1.1 - Precedence design note
 
-Note that `&&` and `||` have the same precedence. While `&&` can be interpreted as multiplication and `||` can be interpreted as addition, by that line of reasoning, `!=` should be interpreted as addition as well, but giving equality and junction operators the same precedence would be awful, so konoran abandoned the entire line of reasoning. As primarily a compiler target language, specificational clarity was prioritized over similarity to C; people need to look up C's precedence for these operators all the time, and konoran decided that was unnecessary wasted effort and decided to define them as having the same precedence. As such, `x && y || z` and `x || y & z` are both parsed left to right, as `(x && y) || z` and `(x || y) & z`.
+Note that `&&` and `||` have the same precedence. While `&&` can be interpreted as multiplication and `||` can be interpreted as addition, by that line of reasoning, `!=` should be interpreted as addition as well (`||` is saturating addition and `!=` is wrapping addition), but giving equality and junction operators the same precedence would be awful, so konoran abandoned the entire line of reasoning. As primarily a compiler target language, specificational clarity was prioritized over similarity to C; people need to look up C's precedence for these operators all the time, and konoran decided that was unnecessary wasted effort and decided to define them as having the same precedence. As such, `x && y || z` and `x || y & z` are both parsed left to right, as `(x && y) || z` and `(x || y) && z`.
 
 Likewise, note that `>=` etc. have the same precedence as `==` etc.
+
+Precedence is not affected by the types of the expressions that are fed to any operator.
 
 ### 8.2 - Operator design choices and non-issues
 
@@ -699,23 +730,32 @@ For numbers:
 -    subtraction
 *    multiplication
 /    division
-%    remainder (not modulo)
 
 ==, !=, >=, <=, >, <
     exact equality/inequality
 ```
 
-The boolean operators result in a u8 containing either `0u8` (false) or `1u8` (true).
+The equality/inequality operators (`==, !=, >=, <=, >, <`) result in a u8 containing either `0u8` (false) or `1u8` (true).
 
 The math operators result in the same type. The equality operators result in a u8 containing either 0 (false) or 1 (true).
 
-For integers, operators are defined trivially. Division and remainder by zero produce zero, not UB. Integers are always two's complement, with overflow being wraparound (even for signed integers). Integer division truncates the remainder (towards zero).
+For integers, the operators are defined as the conventional arithmetic operations. Integers are always two's complement, with overflow being wraparound (even for signed integers). Integer division truncates towards zero when there would be a non-zero remainder. Integer division by zero produces the numerator (left input value), not UB. Floating-point division by zero produces an infinity or NaN, as specified by IEEE 754.
 
-For floats, operators other than remainder are defined according to IEEE 754, assuming a floating point environment where traps are disabled, floating point operations have no side-effects, the rounding mode is round-to-nearest, and subnormals are not flushed.
+For floats, operators are defined according to IEEE 754, assuming a floating point environment where traps are disabled, floating point operations have no side-effects, the rounding mode is round-to-nearest, and subnormals are not flushed.
 
-Floating point remainder for `x % y` is defined as resulting in the number closest to the infinite-precision result of `x - (y * trunc(x / y))`, where `trunc` is a function that discards any fractional portion of the number (i.e. 'round towards zero'). Floating point remainder is allowed to be approximated using the limited-precision expression `x - (y * trunc(x / y))`, or `y * ((x/y) - trunc(x/y))`, or either, or any more-accurate approximation, with accuracy determined by output error in the modulus space defined by y. The implementation must document if it uses an approximation. The remainder implementation used during const folding must not be less accurate than the implementation used at runtime.
+#### 8.3.1.1 - Integer-specific numeric infix operators
 
-#### 8.3.1.1 - Integer-specific unsafe numeric infix operator variants
+```
+%    modulo
+```
+
+First, imagine an operator `rem` (which konoran doesn't support), which evaluates to the value that, for `x%y`, equals the infinite-precision integer math expression `x - (x/y)*y`, except that if `y` is zero, it evaluates to zero.
+
+Then, the integer modulo operator `%` is defined as evaluating to the value equal to `(((x rem y) + y) rem y)`.
+
+Modulo has the same precedence as division and multiplication.
+
+#### 8.3.1.2 - Integer-specific unsafe numeric infix operator variants
 
 Integer division/remainder by zero does not result in undefined behavior. Division by zero results in either zero (for integers) or positive/negative infinity or NaN (for floats, depending on whether or not the numerator is zero), and remainder by zero results in zero (for integers) or NaN (for floats). For faster, unsafe integer division/remainder, the following operators are also provided; for them, a right-hand value of zero gives an undefined result:
 
@@ -724,7 +764,7 @@ div_unsafe    unsafe division
 rem_unsafe    unsafe remainder (not modulo)
 ```
 
-These operators are not provided for floats because they're not necessary; floating point division/remainder under IEEE 754 is always well-defined.
+Unsafe division is not provided for floats because floating point division under IEEE 754 is always safe and well-defined: `nonzero/0.0` is an infinity, `0.0/0.0` is a NaN.
 
 #### 8.3.2 - Integer-specific infix operators
 
@@ -743,15 +783,17 @@ and, &&   boolean 'and'
 ```
 The bitwise and bitshift operators result in the same type. The boolean operators result in a u8 containing either `0u8` (false) or `1u8` (true).
 
-The right-side value of a bitshift (`<<` or `>>`) must be an unsigned integer of the same size as the type of the left-side integer. In other words, `62i32 >> 2u32` is legal, while `62i32 >> 2i32` and `62i32 >> 2u8` are not.
+For `x | y`, `x & y`, and `x ^ y`: x and y must be of the same type; the produced value has a value where each bit only depends on the same-significance bits in the two inputs; that bit's value is defined by the standard boolean algebra function that the operation is named after, as applied to the two bits it depends on.
 
-The `and`/`or`/`&&`/`||` operators do NOT short-circuit. They are valid for any one integer type on their left and right, but the type must be the same. `and`/`&&` evaluates to whether both operands are not equal to zero. `or`/`||` evaluates to whether at least one operand is not equal to zero.
+The right-side value of a bitshift (`<<` or `>>`) must be an unsigned integer of the same size as the type of the left-side integer. In other words, `62i32 >> 2u32` is legal, while `62i32 >> 2i32` and `62i32 >> 2u8` and `62u32 >> 2u8` are not.
 
-Style note: the `and`/`or` forms are preferred and generally have better compatibility with navigation shortcuts (like ctrl+left, ctrl+right) across a wide range of text editors.
+The left bitshift operator shifts in zeroes; for `x << y`, each output bit corresponds to a bit copied from `x` in the significance position `y` bits less significant, such that the output bits are to the "left" of where the corresponding input bit is. The right bitshift operator shifts in the sign bit if the left-side value is signed, and zeroes otherwise, and similarly copies input bits but with the shift in the opposite direction.
 
-The left bitshift operator shifts in zeroes. The right bitshift operator shifts in the sign bit if the left-side value is signed, and zeroes otherwise.
+The bitshift operators are safe and do not result in UB even if the right-hand value is equal to or greater than the number of bits in the input value; in such cases, they result in a maximally-shifted value. In other words, for a `u64`, trying to right shift by 100 bits results in a right shift by 64 bits, producing zero. For an `i64`, trying to right shift by 100 bits would produce `0` for a positive input and `-1` for a negative input, the same as shifting right by 63 bits.
 
-The bitshift operators are safe and do not result in UB even if the right-hand value is equal to or greater than the number of bits in the input value; in such cases, they result in a maximally-shifted value. In other words, for a `u64`, trying to right shift by 100 bits results in a right shift by 63 bits.
+The `and`/`or`/`&&`/`||` operators do NOT short-circuit. They are valid for any one integer type on their left and right, but the type must be the same. `and`/`&&` evaluates to whether both operands are nonzero. `or`/`||` evaluates to whether at least one operand is nonzero. If true, they evaluate to `1u8`; if false, they evaluate to `0u8`.
+
+Style note: the `and`/`or` forms are preferred and generally have better compatibility with navigation shortcuts (like ctrl+left, ctrl+right) across a wider range of text editors, even poorly-written ones that treat series of mixed punctuation and whitespace like one "word".
 
 ##### 8.3.2.1 - Unsafe bitshift operator variants
 
@@ -762,11 +804,13 @@ shl_unsafe    unsafe bitshift right
 shr_unsafe    unsafe bitshift left
 ```
 
+When not overflowed, they produces the same result as the safe bitshift operators.
+
 #### 8.3.3 - Pointer infix operators
 
-Pointers are a special case; they have infix operators, but the right-side must be a pointer-sized unsigned integer. These operators are NOT supported for function pointers. In general, the only things you can do with a function pointer are call it or cast it to a pointer-sized unsigned int. (However, this does mean that performing these operations on an integer derived from a function pointer is instantly UB; rather, it's implementation-defined.)
+Pointers are a special case; they have infix operators, but the right-side must be a pointer-sized unsigned integer. These operators are NOT supported for function pointers. In general, the only things you can do with a function pointer are call it or cast it to a pointer or pointer-sized unsigned int. (However, this does mean that operating on an integer derived from a function pointer is instantly UB.)
 
-The following operators are supported for pointers:
+The following operators are supported for pointer vs pointer-sized unsigned integer:
 
 ```
 +    addition
@@ -774,33 +818,51 @@ The following operators are supported for pointers:
 &    masking
 ```
 
-The right-side value must be a pointer-sized unsigned integer.
+The resulting pointer from these operators is considered "derived", not "conjured", and if the compiler has provenance analysis it has provenance from the original pointer's original underlying object.
 
-The resulting pointer from these operators is not considered "conjured" and, if the compiler has provenance analysis, has provenance from the original pointer (or, at least, accesses to the value under the original pointer must consider the resulting pointer as aliasing it until the resulting pointer and anything derived from it stops existing).
+Pointers can only be used to derive pointers to objects or data that are part of the same "underlying object" (e.g. a single malloc call, a single local variable, a single global variable, a single imported variable, etc; when aggregates are involved, the parentmost aggregate, not following pointers, is one single big "underlying object").
+
+Any derived pointer with a span within the bounds of its associated actual underlying object is safe to access precisely if that object is alive, aside from implementation-specific alignment rules, even if the given function cannot see that object. For example, the equivalent of the Linux kernel's infamous `container_of()` macro is safe code in Konoran.
+
+Pointer access safety only matters when the pointer is actually accessed. It is not unsafe for a pointer's representation to temporarily point far outside of its underlying object during calculations.
+
+Pointer arithmetic must wrap and wrapping is safe. Adding `0x4000000000000000` to a valid 64-bit pointer four times gives you the original valid pointer and it is safe to access. Adding `0xFFFFFFFFFFFFFFFF` to a valid 64-bit pointer to subtract one byte from it is valid and, if it still points into the same underlying object, is safe to access.
+
+The following operators are supported for pointer vs pointer:
+
+```
+-    subtraction
+```
+
+The two pointers must be of the same type. This produces a pointer-sized signed integer. Its bitwise value is equal to that of the left pointer as an integer minus the right pointer as an integer, i.e. address difference in bytes. This subtraction operation is safe and well-defined even if the pointers point at different underlying objects and must produce the actual address difference even in that case. Adding the resulting integer back to the left pointer must produce a pointer with the bitwise value of the right pointer and the provenance of the left pointer. If those two original pointers belong to different objects, then accessing that produced pointer is unsafe.
 
 ##### 8.3.3.1 - Pointer infix operator semantics
 
-These operations operate on the bitwise representation of the pointer, as though it were an integer. They are equivalent to casting to a u64 and back, with the exception that if the compiler supports provenance/aliasing analysis, these operations MUST retain any relevant provenance/aliasing information. (In other words, adding 50 to a pointer, then subtracting 50 from it, must result in an equivalently usable pointer value to what you started with, even if the compiler does provenance/aliasing analysis.) The resulting pointer always has a defined value; however, accessing it might cause undefined behavior, depending on how the underlying platform defines such operations.
+These operations operate on the bitwise representation of the pointer, as though it were an integer. They are equivalent to casting to a u64 and back, with the exception that if the compiler supports provenance/aliasing analysis, these operations MUST retain any relevant provenance/aliasing information. (In other words, adding 50 to a pointer, then subtracting 50 from it, must result in an equivalently usable pointer value to what you started with, even if the compiler does provenance/aliasing analysis.)
 
-In particular, the `+` and `-` operators do not work like they do in C; they operate on byte-sized pointer logic, not word-sized pointer logic, so, for example, adding `1` to an already-aligned `ptr(u64)` will result in an unaligned pointer pointing one byte after the start of the `u64`.
+In particular, the `+` and `-` operators do not work like they do in C; they operate on byte-sized pointer logic, not word-sized pointer logic, so, for example, adding `1` to an already-aligned `ptr(u64)` will result in an unaligned pointer pointing one byte after the start of the `u64`, overlapping with the original over a span of seven bytes.
+
+The pointers resulting from pointer arithmetic between two non-undefined values always results in a defined, safe value, but the resulting pointer is not necessarily safe to access. Accessing derived pointers that point at a different parentmost object than their original pointer is undefined behavior. Accessing derived pointers that point at a non-object (e.g. unallocated memory, null, etc) is implementation-defined behavior.
+
+Two pointers to structs where one does not contain the other must either wholly overlap or not overlap at all. For example, when `Vec3` is `12` bytes long, two `ptr(Vec3)`s cannot hold address values that differ by `4` bytes. This does not apply to arrays; two `ptr(array(u32, 3))`s can hold address values that differ by `4` bytes.
 
 ### 8.4 - Prefix/unary operators
 
-Konoran has prefix/unary operators for certain types, and for any type in certain situations.
+Konoran has prefix/unary operators for certain types.
 
 #### 8.4.1 - Pointer-to / Address-of operator
 
-The following prefix operator is supported for any variable, and also for aggregate (aka composite) (struct/array) values:
+The following prefix operator is supported for any variable, and also for aggregate (aka composite) (struct/array) values and properties:
 
 ```
 &    take address
 ```
 
-This operation produces a pointer (`ptr(type)`) pointing at a value inside of a variable or inside of an aggregate struct/array variable, subvalue, or literal. If such an address is taken with this operation, then that address must be valid for the entire duration of the function, or until it is proven that it is impossible to correctly derive a pointer to the pointee. Using such an address after the function has returned is undefined behavior.
+This operation produces a pointer (`ptr(type)`) pointing at a value inside of a variable or inside of an aggregate struct/array variable, property, or literal. If an address to function-local data is taken with this operation, then that address must be valid for the entire duration of the function, or until it is proven that it is impossible to correctly derive a pointer to the pointee. Using such an address after the function has returned is undefined behavior.
 
 ##### 8.4.1.1 - Pointer-to clarification for aggregate literals
 
-The phrasing "aggregate struct/array subvalue or literal" means that the following code is valid:
+The phrasing "aggregate struct/array property or literal" means that the following code is valid:
 
 ```php
 ptr(array(u8, 2)) myptr = &[0u8, 14u8];
@@ -815,7 +877,7 @@ ptr(array(u8, 2)) myptr = &myvar;
 
 So, if the address of a struct/array *value* is taken, it must be given an automatic storage location and pinned there until the function exits or it becomes impossible to correctly derive a pointer to it (or some other logically equivalent implementation-defined behavior). This is not true of any other value type and other values cannot have their address taken, only variables containing them.
 
-In particular, non-constexpr temporary aggregates pointed to by valid pointers can be modified; building off the above array pointer example, the following code is allowed:
+In particular, non-constexpr temporary aggregates pointed to by valid pointers can be modified; the following code can be appended to the above example and is valid and safe:
 
 ```php
     (*myptr)[1i64] = 1u8;
@@ -834,7 +896,7 @@ loophead:
     goto loophead;
 ```
 
-In the above example, `myptr` has the same value on each iteration, and `myptr2` has the same value on each iteration. However, they have different values, i.e. point at arrays in different storage locations. Each time the loop runs, the arrays inside the storage locations are refreshed with the array values whose addresses are being taken, before their addresses are taken.
+In the above example, `myptr` has the same value on each iteration, and `myptr2` has the same value on each iteration. However, they have different values, i.e. point at arrays in different storage locations. Each time the loop runs, the arrays inside the storage locations are refreshed with the array values whose addresses are being taken, before their addresses are taken, and any side effects of any expressions inside of the array literals are re-executed (as they are for all array literals).
 
 ##### 8.4.1.2 - Type punning with correctly-derived pointers
 
@@ -844,7 +906,7 @@ Accessing variables via a pointer to a different type is allowed; for example, a
 u16 myint = *((myptr) bit_as ptr(u16));
 ```
 
-The target platform may specify access alignment rules for pointers, e.g. accessing a `u16` through a pointer with an odd-numbered integer value might be illegal.
+The target platform may specify access alignment rules for pointers, e.g. accessing a `u16` through a pointer with an odd-numbered integer value might trigger a fault or hardware exception or exit the program or have no effect or return unknown garbage data. However, accessing unaligned pointers cannot be undefined behavior.
 
 #### 8.4.2 - Floating-point prefix operators
 
@@ -870,9 +932,9 @@ The following prefix operators are supported for ints, and return a new value of
 
 In particular, notice that `!`/`not` is not defined for floats. You must use `(float == 0.0<floattype>)` instead.
 
-`-` does not result in UB when used with maximally negative signed integers; it results in the same value being given back. In other words, `-(-128i8)` evaluates to `-128i8`.
+Integer negation gives the value produced by subtracting the number from zero. It does not result in UB when used with maximally negative signed integers; it results in the same value being given back. In other words, `-(-128i8)` evaluates to `-128i8`.
 
-The other above operators are trivially defined.
+Bitwise inversion is equivalent to XOR-ing the number with an all-ones number of the same type.
 
 #### 8.4.4 - Pointer prefix operators
 
@@ -892,7 +954,7 @@ The `*` operator is not only used when loading a value from a pointer in express
 *my_ptr_to_u16 = 162u16;
 ```
 
-This must also be supported when indexing into arrays, e.g.
+This must also be supported when indexing into arrays or accessing struct members, e.g.
 
 ```php
 (*my_ptr_to_array_u16)[1i64] = 162u16;
@@ -906,7 +968,7 @@ For arrays, the following prefix operator is defined:
 decay_to_ptr    convert array of elements to pointer to first element
 ```
 
-It performs pointer decay, the same type that C performs for arrays at function boundaries. An `array(u8, 4)` will turn into a `ptr(u8)` pointing at the first element of the array. This is logically equivalent to using `&` on the array and casting the resulting pointer to `ptr(inner_type)`.
+It performs pointer decay, the same type that C performs for arrays at function call boundaries. An `array(u8, 4)` will turn into a `ptr(u8)` pointing at the first element of the array. This is logically equivalent to using `&` on the array and casting the resulting pointer to `ptr(inner_type)`.
 
 ### 8.5 - Constant expressions
 
@@ -922,43 +984,47 @@ The following program behaviors are generally undefined and the compiler is allo
 
 1) Accessing a variable without using its name or a correctly-derived pointer to it
 2) Calling a function without using its name or a correctly-derived pointer to it
+3) Aside from moving it around, doing anything to uninitialized data without `freeze`ing it
 
-The above two rules do not apply to `export_extern`'d global variables or functions, because `export_extern` implies that such global variables or functions can have pointers to them derived "correctly" by external code (e.g. by a symbol table lookup).
+A "correctly-derived" pointer is either a conjured pointer, or a pointer that points entirely within the same parentmost object as it originally pointed at. Non-exhaustively, examples of parentmost objects include: buffers returned by C's `malloc()`; single stack variables; single global variables; imported data symbols; foreign pointers accepted via function argument; etc.
+
+Note that imported or foreign pointer values are allowed to redundantly refer to the same (or overlapping) objects as others do, or to point at members of a single aggregate. If two global symbol imports of type `ptr(u8)` exist, and happen to point at different bytes inside of the same foreign object, then it is safe and not UB to derive one from the other with pointer arithmetic.
 
 In some cases, the implementation is allowed to define new UB of its own.
 
-### 9.1 - Conjured variable access
+### 9.1 - Non-aliased object access via pointers
 
 Point 1 means that other code using that variable is allowed to assume that it doesn't suddenly change for no reason, even if an incorrectly-derived pointer value might be pointing to it. For example:
 
 ```php
 u32 x = 0;
-ptr(u32) maybe_x = (randi()) as ptr(u32);
+u32 y = 1503262;
+ptr(u32) maybe_x = &y + randi();
 *maybe_x = 16u32;
 print_float((x) as f64);
 ```
 
-The above program contains undefined behavior if `randi()` is capable of producing a value matching the address of the `x` variable. As such, a compiler optimizing this code is allowed to assume that the value passed to `print_float()` remains `0.0f64`, even if `*maybe_x` is written to in the meantime, because even if `maybe_x` points to `x`, it was not correctly derived.
+The above program contains undefined behavior if `&y + randi()` is capable of producing a pointer that overlaps with `x`. As such, a compiler optimizing this code is allowed to assume that the value passed to `print_float()` remains `0.0f64`, even if `*maybe_x` is written to in the meantime, because even if `maybe_x` points to `x`, it was not correctly derived.
 
-Importantly, point 1 does not make it instant UB to access/modify data via conjured pointers. The optimizer is merely allowed to assume that accesses via conjured pointers do not modify named variables whose addresses do not contribute to the address value of the pointer. Arbitrary memory and heap memory are assumed to be disjoint from "variables".
+Importantly, point 1 does not make it instant UB to access/modify data via conjured pointers, only derived pointers that touch a different underlying object.
 
 ### 9.2 - Executing 'dead code' functions
 
-Point 2 means that the optimizer can remove functions that are never referenced even if code might accidentally construct the value of a function pointer that would point at that function if it hadn't been removed. The same is true of point 1 and variables. However, this does not apply to `export_extern`'d global variables or functions, nor does it apply to default-visibility global variables or functions *before linking*. (After linking, it once again applies to global variables and functions, as long as they have default visibility and not `export_extern` visibility.)
+Point 2 means that the optimizer can remove functions that are never referenced even if code might accidentally construct the value of a function pointer that would point at that function if it hadn't been removed. The same is true of point 1 and variables; unused variables can be eliminated because they are never accessed. However, this does not apply to `export_extern`'d global variables or functions, nor does it apply to default-visibility global variables or functions *before linking*. (After linking, it once again applies to global variables and functions, as long as they have default visibility and not `export_extern` visibility.)
 
 ### 9.3 - Implementation-specified UB
 
-The implementation is allowed to define new UB in situations where threads, OS access, or language extensions are involved. For example, it's OK for an implementation to define it to be UB to read and write to a single variable or memory location from two threads without using a synchronization primitive or memory fence, even if those accesses are direct or use correctly-derived pointers.
+The implementation is allowed to define new UB in situations where threads, OS access, language extensions, or non-konoran modules are involved. For example, it's OK for an implementation to define it to be UB to read and write to a single variable or memory location from two threads without using a synchronization primitive or memory fence, even if those accesses are direct or use correctly-derived pointers.
 
 Implementations are allowed to specify things as being defined even if they're specified as UB here. For example, implementations are allowed to specify that it's not undefined for a variable's value to magically change after a memory fence or thread synchronization operation finishes (for example, if a pointer to that variable has passed into another thread), or to specify that the "unsafe" infix operators will never give undefined results, etc.
 
-Implementations are allowed to specify unaligned memory accesses as UB, but this is discouraged and it's strongly recommended that they specify them as implementation-defined instead.
+Implementations are not allowed to specify unaligned memory accesses as UB.
 
 ## 10 - Non-features
 
 Konoran is intended as a compiler target, and as such expects the "programmer" to provide a lot of its own runtime functionality.
 
-Advanced implementations are highly encouraged to detect undefined behavior and produce warnings or errors.
+Advanced implementations are highly encouraged to detect undefined behavior and produce compile-time warnings or errors for it.
 
 ### 10.1 - (No) memory management
 
@@ -988,16 +1054,41 @@ Konoran tries to avoid UB when it can. There are certain things C's spec does th
 
 #### 10.6.1 - (No) strict aliasing analysis
 
-Konoran **specifically does not have strict type-based aliasing rules** and implementations are explicitly not allowed to perform type-based pointer aliasing analysis. Aside from pointer provenance concerns, the "underlying bytes" beyond a pointer are not considered to have a type except for during the moment that they are accessed.
+Konoran **specifically does not have strict type-based aliasing rules** and implementations are explicitly not allowed to perform C-style strict type-based pointer aliasing analysis. Aside from pointer provenance concerns, the "underlying bytes" beyond a pointer are not considered to have a type except for during the moment that they are accessed.
 
 #### 10.6.2 - (No) forwards progress guarantee
 
-C compilers are allowed to optimize C code with the assumption that no code path leads to a non-terminating loop (sometimes with additional language like "observable behavior" depending on who you ask) that has no side effects. C++'s more explicit version of this is the "forwards progress guarantee". Konoran does not make this assumption and even trivial infinite loops are allowed.
+C compilers are allowed to optimize C code with the assumption that no code path leads to a non-terminating loop (sometimes with additional language like "observable behavior" depending on who you ask) that has no side effects. C++'s more explicit version of this is the "forwards progress guarantee". Konoran does not make this assumption and both trivial and nontrivial infinite loops are allowed.
 
-#### 10.6.3 - Certain things with conjured pointer values
+#### 10.6.3 - Certain things with incorrectly-derived pointers
 
-Accessing conjured pointer values is UB in some situations in C if the compiler "knows" that the pointer doesn't point to an object. In konoran, any side effects from accessing "non-object" pointers are implementation-defined behavior instead of being undefined, e.g. it can crash, give a bogus value, raise an exception, "have no effect on other objects", etc. But it can't be treated like it "didn't happen", even if the compiler knows that the pointer doesn't point to an object.
+Accessing incorrectly-derived pointer values is UB in some situations in C if the compiler "knows" that the pointer doesn't point to an object.
 
-For example, if you manage to conjure a pointer with the same pointer value as the address of a local variable (whose value did not contribute to the conjured pointer), and write to it without crashing, then read back the value you wrote via the conjured pointer, you should just see the value you wrote to the conjured pointer, even if normal access to the variable itself is unaffected (unless some other write to the variable itself has overwritten the write to the conjured pointer). [pointer_conjuration_test.knr](examples/pointer_conjuration_test.knr) is an example of this. Note that the pointer must **actually be conjured**. Doing pointer math to a correctly-derived pointer pointing at another variable is not pointer conjuration.
+In konoran, accessing "non-object" pointers is implementation-defined behavior instead of being undefined, e.g. it can crash, give a bogus value, raise an exception, "have no effect on other objects", etc. But it can't be treated like it "didn't happen", even if the compiler knows that the pointer doesn't point to an object.
 
-It's currently not possible for konoran to 100% guarantee this behavior while compiling down to LLVM, because LLVM's manual defines it as undefined behavior to access an object via a pointer that's not based on that object, but *in practice* it works.
+However, using derived pointers in order to access *other objects* is undefined behavior, i.e. you can't turn a pointer to local variable x into a pointer to local variable y; attempting to do so and then accessing the resulting pointer would result in undefined behavior.
+
+## 100 - Unsorted rationale notes
+
+Documenting intent is useful. Many choices made by mainstream languages are mysterious or have their reasoning buried in ancient forum threads.
+
+Despite trying to minimize UB, konoran made it UB to access different objects from each others' pointers. For a while I tried not to do this, and to make it implementation-defined instead. However, I ran into the following scenario. Imagine writing a konoran function that receives the following variables from foreign code:
+
+```rust
+ptr(u32) my_array = // ....
+u32 my_index = // ....
+```
+
+Now, what happens if you do:
+
+```rust
+*(my_array + 4*my_index) = 152;
+```
+
+This should just compiled down to a single store instruction, right? Maybe with some arithmetic instructions ahead of it. But if accessing other objects was implementation-defined instead of undefined, and ABSOLUTELY ANY other pointers with unknown provenance were alive at the time, then to avoid undefined behavior, the compiler would need to do one of:
+
+1) disable mem2reg-like optimizations temporarily, including for future accesses to pointers with unknown provenance
+2) emit the code and data for a faulting bounds check, carrying the bounds next to the pointer, CHERI-capabilities-style
+3) the same as 2, but doing modulo to keep the offset in-bounds instead of a faulting bounds check
+
+This kind of code is written Very Often, and C compilers do not have to do any of these things, so it can be optimized very well in C. I made the decision to make accessing other objects via pointers UB so that konoran compilers can perform the same optimizations, i.e. so that they don't have to disable mem2reg optimizations whenever doing anything slightly interesting with foreign pointers.
