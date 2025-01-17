@@ -842,9 +842,7 @@ These operations operate on the bitwise representation of the pointer, as though
 
 In particular, the `+` and `-` operators do not work like they do in C; they operate on byte-sized pointer logic, not word-sized pointer logic, so, for example, adding `1` to an already-aligned `ptr(u64)` will result in an unaligned pointer pointing one byte after the start of the `u64`, overlapping with the original over a span of seven bytes.
 
-The pointers resulting from pointer arithmetic between two non-undefined values always results in a defined, safe value, but the resulting pointer is not necessarily safe to access. Accessing derived pointers that point at a different parentmost object than their original pointer is undefined behavior. Accessing derived pointers that point at a non-object (e.g. unallocated memory, null, etc) is implementation-defined behavior.
-
-Two pointers to structs where one does not contain the other must either wholly overlap or not overlap at all. For example, when `Vec3` is `12` bytes long, two `ptr(Vec3)`s cannot hold address values that differ by `4` bytes. This does not apply to arrays; two `ptr(array(u32, 3))`s can hold address values that differ by `4` bytes.
+The pointers resulting from pointer arithmetic between two non-undefined values always results in a defined, safe value, but the resulting pointer is not necessarily safe to access. Accessing derived pointers that point at a different underlying object than their original pointer is undefined behavior. Accessing derived pointers that point at a non-object (e.g. unallocated memory, null, etc) is implementation-defined behavior.
 
 ### 8.4 - Prefix/unary operators
 
